@@ -1,4 +1,4 @@
-// swift-tools-version: 6.1
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -19,7 +19,8 @@ let package = Package(
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.0"..<"7.0.0"),
-		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0")
+		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
+        .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0")
 	],
 	targets: [
 		// Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -42,6 +43,7 @@ let package = Package(
 				.product(name:"RAW_xchachapoly", package:"rawdog"),
 				.product(name:"RAW_blake2", package:"rawdog"),
 				.product(name:"RAW_hmac", package:"rawdog"),
+                .product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 			]
 		),
 		.testTarget(

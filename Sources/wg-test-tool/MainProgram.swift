@@ -9,4 +9,7 @@ struct CLI:ParsableCommand {
 		
 		]
 	)
+    // add run func
 }
+
+// Create client and server struct with subcommands
