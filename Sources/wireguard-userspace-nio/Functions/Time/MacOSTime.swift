@@ -21,7 +21,7 @@ extension TAI64N {
 					offset += 3600
 				}
 				
-				self.seconds = _uint64_be(RAW_native:UInt64(seconds) + UInt64(offset))
+				self.seconds = _uint64_be(RAW_native:UInt64(Int64(seconds) + Int64(offset)))
 				self.nano = _uint32_be(RAW_native:UInt32(nanoseconds))
 			case true:
 				self.seconds = _uint64_be(RAW_native:UInt64(seconds))

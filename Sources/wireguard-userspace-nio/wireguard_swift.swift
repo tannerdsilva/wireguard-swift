@@ -4,7 +4,7 @@
 import RAW
 import NIO
 import RAW_dh25519
-import ServiceLifecycle
+
 
 public typealias Key = RAW_dh25519.PublicKey
 
@@ -90,4 +90,48 @@ internal final class PeerRouter:ChannelDuplexHandler {
         print("Error: \(error)")
         context.close(promise: nil)
     }
+}
+
+public final class testHandshake {
+    let staticPublicKey:PublicKey
+    let peerPublicKey:PublicKey
+    
+    let group:MultiThreadedEventLoopGroup
+    let bootstrap:DatagramBootstrap
+    
+    public init() throws {
+        self.staticPublicKey = try dhGenerate().0
+        self.peerPublicKey = try dhGenerate().0
+        self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        self.bootstrap = DatagramBootstrap(group: group)
+            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .channelInitializer { channel in
+                channel.pipeline.addHandlers([
+                    InputHandler()
+                ])
+            }
+    }
+    
+    
+}
+
+internal final class InputHandler: ChannelDuplexHandler, Sendable {
+    typealias InboundIn = AddressedEnvelope<ByteBuffer>
+    typealias InboundOut = AddressedEnvelope<ByteBuffer>
+    
+    typealias OutboundIn = Never
+    typealias OutboundOut = Never
+    
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let envolope = self.unwrapInboundIn(data)
+        let body = envolope.data
+        let remoteAddress = envolope.remoteAddress
+        
+        
+        
+    }
+}
+
+internal struct HandshakeHandler {
+    
 }
