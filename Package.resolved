@@ -1,5 +1,5 @@
 {
-  "originHash" : "40f81c9911384f644179b8f86140d9ddbe87c0e553e527df306e88fa2a0724ff",
+  "originHash" : "23377575d28f0c42a154a77a166edda7da21098e29fd643b154a5a6a605452f4",
   "pins" : [
     {
       "identity" : "bedrock",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/rawdog.git",
       "state" : {
-        "revision" : "151e840f6bfa0ef1bf507bf3ca55f626038ec57d",
-        "version" : "17.0.1"
+        "branch" : "raw_staticbuff_sequence",
+        "revision" : "784b22745c9d022484fa8a70ba9611e1cea8324b"
       }
     },
     {

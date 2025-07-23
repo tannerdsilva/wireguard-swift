@@ -15,7 +15,7 @@ let package = Package(
 			targets: ["wg-test-tool"]),
 	],
 	dependencies: [
-		.package(url:"https://github.com/tannerdsilva/rawdog.git", "17.0.1"..<"18.0.0"),
+        .package(url:"https://github.com/tannerdsilva/rawdog.git", branch:"raw_staticbuff_sequence"),
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.0"..<"7.0.0"),
@@ -29,7 +29,10 @@ let package = Package(
 			name:"wg-test-tool",
 			dependencies:[
 				"wireguard-userspace-nio",
-				.product(name:"ArgumentParser", package:"swift-argument-parser")
+				.product(name:"ArgumentParser", package:"swift-argument-parser"),
+				.product(name:"RAW_dh25519", package:"rawdog"),
+				.product(name:"RAW_base64", package:"rawdog"),
+				.product(name:"RAW", package:"rawdog"),
 			]
 		),
 		.target(
@@ -48,7 +51,13 @@ let package = Package(
 		),
 		.testTarget(
 			name: "wireguard-swiftTests",
-			dependencies: ["wireguard-userspace-nio"]
+			dependencies: [
+				"wireguard-userspace-nio",
+				.product(name:"ArgumentParser", package:"swift-argument-parser"),
+				.product(name:"RAW_dh25519", package:"rawdog"),
+				.product(name:"RAW_base64", package:"rawdog"),
+				.product(name:"RAW", package:"rawdog")
+			]
 		),
 	]
 )

@@ -1,8 +1,7 @@
 import RAW
 import RAW_dh25519
-import RAW_chachapoly
 
-internal func dhGenerate() throws -> (PublicKey, PrivateKey) {
+public func dhGenerate() throws -> (PublicKey, PrivateKey) {
 	var privateKey = try PrivateKey()
 	let publicKey = PublicKey(&privateKey)
 	return (publicKey, privateKey)

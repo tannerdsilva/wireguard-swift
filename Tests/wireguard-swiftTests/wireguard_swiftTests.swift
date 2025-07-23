@@ -1,6 +1,35 @@
 import Testing
-@testable import wireguard_swift
+@testable import wireguard_userspace_nio
+import RAW_dh25519
+import RAW_base64
 
-@Test func example() async throws {
-    // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+@Test func testCreateInitilizationMessage() throws {
+    let staticPublicKey = try dhGenerate()
+    let peerPublicKey = try dhGenerate().0
+    
+    let (_,_,_,payload) = try withUnsafePointer(to: staticPublicKey.1) { p in
+        try withUnsafePointer(to: peerPublicKey) { q in
+            return try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: p, responderStaticPublicKey: q)
+        }
+    }
+    
+    let _ = try withUnsafePointer(to: staticPublicKey) { p in
+        try withUnsafePointer(to: peerPublicKey) { q in
+            return try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: q, payload: payload)
+        }
+    }
+}
+
+@Test func selfValidate() throws {
+	var initiatorPrivateKey = try PrivateKey()
+	var initiatorPublicKey = PublicKey(&initiatorPrivateKey)
+	print("Initiator Public Key: \(String(try RAW_base64.encode(initiatorPublicKey)))")
+	var responderStaticPrivateKey = try PrivateKey()
+	var responderStaticPublicKey = PublicKey(&responderStaticPrivateKey)
+	print("Responder Public Key: \(String(try RAW_base64.encode(responderStaticPublicKey)))")
+
+	var constructedPacket = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
+	var authenticatedPacketToSend = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: &responderStaticPublicKey, payload: constructedPacket.payload)
+
+	let responderValidationStep = try HandshakeInitiationMessage.validateInitiationMessage(&authenticatedPacketToSend, responderStaticPrivateKey: &responderStaticPrivateKey)
 }
