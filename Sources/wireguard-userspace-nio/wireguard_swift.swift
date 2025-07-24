@@ -8,8 +8,6 @@ import RAW_base64
 
 public typealias Key = RAW_dh25519.PublicKey
 
-
-
 public final class WireguardInterface {
     let elg: EventLoopGroup
     let listeningPort:Int
@@ -121,11 +119,9 @@ public final class WGInterface: Sendable {
             }
         }
         
-        // let authenticatedPacket = try withUnsafePointer(to:) { p in
-            let authenticatedPacket = try withUnsafePointer(to: peerPublicKey) { q in
-                return try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: q, payload: payload)
-            }
-        // }
+		let authenticatedPacket = try withUnsafePointer(to: peerPublicKey) { q in
+			return try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: q, payload: payload)
+		}
         
         // Create Channel
         let bootstrap =  DatagramBootstrap(group: group)

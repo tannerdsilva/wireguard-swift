@@ -3,6 +3,14 @@ import RAW_dh25519
 import RAW_chachapoly
 import RAW_base64
 
+@RAW_staticbuff(bytes:4)
+@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
+internal struct PeerIndex:Sendable {
+	internal static func random() throws -> Self {
+		return try generateSecureRandomBytes(as:Self.self)
+	}
+}
+
 /// defines the reserved field that follows the message type byte. these two items make up the first 4 bytes of any wireguard packet, unconditionally.
 @RAW_staticbuff(bytes:3)
 internal struct Reserved:Sendable {
@@ -68,7 +76,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 		let ephiPublic = PublicKey(&ephiPrivate)
 
 		// step 5: c = KDF^1(c, e.Public)
-        c =  try wgKDF(key:&c, data:ephiPublic, type:1)[0]
+        c =  try wgKDF(key:c, data:ephiPublic, type:1)[0]
 
 		// step 6: assign e.Public to the ephemeral field
 		let msgEphemeral = ephiPublic
@@ -82,7 +90,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 		// step 8: (c, k) = KDF^2(c, dh(eiPriv, srPublic))
 		var k:Result32
         var arr:[Result32]
-        arr = try wgKDF(key:&c, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey), type:2)
+        arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey), type:2)
         c = arr[0]; k = arr[1]
 
 		// step 9: msg.static = AEAD(k, 0, siPublic, h)
@@ -96,7 +104,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 		h = try hasher.finish()
 
 		// step 11: c, k) = kdf^2(c, dh(sipriv, srpub))
-        arr = try wgKDF(key:&c, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey), type:2)
+        arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey), type:2)
         c = arr[0]; k = arr[1]
 
 		// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
@@ -113,25 +121,20 @@ internal struct HandshakeInitiationMessage:Sendable {
 		return (c, h, k, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
 	}
 
-    internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:Payload) throws -> AuthenticatedPayload {		
+    internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {		
 		// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
         var hasher = try WGHasher()
         try hasher.update([UInt8]("mac1----".utf8))
         try hasher.update(responderStaticPublicKey)
-        var hash = try hasher.finish()
-        let mac1 = try wgMac(key: &hash, data: payload)
+        let mac1 = try wgMac(key:try hasher.finish(), data:copy payload)
         
         // step 15: msg.mac2 := 0^16
         var mac2 = Result16(RAW_staticbuff:Result16.RAW_staticbuff_zeroed())
-        
-        // add logic for cookie
-        
-        return AuthenticatedPayload(payload: payload, msgMac1: mac1, msgMac2: mac2)
-        
+
+        return AuthenticatedPayload(payload:payload, msgMac1: mac1, msgMac2: mac2)        
     }
     
     internal struct MAC1InvalidError:Swift.Error {}
-
     internal static func validateInitiationMessage(_ message:UnsafePointer<HandshakeInitiationMessage.AuthenticatedPayload>, responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result32, h:Result32, k:Result32, initPublicKey:PublicKey, timestamp:TAI64N) {
         
         // step 0: get responder public key
@@ -156,7 +159,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         var initiatorEphemeralPublicKey = message.pointee.payload.ephemeral
 	
 		// step 5: c = KDF^1(c, initiatorEphemeralPublicKey)
-        c =  try! wgKDF(key:&c, data:initiatorEphemeralPublicKey, type:1)[0]
+        c =  try wgKDF(key:c, data:initiatorEphemeralPublicKey, type:1)[0]
 
 		// step 6: h = hash(h || initiatorEphemeralPublicKey)
 		hasher = try WGHasher()
@@ -167,16 +170,14 @@ internal struct HandshakeInitiationMessage:Sendable {
 		// step 7: (c, k) = KDF^2(c, dh(responderStaticPrivateKey, initiatorEphemeralPublicKey))
 		var k:Result32
         var arr:[Result32]
-        arr = try! wgKDF(key:&c, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initiatorEphemeralPublicKey), type:2)
+        arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initiatorEphemeralPublicKey), type:2)
         c = arr[0]; k = arr[1]
 
 		// step 8: decrypt the msg.static to determine the initStaticPublicKey
-        var initStaticPublicKey = try! aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.staticRegion)!, aad:&h, tag:message.pointee.payload.staticTag)
+        var initStaticPublicKey = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.staticRegion)!, aad:&h, tag:message.pointer(to:\.payload.staticTag)!.pointee)
         
         let publickey = String(try RAW_base64.encode(initStaticPublicKey))
-        
-        print("Got traffic from peer public key: \(publickey)")
-
+      
 		// step 9: h = hash(h || msg.static)
 		hasher = try WGHasher()
 		try hasher.update(h)
@@ -185,11 +186,11 @@ internal struct HandshakeInitiationMessage:Sendable {
 		h = try hasher.finish()
 
 		// step 10: (c, k) = KDF^2(c, dh(msg.static [initiatorStaticPublicKey], responderStaticPrivateKey))
-        arr = try! wgKDF(key:&c, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initStaticPublicKey), type:2)
+        arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initStaticPublicKey), type:2)
         c = arr[0]; k = arr[1]
 
         // step 11: descrypt the msg.timestamp to find the intial timestamp
-        let sentTimestamp = try! aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:&h, tag:message.pointee.payload.timestampTag)
+        let sentTimestamp = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:&h, tag:message.pointee.payload.timestampTag)
 
         // step 12: h = hash(h || msg.static)
 		hasher = try WGHasher()
@@ -202,8 +203,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         hasher = try WGHasher()
         try hasher.update([UInt8]("mac1----".utf8))
         try hasher.update(responderStaticPublicKey)
-        var hash = try hasher.finish()
-        let mac1 = try wgMac(key: &hash, data: message.pointee.payload)
+        let mac1 = try wgMac(key:try hasher.finish(), data: message.pointee.payload)
         
         guard mac1 == message.pointee.msgMac1 else {
             throw MAC1InvalidError()
