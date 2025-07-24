@@ -1,53 +1,26 @@
 import RAW
 
-// internal func kdf(n:size_t, key:Key, data:borrowing [UInt8]) throws -> [Result32] {
-// 	let workBuffer = UnsafeMutableBufferPointer<Result32>.allocate(capacity:n)
-// 	defer { workBuffer.deallocate() }
-// 	// find the entropy from the data
-// 	let genKey:Result32 = try wgHmac(key:key, data:data)
-// 	var previous:Result32 = genKey
-// 	for i in 1...n {
-// 		let input = [UInt8](unsafeUninitializedCapacity:MemoryLayout<Result32>.size + 1) { buffer, count in
-// 			previous.RAW_encode(dest:buffer.baseAddress!)[0] = UInt8(i)
-// 			count = MemoryLayout<Result32>.size + 1
-// 		}
-// 		let output: Result32 = try wgHmac(key:key, data:input)
-// 		workBuffer[i-1] = output
-// 		previous = output
-// 	}
-// 	return Array(workBuffer)
-// }
-
-internal func wgKDF<K, A>(key:UnsafePointer<K>, data:borrowing A, returning:(Result32).Type) throws -> Result32 where A:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key.RAW_staticbuff_storetype {
-	// find the entropy from the data
-	let byteBuffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:MemoryLayout<Result32>.size + 1)
-	defer {
-//		secureZeroBytes(byteBuffer)
-		byteBuffer.deallocate()
-	}
-	// find the entropy from the data
-	let genKey:Result32 = try wgHmac(key:key, data:data)
-	var previous:Result32 = genKey
-	return try wgHmac(key:key, data:[UInt8](unsafeUninitializedCapacity:MemoryLayout<Result32>.size + 1) { buffer, count in
-		previous.RAW_encode(dest:buffer.baseAddress!)[0] = UInt8(1)
-		count = MemoryLayout<Result32>.size + 1
-	})
-}
-
-internal func wgKDF<K, A>(key:UnsafePointer<K>, data:borrowing A, returning:(Result32, Result32).Type) throws -> (Result32, Result32) where A:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key.RAW_staticbuff_storetype {
-	let workBuffer = UnsafeMutableBufferPointer<Result32>.allocate(capacity:2)
-	defer { workBuffer.deallocate() }
-	// find the entropy from the data
-	let genKey:Result32 = try wgHmac(key:key, data:data)
-	var previous:Result32 = genKey
-	for i in 1...2 {
-		let input = [UInt8](unsafeUninitializedCapacity:MemoryLayout<Result32>.size + 1) { buffer, count in
-			previous.RAW_encode(dest:buffer.baseAddress!)[0] = UInt8(i)
-			count = MemoryLayout<Result32>.size + 1
+internal func wgKDF<K, A>(key:consuming K, data:consuming A, type:UInt8) throws -> [Result32] where A:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key.RAW_staticbuff_storetype {
+   	let genKey = try wgHmac(key:key, data:data) /* T0 = HMAC(key,input)*/
+	var previous = genKey
+	return try [Result32](unsafeUninitializedCapacity:Int(type)) { resultBuffer, resultCount in
+		for i in 1...type {
+			if i == 1 {
+				// first iteration
+				// t1 = HMAC(T0, 0x1)
+				let t1 = try wgHmac(key:genKey, data:[1])
+				previous = t1
+				resultBuffer[0] = t1
+			} else {
+				// nth case scenario
+				// ti = HMAC(T0, ti-1 || 0xi)
+				previous = try wgHmac(key:genKey, data:[UInt8](unsafeUninitializedCapacity:MemoryLayout<Result32>.size + 1) { buffer, count in
+					previous.RAW_encode(dest:buffer.baseAddress!).pointee = i
+					count = MemoryLayout<Result32>.size + 1
+				})
+				resultBuffer[Int(i) - 1] = previous
+			}
 		}
-		let output:Result32 = try wgHmac(key:key, data:input)
-		workBuffer[i-1] = output
-		previous = output
+		resultCount = Int(type)
 	}
-	return (workBuffer[0], workBuffer[1])
 }
