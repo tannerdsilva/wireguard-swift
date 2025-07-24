@@ -18,6 +18,9 @@ internal struct Reserved:Sendable {
 	internal init() {
 		self = Self(RAW_staticbuff:[0, 0, 0])
 	}
+	internal func isValid() -> Bool {
+		return RAW_access { $0[0] == 0 && $0[1] == 0 && $0[2] == 0 }
+	}
 }
 
 /// makes up the first 4 bytes of any wireguard packet, unconditionally.
@@ -36,17 +39,24 @@ internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral {
 	/// validates that the type is a valid wireguard packet type and that the reserved bytes are all zero.
 	/// - returns: true if the type is valid and the reserved bytes are all zero, false otherwise.
 	internal func isValid() -> Bool {
-		return reserved.RAW_access {
-			guard $0[0] == 0 && $0[1] == 0 && $0[2] == 0 else {
-				return false
-			}
-			switch type.RAW_native() {
-				case 0x1, 0x2, 0x3, 0x4:
-					return true
-				default:
-					return false
-			}
+		guard reserved.isValid() == true else {
+			return false
 		}
+		switch type.RAW_native() {
+			case 0x1, 0x2, 0x3, 0x4:
+				return true
+			default:
+				return false
+		}
+	}
+
+	/// compares the type heading to a UInt8 value.
+	/// - parameter lhs: the type heading to compare
+	/// - parameter rhs: the UInt8 value to compare against
+	/// - returns: true if the type heading's type matches the UInt8 value, false otherwise.
+	/// - NOTE: this function does not concern itself with the reserved bytes, only the type byte.
+	internal static func == (lhs:TypeHeading, rhs:UInt8) -> Bool {
+		return lhs.type.RAW_native() == rhs
 	}
 }
 
@@ -260,19 +270,12 @@ internal struct HandshakeInitiationMessage {
 
 fileprivate struct HandshakeResponseMessage:Sendable {
 	fileprivate struct Payload:Sendable {
-        let typeHeader: TypeHeading
-		let typeContent:RAW_byte
-		let reservedContent:Reserved
-		let senderIndex:PeerIndex
-		let receiverIndex:PeerIndex
-		let ephemeral:PublicKey
-		let empty:Tag
-
-		// init(receivingResponse:borrowing PeerIndex) throws {
-		// 	typeContent = 0x2
-		// 	let ephPrivate = try PrivateKey()
-		// 	let ephPublic = PublicKey(ephPrivate)
-		// 	// var cr = wgKDF(
-		// }
+        internal let typeHeader: TypeHeading
+		internal let typeContent:RAW_byte
+		internal let reservedContent:Reserved
+		internal let senderIndex:PeerIndex
+		internal let receiverIndex:PeerIndex
+		internal let ephemeral:PublicKey
+		internal let empty:Tag
 	}
 }
