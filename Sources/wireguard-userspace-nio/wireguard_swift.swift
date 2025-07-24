@@ -124,18 +124,19 @@ public final class WGInterface: Sendable {
 		}
         
         // Create Channel
+		let hsh = HandshakeHandler(privateKey:self.staticPrivateKey)
         let bootstrap =  DatagramBootstrap(group: group)
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .channelInitializer { channel in
                 channel.pipeline.addHandlers([
                    PacketHandler(),
-				   HandshakeHandler(privateKey:self.staticPrivateKey),
+				   hsh,
                ])
         }
 
         // Start Channel
         let channel = try bootstrap.bind(host:"0.0.0.0", port:36361).wait()
-
+		
         print("Server started successfully on \(channel.localAddress?.description ?? "unknown address")")
         
         let peerPublicKeyBase64 = String(try RAW_base64.encode(peerPublicKey))
@@ -144,7 +145,12 @@ public final class WGInterface: Sendable {
         
         print("Peer Public Key: \(peerPublicKeyBase64)")
         print("My Public Key: \(myPublicKeyBase64)")
-        
+
+
+		let myInvoker = HandshakeInvoker(invoke: HandshakeInitiationInvoke(endpoint:try! SocketAddress(ipAddress: ipAddress, port: port), publicKey: peerPublicKey))
+        try channel.pipeline.addHandler(myInvoker).wait()
+		print("Handshake Invoker added to pipeline")
+		
         // Create the addressed envolope with the destination port 
         // Write and flush to the channel
         

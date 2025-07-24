@@ -4,10 +4,19 @@ import RAW_chachapoly
 import RAW_base64
 
 internal struct HandshakeResponseMessage:Sendable {
-    internal static func forgeResponseState(c:Result32, h:Result32, senderPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result32) throws -> (c:Result32, h:Result32, payload:Payload) {
-		var c = c
-        var h = h
-        
+    internal static func forgeResponseState(cInput:Result32, hInput:Result32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result32) throws -> (c:Result32, h:Result32, payload:Payload) {
+		// var c = c
+        // var h = h
+
+		// step 1: calculate the hash of the static construction string
+		var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
+
+		// step 2: h = hash(ci || identifier)
+		var hasher = try WGHasher()
+		try hasher.update(c)
+		try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
+		var h = try hasher.finish()
+
         // step 1: (Epriv, Epub) := DH-GENERATE()
         var ephiPrivate = try PrivateKey()
         let ephiPublic = PublicKey(&ephiPrivate)
@@ -19,7 +28,7 @@ internal struct HandshakeResponseMessage:Sendable {
         let msgEphemeral = ephiPublic
         
         // step 4: h := HASH(h || msg.ephemeral)
-        var hasher = try WGHasher()
+        hasher = try WGHasher()
         try hasher.update(h)
         try hasher.update(ephiPublic)
         h = try hasher.finish()
@@ -36,7 +45,7 @@ internal struct HandshakeResponseMessage:Sendable {
         var k:Result32
         var T:Result32
         var arr:[Result32]
-        arr = try wgKDF(key:c, data: preSharedKey, type:3)
+        arr = try wgKDF(key:c, data:preSharedKey, type:3)
         c = arr[0]; T = arr[1]; k = arr[2]
         
         // step 8: h := HASH(H || T)
@@ -52,10 +61,11 @@ internal struct HandshakeResponseMessage:Sendable {
         // step 10: h := HASH(h || msg.empty)
         hasher = try WGHasher()
         try hasher.update(h)
+		try hasher.update(msgEmpty)
         try hasher.update(emptyTag)
         h = try hasher.finish()
-        
-        return (c, h, Payload(senderIndex:senderPeerIndex, responderIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, emptyTag:emptyTag))
+
+        return (c, h, Payload(senderIndex:initiatorPeerIndex, responderIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, emptyTag:emptyTag))
     }
     
     internal static func finalizeResponseState(initiatorStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {
