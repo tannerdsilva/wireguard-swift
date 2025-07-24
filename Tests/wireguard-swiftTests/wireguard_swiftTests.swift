@@ -23,13 +23,9 @@ import RAW_base64
 @Test func selfValidate() throws {
 	var initiatorPrivateKey = try PrivateKey()
 	var initiatorPublicKey = PublicKey(&initiatorPrivateKey)
-	print("Initiator Public Key: \(String(try RAW_base64.encode(initiatorPublicKey)))")
 	var responderStaticPrivateKey = try PrivateKey()
 	var responderStaticPublicKey = PublicKey(&responderStaticPrivateKey)
-	print("Responder Public Key: \(String(try RAW_base64.encode(responderStaticPublicKey)))")
-
 	var constructedPacket = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
 	var authenticatedPacketToSend = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: &responderStaticPublicKey, payload: constructedPacket.payload)
-
 	let responderValidationStep = try HandshakeInitiationMessage.validateInitiationMessage(&authenticatedPacketToSend, responderStaticPrivateKey: &responderStaticPrivateKey)
 }
