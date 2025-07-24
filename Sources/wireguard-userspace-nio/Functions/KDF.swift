@@ -1,7 +1,7 @@
 import RAW
 
 internal func wgKDF<K, A>(key:consuming K, data:consuming A, type:UInt8) throws -> [Result32] where A:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key.RAW_staticbuff_storetype {
-   	let genKey = try wgHmac(key:key, data:data) /* T0 = HMAC(key,input)*/
+   	let genKey = try wgHmac(key:key, data:data) /* T0 = HMAC(key,input) */
 	var previous = genKey
 	return try [Result32](unsafeUninitializedCapacity:Int(type)) { resultBuffer, resultCount in
 		for i in 1...type {

@@ -11,7 +11,6 @@ struct CLI:ParsableCommand {
 		abstract:"a development tool to aid in the development of the wireguard-userspace-nio target (and others).",
 		subcommands:[
 			GenerateKeys.self,
-			ComputeSharedKey.self,
             Initiator.self,
             Responder.self
 		]
@@ -24,28 +23,10 @@ struct CLI:ParsableCommand {
 
 		func run() throws {
 			let (publicKey, privateKey) = try dhGenerate()
-			let publicKeyBase64 = String(try RAW_base64.encode(publicKey))
-			let privateKeyBase64 = String(try RAW_base64.encode(privateKey))
+			let publicKeyBase64 = String(RAW_base64.encode(publicKey))
+			let privateKeyBase64 = String(RAW_base64.encode(privateKey))
 			print("Public Key: \(publicKeyBase64)")
 			print("Private Key: \(privateKeyBase64)")
-		}
-	}
-
-	struct ComputeSharedKey:ParsableCommand {
-		static let configuration = CommandConfiguration(
-			abstract:"Compute a shared key from a private key and a public key."
-		)
-
-		@Argument(help: "The private key to use for the computation.")
-		var privateKey:PrivateKey
-		@Argument(help: "The public key to use for the computation.")
-		var publicKey:PublicKey
-
-		func run() throws {
-			var privKeyCopy = privateKey
-			var pubKeyCopy = publicKey
-			let sharedKey = SharedKey.compute(privateKey: &privKeyCopy, publicKey: &pubKeyCopy)
-			print("shared secret: \(String(try RAW_base64.encode(sharedKey)))")
 		}
 	}
 
