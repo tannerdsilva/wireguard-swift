@@ -225,6 +225,3 @@ internal final class InputHandler: ChannelDuplexHandler, Sendable {
     }
 }
 
-internal struct HandshakeHandler {
-    
-}
