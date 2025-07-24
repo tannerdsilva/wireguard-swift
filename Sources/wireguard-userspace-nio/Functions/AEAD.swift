@@ -20,7 +20,7 @@ internal struct CountedNonce:Sendable {
 	}
 }
 
-internal func aeadEncrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, text:UnsafePointer<A>, aad:UnsafePointer<D>) throws -> (A, Tag) where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
+internal func aeadEncrypt<A, D, K>(key:consuming K, counter:UInt64, text:UnsafePointer<A>, aad:UnsafePointer<D>) throws -> (A, Tag) where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
 	var context = RAW_chachapoly.Context(key:key)
 	return try text.pointee.RAW_access { textBuff in
 		let cipherText = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:textBuff.count)
@@ -34,7 +34,7 @@ internal func aeadEncrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, text:Un
 	}
 }
 
-internal func aeadDecrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, cipherText:UnsafePointer<A>, aad:UnsafePointer<D>, tag:Tag) throws -> A where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
+internal func aeadDecrypt<A, D, K>(key:consuming K, counter:UInt64, cipherText:UnsafePointer<A>, aad:UnsafePointer<D>, tag:Tag) throws -> A where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
 	var context = RAW_chachapoly.Context(key:key)
 	return try cipherText.pointee.RAW_access { cipherTextBuff in
 		let plainText = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:cipherTextBuff.count)

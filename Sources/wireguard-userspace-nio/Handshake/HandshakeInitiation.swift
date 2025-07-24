@@ -94,7 +94,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         c = arr[0]; k = arr[1]
 
 		// step 9: msg.static = AEAD(k, 0, siPublic, h)
-		let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:&h)
+		let (msgStatic, msgTag) = try aeadEncrypt(key:k, counter:0, text:&initiatorStaticPublicKey, aad:&h)
 
 		// step 10: h = hash(h || msg.static)
 		hasher = try WGHasher()
@@ -109,7 +109,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 
 		// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
 		var newTai = TAI64N()
-		let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:&newTai, aad:&h)
+		let (tsDat, tsTag) = try aeadEncrypt(key:k, counter:0, text:&newTai, aad:&h)
 
 		// step 13: h = hash(h || msg.timestamp)
 		hasher = try WGHasher()
@@ -174,7 +174,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         c = arr[0]; k = arr[1]
 
 		// step 8: decrypt the msg.static to determine the initStaticPublicKey
-        var initStaticPublicKey = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.staticRegion)!, aad:&h, tag:message.pointer(to:\.payload.staticTag)!.pointee)
+        var initStaticPublicKey = try aeadDecrypt(key:k, counter:0, cipherText:message.pointer(to:\.payload.staticRegion)!, aad:&h, tag:message.pointer(to:\.payload.staticTag)!.pointee)
         
         let publickey = String(try RAW_base64.encode(initStaticPublicKey))
       
@@ -190,7 +190,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         c = arr[0]; k = arr[1]
 
         // step 11: descrypt the msg.timestamp to find the intial timestamp
-        let sentTimestamp = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:&h, tag:message.pointee.payload.timestampTag)
+        let sentTimestamp = try aeadDecrypt(key:k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:&h, tag:message.pointee.payload.timestampTag)
 
         // step 12: h = hash(h || msg.static)
 		hasher = try WGHasher()
