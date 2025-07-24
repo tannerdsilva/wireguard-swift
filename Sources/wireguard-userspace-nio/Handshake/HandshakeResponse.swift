@@ -65,7 +65,7 @@ internal struct HandshakeResponseMessage:Sendable {
         try hasher.update(emptyTag)
         h = try hasher.finish()
 
-        return (c, h, Payload(senderIndex:initiatorPeerIndex, responderIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, emptyTag:emptyTag))
+        return (c, h, Payload(responderIndex:try generateSecureRandomBytes(as:PeerIndex.self), initiatorIndex:initiatorPeerIndex, ephemeral:msgEphemeral, emptyTag:emptyTag))
     }
     
     internal static func finalizeResponseState(initiatorStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {
@@ -87,7 +87,7 @@ internal struct HandshakeResponseMessage:Sendable {
         let initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
         
         // setup: calculate the hash of the static construction string
-        var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
+        var c = try! wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
 
         // setup: h = hash(ci || identifier)
         var hasher = try WGHasher()
@@ -99,7 +99,7 @@ internal struct HandshakeResponseMessage:Sendable {
         var responderEphemeralPublicKey = message.pointee.payload.ephemeral
 
         // step 1: c := KDF(c, responderEpub)
-        c = try wgKDF(key:c, data:responderEphemeralPublicKey, type:1)[0]
+        c = try! wgKDF(key:c, data:responderEphemeralPublicKey, type:1)[0]
         
         // step 4: h := HASH(h || msg.ephemeral)
         hasher = try WGHasher()
@@ -108,16 +108,16 @@ internal struct HandshakeResponseMessage:Sendable {
         h = try hasher.finish()
         
         // step 5: c := KDF(c, DH(initiatorEpriv, responderEpub))
-        c = try wgKDF(key:c, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey: &responderEphemeralPublicKey), type:1)[0]
+        c = try! wgKDF(key:c, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey: &responderEphemeralPublicKey), type:1)[0]
         
         // step 6: c := KDF(c, DH(initiatorStaticPrivateKey, responderEpub))
-        c = try wgKDF(key:c, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey: &responderEphemeralPublicKey), type:1)[0]
+        c = try! wgKDF(key:c, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey: &responderEphemeralPublicKey), type:1)[0]
         
         // step 7: (c, T, k) := KDF^3(c, Q)
         var k:Result32
         var T:Result32
         var arr:[Result32]
-        arr = try wgKDF(key:c, data: preSharedKey, type:3)
+        arr = try! wgKDF(key:c, data: preSharedKey, type:3)
         c = arr[0]; T = arr[1]; k = arr[2]
         
         // step 8: h := HASH(H || T)
@@ -128,7 +128,7 @@ internal struct HandshakeResponseMessage:Sendable {
         
         // step 9: msg.empty := AEAD(k, 0, e, h)
         var e:[UInt8] = []
-        var msgEmpty = try aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:&h, tag:message.pointer(to:\.payload.emptyTag)!.pointee)
+        var msgEmpty = try! aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:&h, tag:message.pointer(to:\.payload.emptyTag)!.pointee)
 
         // step 10: h := HASH(h || msg.empty)
         hasher = try WGHasher()
@@ -140,8 +140,8 @@ internal struct HandshakeResponseMessage:Sendable {
         hasher = try WGHasher()
         try hasher.update([UInt8]("mac1----".utf8))
         try hasher.update(initiatorStaticPublicKey)
-        let mac1 = try wgMac(key:try hasher.finish(), data: message.pointee.payload)
-        
+        let mac1 = try! wgMac(key:try hasher.finish(), data: message.pointee.payload)
+
         guard mac1 == message.pointee.msgMac1 else {
             throw MAC1InvalidError()
         }
@@ -153,19 +153,19 @@ internal struct HandshakeResponseMessage:Sendable {
     internal struct Payload:Sendable {
         /// message type (type and reserved)
         let typeHeader:TypeHeading
-        /// sender's peer index
-        internal let senderIndex:PeerIndex
-        /// responder's peer index (I_r)
+		/// responder's peer index (I_r)
         internal let responderIndex:PeerIndex
+        /// sender's peer index
+        internal let initiatorIndex:PeerIndex
         /// ephemeral key
         internal let ephemeral:PublicKey
         /// empty tag of message
         internal let emptyTag:Tag
 
         /// initializes a new HandshakeResponseMessage
-        fileprivate init(senderIndex:PeerIndex, responderIndex:PeerIndex, ephemeral:PublicKey, emptyTag:Tag) {
+        fileprivate init(responderIndex:PeerIndex, initiatorIndex:PeerIndex, ephemeral:PublicKey, emptyTag:Tag) {
             self.typeHeader = 0x2
-            self.senderIndex = senderIndex
+            self.initiatorIndex = initiatorIndex
             self.responderIndex = responderIndex
             self.ephemeral = ephemeral
             self.emptyTag = emptyTag

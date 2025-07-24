@@ -111,18 +111,7 @@ public final class WGInterface: Sendable {
     }
     
     public func sendInitialPacket() throws {
-        
-        // Create Byte Payload
-        let (_,_,payload) = try withUnsafePointer(to: staticPrivateKey) { p in
-            try withUnsafePointer(to: peerPublicKey) { q in
-                return try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: p, responderStaticPublicKey: q)
-            }
-        }
-        
-		let authenticatedPacket = try withUnsafePointer(to: peerPublicKey) { q in
-			return try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: q, payload: payload)
-		}
-        
+
         // Create Channel
 		let hsh = HandshakeHandler(privateKey:self.staticPrivateKey)
         let bootstrap =  DatagramBootstrap(group: group)

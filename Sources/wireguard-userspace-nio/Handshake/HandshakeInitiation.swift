@@ -5,7 +5,7 @@ import RAW_base64
 
 @RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-internal struct PeerIndex:Sendable {
+internal struct PeerIndex:Sendable, Hashable {
 	internal static func random() throws -> Self {
 		return try generateSecureRandomBytes(as:Self.self)
 	}
@@ -52,7 +52,7 @@ internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral {
 
 
 internal struct HandshakeInitiationMessage:Sendable {
-	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, payload:Payload) {
+	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
 		// setup: get initiator public key
 		var initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
 
@@ -118,7 +118,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         try hasher.update(tsTag)
 		h = try hasher.finish()
         
-		return (c, h, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+		return (c, h, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
 	}
 
     internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {		

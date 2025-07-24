@@ -2,8 +2,8 @@ import NIO
 import RAW_dh25519
 
 struct HandshakeInitiationInvoke {
-	let endpoint: SocketAddress
-	let publicKey: PublicKey
+	let endpoint:SocketAddress
+	let publicKey:PublicKey
 }
 
 final class HandshakeInvoker:ChannelOutboundHandler, RemovableChannelHandler, Sendable {

@@ -1,7 +1,7 @@
 import NIO
 import RAW_dh25519
 
-internal final class HandshakeHandler:ChannelDuplexHandler, Sendable {
+internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable {
     typealias InboundIn = PacketType
     typealias InboundOut = PacketType
 
@@ -9,25 +9,17 @@ internal final class HandshakeHandler:ChannelDuplexHandler, Sendable {
     typealias OutboundOut = PacketType
     
     let privateKey:PrivateKey
+
+	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
     
     init(privateKey:consuming PrivateKey) {
         self.privateKey = privateKey
     }
 
-	// func sendHandshake(to endpoint:SocketAddress, expectedPeerPublicKey:PublicKey) {
-		// withUnsafePointer(to:privateKey) { privateKey in
-		// 	try withUnsafePointer(to:expectedPeerPublicKey) { expectedPeerPublicKey in
-		// 		let payload = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
-		// 		let authenticatedPacket = try! HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload: payload.payload)
-		// 		let packet: PacketType = .handshakeInitiation(endpoint, authenticatedPacket)
-				
-		// 	}
-		// }
-	// }
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        /// Handles Handshake Packets, else passes them down
-        let packet = self.unwrapInboundIn(data)
-        withUnsafePointer(to:privateKey) { responderPrivateKey in
+	func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+		/// Handles Handshake Packets, else passes them down
+		let packet = self.unwrapInboundIn(data)
+		withUnsafePointer(to:privateKey) { responderPrivateKey in
 			switch packet {
 				case var .handshakeInitiation(endpoint, payload):
 					/// Reads initiation payload and validates it.
@@ -42,25 +34,32 @@ internal final class HandshakeHandler:ChannelDuplexHandler, Sendable {
 						print("Handshake response sent to \(endpoint)")
 					}
 					
-				case let .handshakeResponse(endpoint, payload):
-					/// Reads response packet and validates it.
-					/// Once validated, updates keys for data encryption (NEEDS COMPLETION)
-					print("nothing")
+				case var .handshakeResponse(endpoint, payload):
+					guard let initiatorEphiPrivateKey = initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
+						print("Received handshake response for unknown peer index \(payload.payload.initiatorIndex)")
+						return
+					}
+					withUnsafePointer(to:privateKey) { myPrivateKeyPointer in
+						withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorStaticPrivateKeyPtr in
+							let val = try! HandshakeResponseMessage.validateResponseMessage(&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorStaticPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
+						}
+					}
 				default:
 					context.fireChannelRead(wrapInboundOut(packet))
 			}
 		}
-    }
-    
-    func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
-       let invoke = self.unwrapOutboundIn(data)
-	   try! withUnsafePointer(to:privateKey) { privateKey in
+	}
+	
+	func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
+		let invoke = self.unwrapOutboundIn(data)
+		try! withUnsafePointer(to:privateKey) { privateKey in
 			try withUnsafePointer(to:invoke.publicKey) { expectedPeerPublicKey in
 				let payload = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
 				let authenticatedPacket = try! HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload: payload.payload)
+				initiatorEphemeralPrivateKey[authenticatedPacket.payload.initiatorPeerIndex] = payload.ephiPrivateKey
 				let packet: PacketType = .handshakeInitiation(invoke.endpoint, authenticatedPacket)
 				context.writeAndFlush(self.wrapOutboundOut(packet), promise: promise)
 			}
 		}
-    }
+	}
 }
