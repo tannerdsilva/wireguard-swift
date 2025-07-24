@@ -134,7 +134,7 @@ public final class WGInterface: Sendable {
         }
 
         // Start Channel
-        let channel = try bootstrap.bind(host:"0.0.0.0", port:Int.random(in:24245..<36367)).wait()
+        let channel = try bootstrap.bind(host:"0.0.0.0", port:36361).wait()
 
         print("Server started successfully on \(channel.localAddress?.description ?? "unknown address")")
         

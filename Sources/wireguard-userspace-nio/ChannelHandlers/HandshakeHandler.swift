@@ -24,9 +24,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, Sendable {
 					/// Once validated, sends a response packet
 					var val = try! HandshakeInitiationMessage.validateInitiationMessage(&payload, responderStaticPrivateKey: responderPrivateKey)
 					var sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
-					var response = try! HandshakeResponseMessage.forgeResponseState(senderPeerIndex: payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey: payload.payload.ephemeral, preSharedKey: sharedKey)
+					var response = try! HandshakeResponseMessage.forgeResponseState(c: sharedKey, h: sharedKey, senderPeerIndex: payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey: payload.payload.ephemeral, preSharedKey: sharedKey)
 					let authResponse = try! HandshakeResponseMessage.finalizeResponseState(initiatorStaticPublicKey: &val.initPublicKey, payload: response.payload)
 					let packet: PacketType = .handshakeResponse(endpoint, authResponse)
+					
 					context.writeAndFlush(self.wrapOutboundOut(packet)).whenSuccess {
 						print("Handshake response sent to \(endpoint)")
 					}

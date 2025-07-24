@@ -4,16 +4,9 @@ import RAW_chachapoly
 import RAW_base64
 
 internal struct HandshakeResponseMessage:Sendable {
-    internal static func forgeResponseState(senderPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result32) throws -> (c:Result32, h:Result32, payload:Payload) {
-       
-        // step 0: calculate the hash of the static construction string
-        var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
-        
-        // step 0: h = hash(ci || identifier)
-        var hasher = try WGHasher()
-        try hasher.update(c)
-        try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
-        var h = try hasher.finish()
+    internal static func forgeResponseState(c:Result32, h:Result32, senderPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result32) throws -> (c:Result32, h:Result32, payload:Payload) {
+		var c = c
+        var h = h
         
         // step 1: (Epriv, Epub) := DH-GENERATE()
         var ephiPrivate = try PrivateKey()
@@ -26,13 +19,13 @@ internal struct HandshakeResponseMessage:Sendable {
         let msgEphemeral = ephiPublic
         
         // step 4: h := HASH(h || msg.ephemeral)
-        hasher = try WGHasher()
+        var hasher = try WGHasher()
         try hasher.update(h)
         try hasher.update(ephiPublic)
         h = try hasher.finish()
         
         // step 5: c := KDF(c, DH(Epriv, initiatorEpub))
-        c = try withUnsafePointer(to: initiatorEphemeralPublicKey) { ephiKey in
+        c = try withUnsafePointer(to:initiatorEphemeralPublicKey) { ephiKey in
             return try wgKDF(key:c, data:try dhKeyExchange(privateKey: &ephiPrivate, publicKey: ephiKey), type:1)[0]
         }
         
