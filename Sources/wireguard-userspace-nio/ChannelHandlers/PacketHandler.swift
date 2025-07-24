@@ -1,8 +1,8 @@
 import NIO
 
 internal enum PacketType {
-    case HandshakeInitiation(SocketAddress, HandshakeInitiationMessage.AuthenticatedPayload)
-    case HandshakeResponse(SocketAddress, HandshakeResponseMessage.AuthenticatedPayload)
+    case handshakeInitiation(SocketAddress, HandshakeInitiationMessage.AuthenticatedPayload)
+    case handshakeResponse(SocketAddress, HandshakeResponseMessage.AuthenticatedPayload)
     //case Cookie()
     //case DataPacket()
 }
@@ -33,7 +33,7 @@ internal final class PacketHandler: ChannelDuplexHandler {
                 }
                 return HandshakeInitiationMessage.AuthenticatedPayload(RAW_decode:bytebuffer.baseAddress!, count:148)
             }
-            let packet: PacketType = .HandshakeInitiation(remoteAddress, authPayload!)
+            let packet: PacketType = .handshakeInitiation(remoteAddress, authPayload!)
             context.fireChannelRead(wrapInboundOut(packet))
         
         case 0x2:
@@ -43,7 +43,7 @@ internal final class PacketHandler: ChannelDuplexHandler {
                 }
                 return HandshakeResponseMessage.AuthenticatedPayload(RAW_decode:bytebuffer.baseAddress!, count:92)
             }
-            let packet: PacketType = .HandshakeResponse(remoteAddress, authPayload!)
+            let packet: PacketType = .handshakeResponse(remoteAddress, authPayload!)
             context.fireChannelRead(wrapInboundOut(packet))
         
         default:
@@ -55,33 +55,25 @@ internal final class PacketHandler: ChannelDuplexHandler {
         /// Handles receiving Outbound Packets and sending out a UDP packet to the remote address
         let packet = self.unwrapOutboundIn(data)
 
-        // Process the data before sending
-        var buffer = envelope.data
-        buffer.writeString("Processed: ")
-        
+		let destinationEndpoint: SocketAddress
+		let sendBuffer: ByteBuffer
         switch packet {
-            
-        }
+            case let .handshakeInitiation(endpoint, payload):
+				// Here you would typically encode the payload into a ByteBuffer
+				var buffer = context.channel.allocator.buffer(capacity: MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)
+				buffer.writeBytes(payload)
+				destinationEndpoint = endpoint
+				sendBuffer = buffer
+			case let .handshakeResponse(endpoint, payload):
+				var buffer = context.channel.allocator.buffer(capacity: MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)
+				buffer.writeBytes(payload)
+				destinationEndpoint = endpoint
+				sendBuffer = buffer
+		}
 
-        let processedEnvelope = AddressedEnvelope(remoteAddress: packet.0, data: buffer)
+        let processedEnvelope = AddressedEnvelope(remoteAddress: destinationEndpoint, data: sendBuffer)
 
         // Pass down the processed data
-        context.write(self.wrapOutboundOut(processedEnvelope), promise: promise)
+        context.writeAndFlush(self.wrapOutboundOut(processedEnvelope), promise:promise)
     }
 }
-
-
-var allocated = context.channel.allocator.buffer(capacity:MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)
-allocated.writeBytes(data)
-allocated.withUnsafeReadableBytes { bytes in
-    for i in 0..<bytes.count {
-        print("Byte \(i): \(bytes[i])")
-    }
-}
-let envolope = try! AddressedEnvelope(remoteAddress: SocketAddress(ipAddress: ipAddress, port: port), data: allocated)
-let out = self.wrapOutboundOut(envolope)
-var promise = context.eventLoop.makePromise(of: Void.self)
-promise.futureResult.whenSuccess {
-    print("Promise completed")
-}
-context.writeAndFlush(out, promise: promise)
