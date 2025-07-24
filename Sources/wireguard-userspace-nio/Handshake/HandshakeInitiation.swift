@@ -52,8 +52,8 @@ internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral {
 
 
 internal struct HandshakeInitiationMessage:Sendable {
-	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, k:Result32, payload:Payload) {
-		// step 0: get initiator public key
+	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, payload:Payload) {
+		// setup: get initiator public key
 		var initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
 
 		// step 1: calculate the hash of the static construction string
@@ -118,7 +118,7 @@ internal struct HandshakeInitiationMessage:Sendable {
         try hasher.update(tsTag)
 		h = try hasher.finish()
         
-		return (c, h, k, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+		return (c, h, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
 	}
 
     internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {		
@@ -135,9 +135,9 @@ internal struct HandshakeInitiationMessage:Sendable {
     }
     
     internal struct MAC1InvalidError:Swift.Error {}
-    internal static func validateInitiationMessage(_ message:UnsafePointer<HandshakeInitiationMessage.AuthenticatedPayload>, responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result32, h:Result32, k:Result32, initPublicKey:PublicKey, timestamp:TAI64N) {
+    internal static func validateInitiationMessage(_ message:UnsafePointer<HandshakeInitiationMessage.AuthenticatedPayload>, responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result32, h:Result32, initPublicKey:PublicKey, timestamp:TAI64N) {
         
-        // step 0: get responder public key
+        // setup: get responder public key
         let responderStaticPublicKey = PublicKey(responderStaticPrivateKey)
         
 		// step 1: calculate the hash of the static construction string
@@ -209,7 +209,7 @@ internal struct HandshakeInitiationMessage:Sendable {
             throw MAC1InvalidError()
         }
         
-        return (c, h, k, initStaticPublicKey, sentTimestamp)
+        return (c, h, initStaticPublicKey, sentTimestamp)
 	}
 
 	/// this message is described in the wireguard whitepaper in section 5.4.2
@@ -254,23 +254,4 @@ internal struct HandshakeInitiationMessage:Sendable {
             self.msgMac2 = msgMac2
         }
     }
-}
-
-fileprivate struct HandshakeResponseMessage:Sendable {
-	fileprivate struct Payload:Sendable {
-        let typeHeader: TypeHeading
-		let typeContent:RAW_byte
-		let reservedContent:Reserved
-		let senderIndex:PeerIndex
-		let receiverIndex:PeerIndex
-		let ephemeral:PublicKey
-		let empty:Tag
-
-		// init(receivingResponse:borrowing PeerIndex) throws {
-		// 	typeContent = 0x2
-		// 	let ephPrivate = try PrivateKey()
-		// 	let ephPublic = PublicKey(ephPrivate)
-		// 	// var cr = wgKDF(
-		// }
-	}
 }

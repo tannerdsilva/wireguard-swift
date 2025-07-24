@@ -113,7 +113,7 @@ public final class WGInterface: Sendable {
     public func sendInitialPacket() throws {
         
         // Create Byte Payload
-        let (_,_,_,payload) = try withUnsafePointer(to: staticPrivateKey) { p in
+        let (_,_,payload) = try withUnsafePointer(to: staticPrivateKey) { p in
             try withUnsafePointer(to: peerPublicKey) { q in
                 return try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: p, responderStaticPublicKey: q)
             }
@@ -196,20 +196,20 @@ internal final class InputHandler: ChannelDuplexHandler, Sendable {
         let envolope = self.unwrapInboundIn(data)
         let buffer = envolope.data
         let authPayload = buffer.withUnsafeReadableBytes{bytebuffer in
-            guard bytebuffer.count == 148 else {
+            guard bytebuffer.count == 96 else {
                 fatalError("Wrong length \(bytebuffer.count)")
             }
             for i in 0..<bytebuffer.count {
                 print("Byte \(i): \(bytebuffer[i])")
             }
-            return HandshakeInitiationMessage.AuthenticatedPayload(RAW_decode:bytebuffer.baseAddress!, count:148)
+            return HandshakeResponseMessage.AuthenticatedPayload(RAW_decode:bytebuffer.baseAddress!, count:96)
         }
         
-        let validation = try! withUnsafePointer(to: privateKey) { privateKey in
-            try! withUnsafePointer(to: authPayload!) { authPayload in
-                try! HandshakeInitiationMessage.validateInitiationMessage(authPayload, responderStaticPrivateKey: privateKey)
-            }
-        }
+//        let validation = try! withUnsafePointer(to: privateKey) { privateKey in
+//            try! withUnsafePointer(to: authPayload!) { authPayload in
+//                try! HandshakeResponseMessage.validateResponseMessage(authPayload, initiatorStaticPrivateKey: privateKey, initiatorEphemeralPrivateKey: <#T##UnsafePointer<PrivateKey>#>)
+//            }
+//        }
         
         fatalError("Successss")
         let remoteAddress = envolope.remoteAddress
