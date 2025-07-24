@@ -7,7 +7,7 @@ internal enum PacketType {
     //case DataPacket()
 }
 
-internal final class PacketHandler: ChannelDuplexHandler {
+internal final class PacketHandler: ChannelDuplexHandler, Sendable {
     typealias InboundIn = AddressedEnvelope<ByteBuffer>
     typealias InboundOut = PacketType
     

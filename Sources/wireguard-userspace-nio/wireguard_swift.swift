@@ -128,10 +128,11 @@ public final class WGInterface: Sendable {
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .channelInitializer { channel in
                 channel.pipeline.addHandlers([
-                    InputHandler(data: authenticatedPacket, ipAddress: self.ipAddress, port: self.port, privateKey: self.staticPrivateKey)
-                ])
-            }
-        
+                   PacketHandler(),
+				   HandshakeHandler(privateKey:self.staticPrivateKey),
+               ])
+        }
+
         // Start Channel
         let channel = try bootstrap.bind(host:"0.0.0.0", port:Int.random(in:24245..<36367)).wait()
 
@@ -153,7 +154,9 @@ public final class WGInterface: Sendable {
         
     }
     
-    
+    deinit {
+		try? group.syncShutdownGracefully()
+	}
 }
 
 internal final class InputHandler: ChannelDuplexHandler, Sendable {
