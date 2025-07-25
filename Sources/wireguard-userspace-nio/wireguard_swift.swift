@@ -9,36 +9,6 @@ import RAW_base64
 public typealias Key = RAW_dh25519.PublicKey
 
 public final class WireguardInterface {
-	let elg: EventLoopGroup
-	let listeningPort:Int
-	let staticPublicKey:PublicKey
-
-	let connectedChannel:EventLoopFuture<Channel>
-	let peerRouter:PeerRouter
-
-	public init(loopGroupProvider:EventLoopGroup, staticPublicKey:PublicKey, listeningPort:Int? = nil) {
-		self.elg = loopGroupProvider
-
-		let lp:Int
-		if let listeningPort = listeningPort {
-			self.listeningPort = listeningPort
-			lp = listeningPort
-		} else {
-			lp = Int.random(in:10000..<16000)
-			self.listeningPort = lp
-		}
-
-		let pr = PeerRouter()
-		self.peerRouter = pr
-		self.staticPublicKey = staticPublicKey
-//        self.connectedChannel = DatagramBootstrap(group:elg.next())
-//            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-//            .channelInitializer({ [pr] channel in
-//                return channel.pipeline.addHandler(pr)
-//            }).bind(host:"0.0.0.0", port:lp)
-		self.connectedChannel = DatagramBootstrap(group:elg).bind(host: "0.0.0.0", port: lp)
-	}
-
 	public func run() async throws {
 //        let channel = try await self.connectedChannel.get()
 //        try await gracefulShutdown()
@@ -46,49 +16,6 @@ public final class WireguardInterface {
 	}
 }
 
-// Handler to process incoming and outgoing data
-internal final class PeerRouter:ChannelDuplexHandler {
-	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
-	internal typealias InboundOut = AddressedEnvelope<ByteBuffer>
-	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer> // receive to write
-	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
-
-	private var handshakeStages = [SocketAddress:Int]()
-	
-	internal init() {}
-
-	internal func channelActive(context:ChannelHandlerContext) {
-		
-	}
-	
-	func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-		let envelope = self.unwrapInboundIn(data)
-		var body = envelope.data
-		
-		// what kind of message is this?
-		guard body.readableBytes >= 4 else {
-			return
-		}
-//        var wgHeader = TypeHeading(RAW_staticbuff:body.readBytes(length:4)!)
-//        guard wgHeader.isValid() else {
-//            return
-//        }
-		// switch wgHeader.type {
-		//     case 0x1:
-				
-		//     case 0x2:
-
-		//     case 0x3:
-
-		//     case 0x4:
-		// }
-	}
-
-	func errorCaught(context: ChannelHandlerContext, error: Error) {
-		print("Error: \(error)")
-		context.close(promise: nil)
-	}
-}
 
 public final class WGInterface: Sendable {
 	let ipAddress: String
@@ -127,9 +54,9 @@ public final class WGInterface: Sendable {
 		
 		print("Server started successfully on \(channel.localAddress?.description ?? "unknown address")")
 		
-		let peerPublicKeyBase64 = String(try RAW_base64.encode(peerPublicKey))
+		let peerPublicKeyBase64 = String(RAW_base64.encode(peerPublicKey))
 		var privKeyCopy = staticPrivateKey
-		let myPublicKeyBase64 = String(try RAW_base64.encode(PublicKey(&privKeyCopy)))
+		let myPublicKeyBase64 = String(RAW_base64.encode(PublicKey(&privKeyCopy)))
 		
 		print("Peer Public Key: \(peerPublicKeyBase64)")
 		print("My Public Key: \(myPublicKeyBase64)")
