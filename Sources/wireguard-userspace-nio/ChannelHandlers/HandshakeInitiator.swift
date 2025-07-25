@@ -7,13 +7,12 @@ struct HandshakeInitiationInvoke {
 	let publicKey:PublicKey
 }
 
-final class HandshakeInvoker:ChannelOutboundHandler, RemovableChannelHandler, Sendable {
+internal final class HandshakeInvoker:ChannelOutboundHandler, RemovableChannelHandler, Sendable {
 	typealias OutboundIn = Never
 	typealias OutboundOut = HandshakeInitiationInvoke
 
 	private let logger:Logger
-
-	let invokeToSend:HandshakeInitiationInvoke
+	private let invokeToSend:HandshakeInitiationInvoke
 
 	init(invoke:HandshakeInitiationInvoke, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -25,8 +24,13 @@ final class HandshakeInvoker:ChannelOutboundHandler, RemovableChannelHandler, Se
 	func handlerAdded(context:ChannelHandlerContext) {
 		logger.trace("added to pipeline, sending handshake initiation invoke to peer", metadata:["peer_endpoint":"\(invokeToSend.endpoint.description)", "peer_public_key":"\(invokeToSend.publicKey)"])
         context.writeAndFlush(wrapOutboundOut(invokeToSend), promise:nil)
-		context.pipeline.removeHandler(self).whenComplete { [l = logger] _ in
-			l.trace("removed from pipeline")
+		context.pipeline.removeHandler(self).whenComplete { [l = logger] result in
+			switch result {
+				case .success:
+					l.trace("removed HandshakeInvoker from pipeline successfully")
+				case .failure(let error):
+					l.error("failed to remove HandshakeInvoker from pipeline: \(error)")
+			}
 		}
 	}
 }

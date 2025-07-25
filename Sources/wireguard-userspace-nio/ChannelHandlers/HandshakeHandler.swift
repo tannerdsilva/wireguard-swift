@@ -17,14 +17,14 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
 	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
 	
-	init(privateKey:consuming PrivateKey, logLevel:Logger.Level) {
+	internal init(privateKey:consuming PrivateKey, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		self.logger = buildLogger
 		self.privateKey = privateKey
 	}
 
-	func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+	internal borrowing func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -33,8 +33,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		do {
 			try withUnsafePointer(to:privateKey) { responderPrivateKey in
 				switch unwrapInboundIn(data) {
-					case let .handshakeInitiation(endpoint, payload):
-						
+					case .handshakeInitiation(let endpoint, let payload):
+						logger.debug("received handshake initiation packet", metadata:["remote_address":"\(endpoint.description)"])
 						var val = try HandshakeInitiationMessage.validateInitiationMessage([payload], responderStaticPrivateKey: responderPrivateKey)
 						let sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
 						var response = try HandshakeResponseMessage.forgeResponseState(cInput:val.c, hInput:val.h, initiatorPeerIndex: payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
@@ -45,18 +45,19 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							print("Handshake response sent to \(ep)")
 						}
 						
-					case var .handshakeResponse(endpoint, payload):
+					case .handshakeResponse(let endpoint, var payload):
+						logger.debug("received handshake response packet", metadata:["remote_address":"\(endpoint.description)"])
 						guard let initiatorEphiPrivateKey = initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
-							print("Received handshake response for unknown peer index \(payload.payload.initiatorIndex)")
+							logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 							return
 						}
 						guard let (existingC, existingH) = initiatorChainingData[payload.payload.initiatorIndex] else {
-							print("Received handshake response for unknown peer index \(payload.payload.initiatorIndex)")
+							logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing chaining data")
 							return
 						}
 						try withUnsafePointer(to:privateKey) { myPrivateKeyPointer in
-							try withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorStaticPrivateKeyPtr in
-								let val = try HandshakeResponseMessage.validateResponseMessage(c:existingC, h:existingH, message:&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorStaticPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
+							try withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorEphiPrivateKeyPtr in
+								let val = try HandshakeResponseMessage.validateResponseMessage(c:existingC, h:existingH, message:&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
 							}
 						}

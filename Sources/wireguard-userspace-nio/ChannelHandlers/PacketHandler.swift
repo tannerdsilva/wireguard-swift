@@ -36,7 +36,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 		logger = buildLogger
 	}
 	
-	func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let envelope = unwrapInboundIn(data)
 		envelope.data.withUnsafeReadableBytes { byteBuffer in
 			// proceed based on the first byte of the buffer
@@ -67,7 +67,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 		}
 	}
 	
-	func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		// handles receiving Outbound Packets and sending out a UDP packet to the remote address
 		let destinationEndpoint:SocketAddress
 		let sendBuffer: ByteBuffer
@@ -77,11 +77,13 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				buffer.writeBytes(payload)
 				destinationEndpoint = endpoint
 				sendBuffer = buffer
+				logger.debug("sending handshake initiation packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
 			case let .handshakeResponse(endpoint, payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<HandshakeResponseMessage.AuthenticatedPayload>.size)
 				buffer.writeBytes(payload)
 				destinationEndpoint = endpoint
 				sendBuffer = buffer
+				logger.debug("sending handshake response packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
 			case .cookie:
 				logger.warning("attempted to send cookie packet, which is not supported")
 				return
