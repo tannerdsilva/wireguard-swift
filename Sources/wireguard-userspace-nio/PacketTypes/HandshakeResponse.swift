@@ -4,7 +4,7 @@ import RAW_chachapoly
 import RAW_base64
 
 internal struct HandshakeResponseMessage:Sendable {
-    internal static func forgeResponseState(cIn:Result32, hIn:Result32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result32) throws -> (c:Result32, h:Result32, payload:Payload) {
+    internal static func forgeResponseState(c cIn:Result32, h hIn:Result32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result32) throws -> (c:Result32, h:Result32, payload:Payload) {
 		 var c = cIn
          var h = hIn
 

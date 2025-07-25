@@ -8,7 +8,7 @@ import RAW
     let staticPublicKey = try dhGenerate()
     let peerPublicKey = try dhGenerate().0
     
-    let (_,_,payload) = try withUnsafePointer(to: staticPublicKey.1) { p in
+    let (_,_,_,payload) = try withUnsafePointer(to: staticPublicKey.1) { p in
         try withUnsafePointer(to: peerPublicKey) { q in
             return try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: p, responderStaticPublicKey: q)
         }
@@ -38,7 +38,32 @@ import RAW
     var initiatorEphemeralPublicKey = PublicKey(&initiatorEphemeralPrivateKey)
     var sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()) // 0^32 shared key default
     var senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
-    var constructedPacket = try HandshakeResponseMessage.forgeResponseState(senderPeerIndex: senderIndex, initiatorStaticPublicKey: &initiatorPublicKey, initiatorEphemeralPublicKey: &initiatorEphemeralPublicKey, preSharedKey: sharedKey)
+    var constructedPacket = try HandshakeResponseMessage.forgeResponseState(c: sharedKey, h: sharedKey, initiatorPeerIndex: senderIndex, initiatorStaticPublicKey: &initiatorPublicKey, initiatorEphemeralPublicKey: initiatorEphemeralPublicKey, preSharedKey: sharedKey)
     var authenticatedPacket = try HandshakeResponseMessage.finalizeResponseState(initiatorStaticPublicKey: &initiatorPublicKey, payload: constructedPacket.payload)
-    let responseValidationStep = try HandshakeResponseMessage.validateResponseMessage(&authenticatedPacket, initiatorStaticPrivateKey: &initiatorPrivateKey, initiatorEphemeralPrivateKey: &initiatorEphemeralPrivateKey, preSharedKey: sharedKey)
+    let responseValidationStep = try HandshakeResponseMessage.validateResponseMessage(c: sharedKey, h: sharedKey, message: &authenticatedPacket, initiatorStaticPrivateKey: &initiatorPrivateKey, initiatorEphemeralPrivateKey: &initiatorEphemeralPrivateKey, preSharedKey: sharedKey)
+}
+
+@Test func selfValidateDataPacket() throws {
+    let c: Result32 = Result32(RAW_staticbuff: try generateRandomBytes(count: 32))
+    
+    var e:[UInt8] = []
+    var arr:[Result32] = try wgKDF(key: c, data: e, type: 2)
+    var TIsend = arr[0]; var TIrecv = arr[1]
+    
+    var senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+    
+    let message:String = "This is a message to be encrypted"
+    let messageBytes: [UInt8] = Array(message.utf8)
+    var nonce_i:Result8 = Result8(RAW_native: 0)
+    
+    var encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: senderIndex, nonce: &nonce_i, transportKey: TIsend, plainText: messageBytes)
+    
+    var nonce_r:Result8 = Result8(RAW_native: 0)
+    
+    var decryptedPacket = try DataMessage.decryptDataMessage(&encryptedPacket, nonce: &nonce_r, transportKey: TIrecv)
+    if let recoveredMessage = String(bytes: decryptedPacket, encoding: .utf8) {
+        print(recoveredMessage)
+    } else {
+        print("Invalid UTF-8 data")
+    }
 }

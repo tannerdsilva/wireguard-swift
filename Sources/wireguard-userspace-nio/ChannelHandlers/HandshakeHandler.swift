@@ -37,7 +37,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						logger.debug("received handshake initiation packet", metadata:["remote_address":"\(endpoint.description)"])
 						var val = try HandshakeInitiationMessage.validateInitiationMessage([payload], responderStaticPrivateKey: responderPrivateKey)
 						let sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
-						let response = try HandshakeResponseMessage.forgeResponseState(cIn:val.c, hIn:val.h, initiatorPeerIndex: payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
+						let response = try HandshakeResponseMessage.forgeResponseState(c:val.c, h:val.h, initiatorPeerIndex: payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
 						let authResponse = try HandshakeResponseMessage.finalizeResponseState(initiatorStaticPublicKey: &val.initPublicKey, payload:response.payload)
 						let packet: PacketType = .handshakeResponse(endpoint, authResponse)
 						
