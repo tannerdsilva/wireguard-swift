@@ -1,9 +1,14 @@
 import RAW
 import RAW_blake2
 import RAW_hmac
+import RAW_base64
 
 @RAW_staticbuff(bytes:32)
-internal struct Result32:Sendable, Hashable, Equatable, Comparable {}
+internal struct Result32:Sendable, Hashable, Equatable, Comparable, CustomDebugStringConvertible {
+	internal var debugDescription: String {
+		return "\(RAW_base64.encode(self))"
+	}
+}
 internal func wgHash<A>(_ data:borrowing A) throws -> Result32 where A:RAW_accessible {
 	var newHasher = try RAW_blake2.Hasher<S, Result32>()
 	try newHasher.update(data)
@@ -12,7 +17,12 @@ internal func wgHash<A>(_ data:borrowing A) throws -> Result32 where A:RAW_acces
 internal typealias WGHasher = RAW_blake2.Hasher<S, Result32>
 
 @RAW_staticbuff(bytes:16)
-internal struct Result16:Sendable, Hashable, Equatable, Comparable {}
+internal struct Result16:Sendable, Hashable, Equatable, Comparable, CustomDebugStringConvertible {
+	internal var debugDescription: String {
+		return "\(RAW_base64.encode(self))"
+	}
+}
+
 internal func wgMac<K, A>(key:consuming K, data:consuming A) throws -> Result16 where A:RAW_accessible, K:RAW_accessible {
 	var newHasher = try RAW_blake2.Hasher<S, Result16>(key:key)
 	try newHasher.update(data)

@@ -4,7 +4,11 @@ import RAW_chachapoly
 
 @RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:false)
-internal struct Zeros:Sendable, ExpressibleByIntegerLiteral {}
+internal struct Zeros:Sendable {
+	internal init() {
+		self.init(RAW_native:0)
+	}
+}
 
 @RAW_staticbuff(bytes:8)
 @RAW_staticbuff_fixedwidthinteger_type<UInt64>(bigEndian:false)
@@ -15,7 +19,7 @@ internal struct CountedNonce:Sendable {
 	internal let zeros:Zeros
 	internal let counter:Counter
 	internal init(counter:UInt64) {
-		self.zeros = 0
+		self.zeros = Zeros()
 		self.counter = Counter(RAW_native:counter)
 	}
 }

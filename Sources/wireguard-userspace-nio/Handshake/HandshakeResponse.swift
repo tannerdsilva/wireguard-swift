@@ -82,19 +82,13 @@ internal struct HandshakeResponseMessage:Sendable {
     }
     
     internal struct MAC1InvalidError:Swift.Error {}
-    internal static func validateResponseMessage(_ message:UnsafePointer<HandshakeResponseMessage.AuthenticatedPayload>, initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, initiatorEphemeralPrivateKey:UnsafePointer<PrivateKey>, preSharedKey:Result32) throws -> (c:Result32, h:Result32) {
-        // setup: get responder public key
+    internal static func validateResponseMessage(c cIn:Result32, h hIn:Result32, message:UnsafePointer<HandshakeResponseMessage.AuthenticatedPayload>, initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, initiatorEphemeralPrivateKey:UnsafePointer<PrivateKey>, preSharedKey:Result32) throws -> (c:Result32, h:Result32) {
+        var c = cIn
+		var h = hIn
+		
+		// setup: get responder public key
         let initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
-        
-        // setup: calculate the hash of the static construction string
-        var c = try! wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
 
-        // setup: h = hash(ci || identifier)
-        var hasher = try WGHasher()
-        try hasher.update(c)
-        try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
-        var h = try hasher.finish()
-        
         // step 0.5:
         var responderEphemeralPublicKey = message.pointee.payload.ephemeral
 
@@ -102,7 +96,7 @@ internal struct HandshakeResponseMessage:Sendable {
         c = try! wgKDF(key:c, data:responderEphemeralPublicKey, type:1)[0]
         
         // step 4: h := HASH(h || msg.ephemeral)
-        hasher = try WGHasher()
+        var hasher = try WGHasher()
         try hasher.update(h)
         try hasher.update(responderEphemeralPublicKey)
         h = try hasher.finish()
