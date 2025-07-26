@@ -58,7 +58,34 @@ internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugSt
 }
 
 
-internal struct HandshakeInitiationMessage:Sendable {
+extension Handshake.Initiation {
+	internal static func forge(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, into authenticatedPayloadPtr:UnsafeMutablePointer<Authenticated>) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
+		// step 1: calculate the hash of the static construction string
+		var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
+		
+		// step 2: h = hash(ci || identifier)
+		var hasher = try WGHasher()
+		try hasher.update(c)
+		try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
+		var h = try hasher.finish()
+		
+		// step 3: h = hash(h || responderStaticPublicKey public key)
+		hasher = try WGHasher()
+		try hasher.update(h)
+		try hasher.update(responderStaticPublicKey)
+		h = try hasher.finish()
+		
+		// step 4: generate ephemeral keys
+		withUnsafePointer(to:try PrivateKey()) { ephiPrivate in
+			withUnsafePointer(to:PublicKey(ephiPrivate)) { ephiPublic in
+			
+			}
+		}
+
+		// step 5: c = KDF^1(c, e.Public)
+		c =  try wgKDF(key:c, data:ephiPublic, type:1)[0]
+
+	}
 	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
 		// setup: get initiator public key
 		var initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
@@ -218,23 +245,25 @@ internal struct HandshakeInitiationMessage:Sendable {
 		
 		return (c, h, initStaticPublicKey, sentTimestamp)
 	}
+}
 
+extension Handshake {
 	/// this message is described in the wireguard whitepaper in section 5.4.2
 	@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, PublicKey.self, PublicKey.self, Tag.self, TAI64N.self, Tag.self)
-	internal struct Payload:Sendable {
-		/// message type
+	internal struct Initiation:Sendable {
+		// message type
 		let typeHeader:TypeHeading
-		/// initiator's peer index
+		// initiator's peer index
 		internal let initiatorPeerIndex:PeerIndex
-		/// ephemeral key content
+		// ephemeral key content
 		internal let ephemeral:PublicKey
-		/// static region of the message
+		// static region of the message
 		internal let staticRegion:PublicKey
 		internal let staticTag:Tag
-		/// timestamp associated with the message
+		// timestamp associated with the message
 		internal let timestamp:TAI64N
 		internal let timestampTag:Tag
-
+	
 		/// initializes a new HandshakeInitiationMessage
 		fileprivate init(initiatorPeerIndex:PeerIndex, ephemeral:PublicKey, staticRegion:PublicKey, staticTag:Tag, timestamp:TAI64N, timestampTag:Tag) {
 			self.typeHeader = 0x1
@@ -246,9 +275,11 @@ internal struct HandshakeInitiationMessage:Sendable {
 			self.timestampTag = timestampTag
 		}
 	}
-	
+}
+
+extension Handshake.Initiation {
 	@RAW_staticbuff(concat:Payload.self, Result16.self, Result16.self)
-	internal struct AuthenticatedPayload:Sendable, Sequence {
+	internal struct Authenticated:Sendable, Sequence {
 		internal let payload:Payload
 		internal let msgMac1:Result16
 		internal let msgMac2:Result16

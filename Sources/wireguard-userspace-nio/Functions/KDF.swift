@@ -24,3 +24,5 @@ internal func wgKDF<K, A>(key:consuming K, data:consuming A, type:UInt8) throws 
 		resultCount = Int(type)
 	}
 }
+
+internal func wgKDFv2<K, A>(key:UnsafePointer<K>, data:UnsafePointer<A>, type:UInt8) throws -> [Result32] where K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key.
