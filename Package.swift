@@ -15,7 +15,7 @@ let package = Package(
 			targets: ["wg-test-tool"]),
 	],
 	dependencies: [
-        .package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"89e6a5830cba4c5fe8ed604a352f1cdf55093629"),
+        .package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"3c5264688ae9aa8191802ea639b0cf4e0e78137d"),
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.0"..<"7.0.0"),

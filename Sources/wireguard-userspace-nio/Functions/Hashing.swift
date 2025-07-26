@@ -29,7 +29,19 @@ internal func wgMac<K, A>(key:consuming K, data:consuming A) throws -> Result16 
 	return try newHasher.finish()
 }
 
+internal func wgMACv2(key:UnsafeBufferPointer<UInt8>, data:UnsafeBufferPointer<UInt8>) throws -> Result16 {
+	var newHasher = try RAW_blake2.Hasher<S, Result16>(key:key)
+	try newHasher.update(message:data)
+	return try newHasher.finish()
+}
+
 internal func wgHmac<K, A>(key:consuming K, data:consuming A) throws -> Result32 where A:RAW_accessible, K:RAW_accessible {
+	var hmac = try HMAC<RAW_blake2.Hasher<S, Result32>>(key:key)
+	try hmac.update(message:data)
+	return try hmac.finish()
+}
+
+internal func wgHMACv2(key:UnsafeBufferPointer<UInt8>, data:UnsafePointer<UInt8>, dataCount:Int) throws -> Result16 {
 	var hmac = try HMAC<RAW_blake2.Hasher<S, Result32>>(key:key)
 	try hmac.update(message:data)
 	return try hmac.finish()
