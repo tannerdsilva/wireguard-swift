@@ -15,9 +15,9 @@ extension PublicKey:@retroactive CustomDebugStringConvertible {
 }
 
 public func dhGenerate() throws -> (PublicKey, PrivateKey) {
-	var privateKey = try PrivateKey()
-	let publicKey = PublicKey(&privateKey)
-	return (publicKey, privateKey)
+	return withUnsafePointer(to:try PrivateKey()) { privateKeyPointer in
+		return (PublicKey(privateKey:privateKeyPointer), privateKeyPointer.pointee)
+	}
 }
 
 internal func dhKeyExchange(privateKey:UnsafePointer<PrivateKey>, publicKey:UnsafePointer<PublicKey>) throws -> SharedKey {

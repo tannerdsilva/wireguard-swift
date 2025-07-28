@@ -27,3 +27,9 @@ internal func wgKDF<K, A>(key:consuming K, data:consuming A, type:UInt8) throws 
 		resultCount = Int(type)
 	}
 }
+
+internal func wgKDFv2(_ outputType:(Result32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> Result32 {
+	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
+		return try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result32>.size, data:[1], count:1)
+	}
+}

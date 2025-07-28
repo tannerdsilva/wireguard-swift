@@ -10,8 +10,8 @@ internal struct HandshakeResponseMessage:Sendable {
 
         // step 1: (Epriv, Epub) := DH-GENERATE()
         var ephiPrivate = try PrivateKey()
-        let ephiPublic = PublicKey(&ephiPrivate)
-        
+        let ephiPublic = PublicKey(privateKey:&ephiPrivate)
+
         // step 2: c := KDF(c, Epub)
         c = try wgKDF(key:c, data:ephiPublic, type:1)[0]
         
@@ -78,7 +78,7 @@ internal struct HandshakeResponseMessage:Sendable {
 		var h = hIn
 		
 		// setup: get responder public key
-        let initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
+        let initiatorStaticPublicKey = PublicKey(privateKey:initiatorStaticPrivateKey)
 
         // step 0.5:
         var responderEphemeralPublicKey = message.pointee.payload.ephemeral

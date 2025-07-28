@@ -61,7 +61,7 @@ internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugSt
 internal struct HandshakeInitiationMessage:Sendable {
 	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
 		// setup: get initiator public key
-		var initiatorStaticPublicKey = PublicKey(initiatorStaticPrivateKey)
+		var initiatorStaticPublicKey = PublicKey(privateKey:initiatorStaticPrivateKey)
 
 		// step 1: calculate the hash of the static construction string
 		var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
@@ -80,52 +80,54 @@ internal struct HandshakeInitiationMessage:Sendable {
 
 		// step 4: generate ephemeral keys
 		var ephiPrivate = try PrivateKey()
-		let ephiPublic = PublicKey(&ephiPrivate)
+		return try PublicKey(privateKey:&ephiPrivate).RAW_access_staticbuff { ephiPublicPtr in
 
-		// step 5: c = KDF^1(c, e.Public)
-		c =  try wgKDF(key:c, data:ephiPublic, type:1)[0]
+			// step 5: c = KDF^1(c, e.Public)
+			try c.RAW_access_staticbuff_mutating { cPtr in
+				cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2((Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
+			}
 
-		// step 6: assign e.Public to the ephemeral field
-		let msgEphemeral = ephiPublic
+			// step 6: assign e.Public to the ephemeral field
 
-		// step 7: h = hash(h | ephiPublic)
-		hasher = try WGHasher()
-		try hasher.update(h)
-		try hasher.update(ephiPublic)
-		h = try hasher.finish()
+			// step 7: h = hash(h | ephiPublic)
+			hasher = try WGHasher()
+			try hasher.update(h)
+			try hasher.update(ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
+			h = try hasher.finish()
 
-		// step 8: (c, k) = KDF^2(c, dh(eiPriv, srPublic))
-		var k:Result32
-		var arr:[Result32]
-		arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey), type:2)
-		c = arr[0]; k = arr[1]
+			// step 8: (c, k) = KDF^2(c, dh(eiPriv, srPublic))
+			var k:Result32
+			var arr:[Result32]
+			arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey), type:2)
+			c = arr[0]; k = arr[1]
 
-		// step 9: msg.static = AEAD(k, 0, siPublic, h)
-		let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:&h)
+			// step 9: msg.static = AEAD(k, 0, siPublic, h)
+			let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:&h)
 
-		// step 10: h = hash(h || msg.static)
-		hasher = try WGHasher()
-		try hasher.update(h)
-		try hasher.update(msgStatic)
-		try hasher.update(msgTag)
-		h = try hasher.finish()
+			// step 10: h = hash(h || msg.static)
+			hasher = try WGHasher()
+			try hasher.update(h)
+			try hasher.update(msgStatic)
+			try hasher.update(msgTag)
+			h = try hasher.finish()
 
-		// step 11: c, k) = kdf^2(c, dh(sipriv, srpub))
-		arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey), type:2)
-		c = arr[0]; k = arr[1]
+			// step 11: c, k) = kdf^2(c, dh(sipriv, srpub))
+			arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey), type:2)
+			c = arr[0]; k = arr[1]
 
-		// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
-		var newTai = TAI64N()
-		let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:&newTai, aad:&h)
+			// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
+			var newTai = TAI64N()
+			let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:&newTai, aad:&h)
 
-		// step 13: h = hash(h || msg.timestamp)
-		hasher = try WGHasher()
-		try hasher.update(h)
-		try hasher.update(tsDat)
-		try hasher.update(tsTag)
-		h = try hasher.finish()
-		
-		return (c, h, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:msgEphemeral, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+			// step 13: h = hash(h || msg.timestamp)
+			hasher = try WGHasher()
+			try hasher.update(h)
+			try hasher.update(tsDat)
+			try hasher.update(tsTag)
+			h = try hasher.finish()
+
+			return (c, h, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+		}
 	}
 
 	internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {		
@@ -145,7 +147,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 	internal static func validateInitiationMessage(_ message:UnsafePointer<HandshakeInitiationMessage.AuthenticatedPayload>, responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result32, h:Result32, initPublicKey:PublicKey, timestamp:TAI64N) {
 		
 		// setup: get responder public key
-		let responderStaticPublicKey = PublicKey(responderStaticPrivateKey)
+		let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
 		
 		// step 1: calculate the hash of the static construction string
 		var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
