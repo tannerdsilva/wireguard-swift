@@ -9,7 +9,11 @@ internal enum PacketType {
 	/// represents a cookie packet.
 	case cookie
 	/// represents a transit packet, which is used to carry data between peers after the handshake is complete
-	case transit
+    case transit(SocketAddress, DataMessage.DataPayload)
+    /// represents key creation information for post handshake validation
+    case keyExchange(PeerIndex, Result32)
+    /// represents a handshake invoker
+    case initiationInvoker(SocketAddress)
 }
 
 
@@ -60,7 +64,8 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				case 0x3:
 					fallthrough
 				case 0x4:
-					logger.notice("received packet with unsupported type: \(byteBuffer[0])", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
+					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
+                    context.fireChannelRead(wrapInboundOut(PacketType.transit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
 				default:
 					logger.warning("received packet with unknown type: \(byteBuffer[0])", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
 			}
@@ -90,6 +95,12 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 			case .transit:
 				logger.warning("attempted to send transit packet, which is not supported")
 				return
+            case .keyExchange:
+                logger.warning("attempted to send transit packet, which is not supported")
+                return
+            case .initiationInvoker:
+                logger.warning("attempted to send transit packet, which is not supported")
+                return
 		}
 		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:destinationEndpoint, data:sendBuffer)), promise:promise)
 	}

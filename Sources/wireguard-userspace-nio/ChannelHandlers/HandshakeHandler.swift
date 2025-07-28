@@ -8,20 +8,22 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias InboundIn = PacketType
 	internal typealias InboundOut = PacketType
 
-	internal typealias OutboundIn = HandshakeInitiationInvoke
+	internal typealias OutboundIn = PacketType
 	internal typealias OutboundOut = PacketType
 	
 	private let logger:Logger
 	internal let privateKey:PrivateKey
+    internal let peers:[String:PublicKey]
 
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
 	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
 	
-	internal init(privateKey:consuming PrivateKey, logLevel:Logger.Level) {
+	internal init(privateKey:consuming PrivateKey, peers: [String:PublicKey], logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		self.logger = buildLogger
 		self.privateKey = privateKey
+        self.peers = peers
 	}
 
 	internal borrowing func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -59,11 +61,16 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							try withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorEphiPrivateKeyPtr in
 								let val = try HandshakeResponseMessage.validateResponseMessage(c:existingC, h:existingH, message:&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
+                                let packet: PacketType = .keyExchange(payload.payload.responderIndex, val.c)
+                                logger.debug("Sending key exhange packet to data handler")
+                                context.fireChannelRead(wrapInboundOut(packet))
 							}
 						}
+                    case .transit(let endpoint, let payload):
+                        logger.debug("Data transit packet sent to data handler")
+                        context.fireChannelRead(wrapInboundOut(PacketType.transit(endpoint, payload)))
 					default:
 						return
-						// context.fireChannelRead(wrapInboundOut(packet))
 				}
 			}
 		} catch let error {
@@ -78,19 +85,29 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		#endif
 
 		let invoke = unwrapOutboundIn(data)
-		do {
-			try withUnsafePointer(to:privateKey) { privateKey in
-				try withUnsafePointer(to:invoke.publicKey) { expectedPeerPublicKey in
-					let (c, h, ephiPrivateKey, payload) = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
-					initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
-					initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
-					logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(invoke.endpoint.description)", "peer_public_key":"\(invoke.publicKey.debugDescription)"])
-					context.writeAndFlush(wrapOutboundOut(PacketType.handshakeInitiation(invoke.endpoint, try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload:payload))), promise:promise)
-				}
-			}
-		} catch let error {
-			context.fireErrorCaught(error)
-			promise?.fail(error)
-		}
+		
+        switch invoke {
+            case let .initiationInvoker(endpoint):
+                do {
+                    guard let peerPublicKey = peers[endpoint.description] else {
+                        logger.debug("Peer for endpoint \(endpoint) not found")
+                        return
+                    }
+                    try withUnsafePointer(to:privateKey) { privateKey in
+                        try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
+                            let (c, h, ephiPrivateKey, payload) = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
+                            initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
+                            initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
+                            logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(endpoint.description)", "peer_public_key":"\(peerPublicKey.debugDescription)"])
+                            context.writeAndFlush(wrapOutboundOut(PacketType.handshakeInitiation(endpoint, try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload:payload))), promise:promise)
+                        }
+                    }
+                } catch let error {
+                    context.fireErrorCaught(error)
+                    promise?.fail(error)
+                }
+            default:
+                return
+        }
 	}
 }

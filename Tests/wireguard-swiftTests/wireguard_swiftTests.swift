@@ -45,12 +45,13 @@ import RAW
 
 @Test func selfValidateDataPacket() throws {
     let c: Result32 = Result32(RAW_staticbuff: try generateRandomBytes(count: 32))
+    let e:[UInt8] = []
+    let arr_send:[Result32] = try wgKDF(key: c, data: e, type: 2)
+    let arr_recv:[Result32] = try wgKDF(key: c, data: e, type: 2)
+    let TIsend = arr_send[0]
+    let TRrecv = arr_recv[0]
     
-    var e:[UInt8] = []
-    var arr:[Result32] = try wgKDF(key: c, data: e, type: 2)
-    var TIsend = arr[0]; var TIrecv = arr[1]
-    
-    var senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+    let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
     
     let message:String = "This is a message to be encrypted"
     let messageBytes: [UInt8] = Array(message.utf8)
@@ -60,7 +61,7 @@ import RAW
     
     var nonce_r:Result8 = Result8(RAW_native: 0)
     
-    var decryptedPacket = try DataMessage.decryptDataMessage(&encryptedPacket, nonce: &nonce_r, transportKey: TIrecv)
+    let decryptedPacket = try DataMessage.decryptDataMessage(&encryptedPacket, transportKey: TRrecv)
     if let recoveredMessage = String(bytes: decryptedPacket, encoding: .utf8) {
         print(recoveredMessage)
     } else {

@@ -1,4 +1,7 @@
 import RAW
+import RAW_dh25519
+
+public typealias Key = RAW_dh25519.PublicKey
 
 internal func wgKDF<K, A>(key:consuming K, data:consuming A, type:UInt8) throws -> [Result32] where A:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key.RAW_staticbuff_storetype {
    	let genKey = try wgHmac(key:key, data:data) /* T0 = HMAC(key,input)*/

@@ -31,25 +31,17 @@ internal struct DataMessage:Sendable {
         nonceUInt64 += 1
         nonce = Result8(RAW_native: nonceUInt64)
         
-        return DataPayload(payload: Payload(receiverIndex: receiverIndex, counter:nonce, packetTag:packetTag), data: packet)
+        return DataPayload(payload: Payload(receiverIndex: receiverIndex, counter:msgCounter, packetTag:packetTag), data: packet)
     }
     
     /// Need to figure out 0 byte padding descryption
-    internal static func decryptDataMessage(_ message: UnsafePointer<DataMessage.DataPayload>, nonce:inout Result8, transportKey: Result32) throws -> [UInt8] {
+    internal static func decryptDataMessage(_ message: UnsafePointer<DataMessage.DataPayload>, transportKey: Result32) throws -> [UInt8] {
         
-        // step 2: msg.counter = nonce
-        let msgCounter = nonce
-        var nonceUInt64:UInt64 = nonce.RAW_native()
-        
-        // step 3: msg.packet := AEAD(Tm, Nm, P, e)
+        // step 1: msg.packet := AEAD(Tm, Nm, P, e)
         var e:[UInt8] = []
         let packetData = try withUnsafePointer(to: transportKey) { transportKey in
-            try aeadDecrypt(key:transportKey, counter:nonceUInt64, cipherText:message.pointer(to:\.data)!, aad:&e, tag:message.pointee.payload.packetTag)
+            try aeadDecrypt(key:transportKey, counter:message.pointee.payload.counter.RAW_native() , cipherText:message.pointer(to:\.data)!, aad:&e, tag:message.pointee.payload.packetTag)
         }
-        
-        // step 4: nonce := nonce + 1
-        nonceUInt64 += 1
-        nonce = Result8(RAW_native: nonceUInt64)
         
         return packetData
     }
@@ -74,7 +66,32 @@ internal struct DataMessage:Sendable {
         }
     }
     
-    internal struct DataPayload:Sendable {
+    internal struct DataPayload:Sendable, RAW_encodable, RAW_decodable {
+        init?(RAW_decode: UnsafeRawPointer, count: RAW.size_t) {
+            guard count >= MemoryLayout<Payload>.size else { return nil }
+            var RAW_decode = RAW_decode
+            let typeHeading = try! TypeHeading(RAW_staticbuff_seeking: &RAW_decode)
+            let receiverIndex = try! PeerIndex(RAW_staticbuff_seeking: &RAW_decode)
+            let counter = try! Result8(RAW_staticbuff_seeking: &RAW_decode)
+            self.data = try! [UInt8](RAW_decode: RAW_decode, count: count - MemoryLayout<Payload>.size)
+            RAW_decode = RAW_decode.advanced(by: self.data.count)
+            let packetTag = try! Tag(RAW_staticbuff_seeking: &RAW_decode)
+            self.payload = Payload(receiverIndex: receiverIndex, counter: counter, packetTag: packetTag)
+        }
+        
+        func RAW_encode(count: inout RAW.size_t) {
+            count = MemoryLayout<DataMessage.Payload>.size + data.count
+        }
+        
+        func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
+            var dest = payload.typeHeader.RAW_encode(dest: dest)
+            dest = payload.receiverIndex.RAW_encode(dest: dest)
+            dest = payload.counter.RAW_encode(dest: dest)
+            dest = data.RAW_encode(dest: dest)
+            dest = payload.packetTag.RAW_encode(dest: dest)
+            return dest
+        }
+        
         let payload:Payload
         let data:[UInt8]
         
