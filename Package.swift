@@ -43,6 +43,7 @@ let package = Package(
 				.product(name:"RAW_chachapoly", package:"rawdog"),
 				.product(name:"NIO", package:"swift-nio"),
 				.product(name:"bedrock", package:"bedrock"),
+                .product(name:"bedrock_fifo", package:"bedrock"),
 				.product(name:"RAW_xchachapoly", package:"rawdog"),
 				.product(name:"RAW_blake2", package:"rawdog"),
 				.product(name:"RAW_hmac", package:"rawdog"),

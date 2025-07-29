@@ -1,6 +1,21 @@
 import NIO
 import RAW_dh25519
 import Logging
+import bedrock_fifo
+
+internal struct peerInfo {
+    let publicKey:PublicKey
+    let internalKeepAlive:TimeAmount
+}
+
+internal enum InterfaceInstruction {
+    /// Add peer to pipeline configuration
+    case addPeer(peerInfo)
+    /// Remove peer from pipeline configuration
+    case removePeer(peerInfo)
+    /// Transit packet to be encrypted and sent out
+    case transit(PublicKey, [UInt8])
+}
 
 /// Handles the data packet encryption and decryption
 internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
@@ -14,7 +29,12 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     /// Nrecv used with sliding window to check if packet is valid
     private var nonceCounters:[PeerIndex:(Nsend:Counter, Nrecv:SlidingWindow<Counter>)] = [:]
     private var transmitKeys:[PeerIndex:(Tsend:Result32, Trecv:Result32)] = [:]
-    private var peers:[SocketAddress:PeerIndex] = [:]
+    private var peers:[SocketAddress:PeerIndex] = [:] // PublicKey: (PeerIndex, PeerIndex, PeerIndex)
+    
+    /// Pending incoming and outgoing packets
+    private var pendingIncomingPackets: [PeerIndex: [DataMessage.DataPayload]] = [:] // PublicKey
+    private var pendingWriteFutures: [PeerIndex: ([UInt8], EventLoopPromise<Void>)] = [:] // PublicKey
+    private let pendingOutgoingPackets: FIFO<[UInt8], Swift.Error> = .init()
     
     /// KeepAlive variables
     private var keepaliveTasks: [SocketAddress: RepeatedTask] = [:]
@@ -43,8 +63,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         self.logger = buildLogger
     }
     
-    private func startKeepalive(for endpoint: SocketAddress,
-                                context: ChannelHandlerContext) {
+    private func startKeepalive(for endpoint: SocketAddress, context: ChannelHandlerContext) {
         // Avoid duplicates
         if keepaliveTasks[endpoint] != nil { return }
 
@@ -62,7 +81,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                   self.nonceCounters[peer] != nil else { return }
 
             // Idle check: only send if no outbound for >= interval.
-            // If we've never sent, treat as idle to punch NATs.
             let now = NIODeadline.now()
             let idleEnough: Bool = {
                 guard let last = self.lastOutbound[endpoint] else { return true }
@@ -71,7 +89,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             guard idleEnough else { return }
 
             do {
-                // NOTE: Use your **send** key and **send** nonce.
                 var nsend = self.nonceCounters[peer]!.Nsend
                 let tsend = self.transmitKeys[peer]!.Tsend
 
@@ -90,8 +107,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         keepaliveTasks[endpoint] = task
     }
     
-    private func startRehandshakeTimer(for endpoint: SocketAddress,
-                                       context: ChannelHandlerContext) {
+    private func startRehandshakeTimer(for endpoint: SocketAddress, context: ChannelHandlerContext) {
         guard rehandshakeTasks[endpoint] == nil else { return }
 
         guard let peer = peers[endpoint] else {
@@ -117,7 +133,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             if let next = self.nextAllowedReinit[endpoint], now < next { return }
             self.nextAllowedReinit[endpoint] = now + self.reinitBackoff
 
-            // Ask the handshake machinery to initiate (your pipeline knows how to handle this PacketType)
             logger.debug("Rehandshake trigger for peer \(peer)")
             context.writeAndFlush(self.wrapOutboundOut(.initiationInvoker(endpoint)), promise: nil)
         }
@@ -133,36 +148,42 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         nextAllowedReinit.removeAll()
     }
     
+    fileprivate func decryptPacket(packet:consuming DataMessage.DataPayload, transportKey: Result32) {
+        do {
+            let decryptedPacket = try DataMessage.decryptDataMessage(&packet, transportKey: transportKey)
+            
+            // check Nonce with the sliding window
+            
+            /// Make sure the packet is not a keep alive packet
+            if(!decryptedPacket.isEmpty) {
+                pendingOutgoingPackets.yield(decryptedPacket)
+            }
+        } catch {
+            logger.debug("Authentication tag failed verification")
+        }
+    }
+    
     public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         do {
             switch unwrapInboundIn(data) {
                 /// Decrypt the payload or send initiation message if unable to decrypt
                 case .transit(let endpoint, var payload):
                     // later need to add condition for the handshake lifetime timer
+                    let peer = payload.payload.receiverIndex
                     if transmitKeys[payload.payload.receiverIndex] == nil {
                         logger.debug("Initiation Invoker send down to the handshake handler")
                         context.writeAndFlush(self.wrapOutboundOut(PacketType.initiationInvoker(endpoint)), promise: nil)
                         
-                        // send initiation packet
-                        // and somehow await for the keys to be made before processing? or something?
-                    } else {
-                        let peer = payload.payload.receiverIndex
-                        logger.debug("Received transit packet, decrypting data...")
-                        do {
-                            let decryptedPacket = try DataMessage.decryptDataMessage(&payload, transportKey: transmitKeys[peer]!.1)
-                            print("Nonce: \(payload.payload.counter)")
-                            print("My Nonce: \(nonceCounters[peer]!.0)")
-                            /// Make sure the packet is not a keep alive packet
-                            if(!decryptedPacket.isEmpty) {
-                                // do something with decrypted data
-                            }
-                        } catch {
-                            logger.debug("Authentication tag failed verification")
-                            return
+                        if (pendingIncomingPackets[peer] != nil){
+                            pendingIncomingPackets[peer]!.append(payload)
+                        } else {
+                            let packets = [payload]
+                            pendingIncomingPackets[peer] = packets
                         }
+                    } else {
+                        logger.debug("Received transit packet, decrypting data...")
+                        decryptPacket(packet: payload, transportKey: transmitKeys[peer]!.Trecv)
                         logger.debug("Data successfully decrypted")
-                        // check Nonce with the sliding window
-                        // send out (public key, array of bytes)
                     }
                 
                 /// Calculate transmit keys and set nonce counters to 0
@@ -182,8 +203,14 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     lastHandshake[endpoint] = .now()
                     startKeepalive(for: endpoint, context: context)
                     startRehandshakeTimer(for: endpoint, context: context)
-                    print(peers)
-                        
+                    
+                    if(pendingIncomingPackets[peersIndex] != nil){
+                        for packet in pendingIncomingPackets[peersIndex]! {
+                            decryptPacket(packet: packet, transportKey: transmitKeys[peersIndex]!.Trecv)
+                        }
+                    }
+                    pendingIncomingPackets[peersIndex] = nil
+                
                 default:
                     return
             }
@@ -207,6 +234,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             } else {
                 logger.debug("Initiation Invoker send down to the handshake handler")
                 context.writeAndFlush(self.wrapOutboundOut(PacketType.initiationInvoker(endpoint)), promise: promise)
+                
+                // Add to pendingWriteFutures
             }
         } catch {
             logger.debug("Unable to encrypt incoming data into a transit packet")
