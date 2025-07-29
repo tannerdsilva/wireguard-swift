@@ -71,62 +71,61 @@ internal struct HandshakeInitiationMessage:Sendable {
 		try hasher.update(c)
 		try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
 		var h = try hasher.finish()
+		return try h.RAW_access_staticbuff_mutating { hPtr in
+			
+			// step 3: h = hash(h || responderStaticPublicKey public key)
+			hasher = try WGHasher()
+			try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+			try hasher.update(responderStaticPublicKey)
+			hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
-		// step 3: h = hash(h || responderStaticPublicKey public key)
-		hasher = try WGHasher()
-		try hasher.update(h)
-		try hasher.update(responderStaticPublicKey)
-		h = try hasher.finish()
+			// step 4: generate ephemeral keys
+			var ephiPrivate = try PrivateKey()
+			return try PublicKey(privateKey:&ephiPrivate).RAW_access_staticbuff { ephiPublicPtr in
 
-		// step 4: generate ephemeral keys
-		var ephiPrivate = try PrivateKey()
-		return try PublicKey(privateKey:&ephiPrivate).RAW_access_staticbuff { ephiPublicPtr in
+				try c.RAW_access_staticbuff_mutating { cPtr in
+					// step 5: c = KDF^1(c, e.Public)
+					cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2((Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
+					
+					// step 6: assign e.Public to the ephemeral field
 
-			// step 5: c = KDF^1(c, e.Public)
-			try c.RAW_access_staticbuff_mutating { cPtr in
-				cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2((Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
+					// step 7: h = hash(h | ephiPublic)
+					hasher = try WGHasher()
+					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+					try hasher.update(ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
+					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
+
+					// step 8: (c, k) = KDF^2(c, dh(eiPriv, srPublic))
+					var k:Result32
+					(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey))
+
+					// step 9: msg.static = AEAD(k, 0, siPublic, h)
+					let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:hPtr.assumingMemoryBound(to:Result32.self))
+
+					// step 10: h = hash(h || msg.static)
+					hasher = try WGHasher()
+					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+					try hasher.update(msgStatic)
+					try hasher.update(msgTag)
+					try hasher.finish(into:hPtr)
+
+					// step 11: c, k) = kdf^2(c, dh(sipriv, srpub))
+					(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey))
+
+					// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
+					var newTai = TAI64N()
+					let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:&newTai, aad:hPtr.assumingMemoryBound(to:Result32.self))
+
+					// step 13: h = hash(h || msg.timestamp)
+					hasher = try WGHasher()
+					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+					try hasher.update(tsDat)
+					try hasher.update(tsTag)
+					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
+
+					return (cPtr.assumingMemoryBound(to:Result32.self).pointee, hPtr.assumingMemoryBound(to:Result32.self).pointee, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+				}
 			}
-
-			// step 6: assign e.Public to the ephemeral field
-
-			// step 7: h = hash(h | ephiPublic)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
-			h = try hasher.finish()
-
-			// step 8: (c, k) = KDF^2(c, dh(eiPriv, srPublic))
-			var k:Result32
-			var arr:[Result32]
-			arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey), type:2)
-			c = arr[0]; k = arr[1]
-
-			// step 9: msg.static = AEAD(k, 0, siPublic, h)
-			let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:&h)
-
-			// step 10: h = hash(h || msg.static)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(msgStatic)
-			try hasher.update(msgTag)
-			h = try hasher.finish()
-
-			// step 11: c, k) = kdf^2(c, dh(sipriv, srpub))
-			arr = try wgKDF(key:c, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey), type:2)
-			c = arr[0]; k = arr[1]
-
-			// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
-			var newTai = TAI64N()
-			let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:&newTai, aad:&h)
-
-			// step 13: h = hash(h || msg.timestamp)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(tsDat)
-			try hasher.update(tsTag)
-			h = try hasher.finish()
-
-			return (c, h, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
 		}
 	}
 

@@ -23,8 +23,8 @@ internal struct HandshakeResponseMessage:Sendable {
 					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
 					// step 5: c := KDF(c, DH(Epriv, initiatorEpub))
-					cPtr.assumingMemoryBound(to:Result32.self).pointee = try withUnsafePointer(to:initiatorEphemeralPublicKey) { ephiKeyPublic in
-						return try wgKDFv2(Result32.self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey: &ephiPrivate, publicKey: ephiKeyPublic))
+					try withUnsafePointer(to:initiatorEphemeralPublicKey) { ephiKeyPublic in
+						cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2(Result32.self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey: &ephiPrivate, publicKey: ephiKeyPublic))
 					}
 					
 					// step 6: c := KDF(c, DH(Epriv, initiatorStaticPub))
