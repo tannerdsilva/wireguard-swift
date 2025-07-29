@@ -46,6 +46,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						context.writeAndFlush(self.wrapOutboundOut(packet)).whenSuccess { [ep = endpoint] in
 							print("Handshake response sent to \(ep)")
 						}
+                        
+                        /// Pass data for creating transit keys
+                        let keyPacket: PacketType = .keyExchange(response.payload.responderIndex, response.c, false)
+                        logger.debug("Sending key exhange packet to data handler")
+                        context.fireChannelRead(wrapInboundOut(keyPacket))
 						
 					case .handshakeResponse(let endpoint, var payload):
 						logger.debug("received handshake response packet", metadata:["remote_address":"\(endpoint.description)"])
@@ -61,7 +66,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							try withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorEphiPrivateKeyPtr in
 								let val = try HandshakeResponseMessage.validateResponseMessage(c:existingC, h:existingH, message:&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
-                                let packet: PacketType = .keyExchange(payload.payload.responderIndex, val.c)
+                                
+                                /// Pass data for creating transit keys
+                                let packet: PacketType = .keyExchange(payload.payload.responderIndex, val.c, true)
                                 logger.debug("Sending key exhange packet to data handler")
                                 context.fireChannelRead(wrapInboundOut(packet))
 							}

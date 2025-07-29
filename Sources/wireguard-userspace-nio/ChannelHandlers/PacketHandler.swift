@@ -11,7 +11,7 @@ internal enum PacketType {
 	/// represents a transit packet, which is used to carry data between peers after the handshake is complete
     case transit(SocketAddress, DataMessage.DataPayload)
     /// represents key creation information for post handshake validation
-    case keyExchange(PeerIndex, Result32)
+    case keyExchange(PeerIndex, Result32, Bool)
     /// represents a handshake invoker
     case initiationInvoker(SocketAddress)
 }

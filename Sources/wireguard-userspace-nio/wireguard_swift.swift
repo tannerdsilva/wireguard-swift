@@ -75,13 +75,16 @@ public final class WGInterface: Sendable {
         encryptedPacket.RAW_encode(count: &size)
         var pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
         encryptedPacket.RAW_encode(dest: pointer)
+        defer{
+            pointer.deallocate()
+        }
         let byteBuffer = Array(UnsafeBufferPointer(start: pointer, count: size))
         let allocator = ByteBufferAllocator()
         var buffer = allocator.buffer(capacity: byteBuffer.count)
         buffer.writeBytes(byteBuffer)
         
         let envelope = AddressedEnvelope(remoteAddress: try SocketAddress(ipAddress: ipAddress, port: port), data: buffer)
-        channel.pipeline.fireChannelRead(envelope)
+//        channel.pipeline.fireChannelRead(envelope)
 
 
 		try channel.closeFuture.wait()
