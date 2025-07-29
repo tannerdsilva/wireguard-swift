@@ -13,12 +13,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	private let logger:Logger
 	internal let privateKey:PrivateKey
-    internal let peers:[String:PublicKey]
+    internal let peers:[SocketAddress:PublicKey]
 
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
 	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
 	
-	internal init(privateKey:consuming PrivateKey, peers: [String:PublicKey], logLevel:Logger.Level) {
+	internal init(privateKey:consuming PrivateKey, peers: [SocketAddress:PublicKey], logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		self.logger = buildLogger
@@ -48,7 +48,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
                         
                         /// Pass data for creating transit keys
-                        let keyPacket: PacketType = .keyExchange(response.payload.responderIndex, response.c, false)
+                        let keyPacket: PacketType = .keyExchange(endpoint, response.payload.responderIndex, response.c, false)
                         logger.debug("Sending key exhange packet to data handler")
                         context.fireChannelRead(wrapInboundOut(keyPacket))
 						
@@ -68,7 +68,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
                                 
                                 /// Pass data for creating transit keys
-                                let packet: PacketType = .keyExchange(payload.payload.responderIndex, val.c, true)
+                                let packet: PacketType = .keyExchange(endpoint, payload.payload.responderIndex, val.c, true)
                                 logger.debug("Sending key exhange packet to data handler")
                                 context.fireChannelRead(wrapInboundOut(packet))
 							}
@@ -96,7 +96,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
         switch invoke {
             case let .initiationInvoker(endpoint):
                 do {
-                    guard let peerPublicKey = peers[endpoint.description] else {
+                    print("Peerss: \(peers)")
+                    guard let peerPublicKey = peers[endpoint] else {
                         logger.debug("Peer for endpoint \(endpoint) not found")
                         return
                     }
@@ -113,6 +114,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
                     context.fireErrorCaught(error)
                     promise?.fail(error)
                 }
+            case .transit(let endpoint, let payload):
+                logger.debug("Sending transit packout down to packet handler")
+                context.writeAndFlush(wrapOutboundOut(PacketType.transit(endpoint, payload)), promise:promise)
             default:
                 return
         }

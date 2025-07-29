@@ -1,5 +1,6 @@
 import NIO
 import Logging
+import RAW
 
 internal enum PacketType {
 	/// represents a handshake initiation packet, sent by the initiator to start the handshake
@@ -11,7 +12,7 @@ internal enum PacketType {
 	/// represents a transit packet, which is used to carry data between peers after the handshake is complete
     case transit(SocketAddress, DataMessage.DataPayload)
     /// represents key creation information for post handshake validation
-    case keyExchange(PeerIndex, Result32, Bool)
+    case keyExchange(SocketAddress, PeerIndex, Result32, Bool)
     /// represents a handshake invoker
     case initiationInvoker(SocketAddress)
 }
@@ -92,9 +93,25 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 			case .cookie:
 				logger.warning("attempted to send cookie packet, which is not supported")
 				return
-			case .transit:
-				logger.warning("attempted to send transit packet, which is not supported")
-				return
+            case .transit(let endpoint, let payload):
+                logger.debug("Sending transit packout outbound")
+                var size: RAW.size_t = 0
+                payload.RAW_encode(count: &size)
+
+                let byteBuffer: [UInt8] = {
+                    let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+                    defer { pointer.deallocate() }
+
+                    payload.RAW_encode(dest: pointer)
+                    return Array(UnsafeBufferPointer(start: pointer, count: size))
+                }()
+
+                let allocator = ByteBufferAllocator()
+                var buffer = allocator.buffer(capacity: byteBuffer.count)
+                buffer.writeBytes(byteBuffer)
+                sendBuffer = buffer
+            
+                destinationEndpoint = endpoint
             case .keyExchange:
                 logger.warning("attempted to send transit packet, which is not supported")
                 return

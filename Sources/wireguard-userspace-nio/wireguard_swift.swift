@@ -42,7 +42,7 @@ public final class WGInterface: Sendable {
         print("My Public Key: \(myPublicKeyBase64)")
         
         let address = try SocketAddress(ipAddress: ipAddress, port: port)
-        let peerPublicKeys = [address.description: peerPublicKey]
+        let peerPublicKeys = [address: peerPublicKey]
 		// Create Channel
 		let bootstrap =  DatagramBootstrap(group: group)
 			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -68,17 +68,20 @@ public final class WGInterface: Sendable {
         
         let message:String = "This is a message to be encrypted"
         let messageBytes: [UInt8] = Array(message.utf8)
-        var nonce_i:Result8 = Result8(RAW_native: 0)
+        var nonce_i:Counter = Counter(RAW_native: 0)
         
         var encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: senderIndex, nonce: &nonce_i, transportKey: TIsend, plainText: messageBytes)
-        var size:RAW.size_t = 0
+        var size: RAW.size_t = 0
         encryptedPacket.RAW_encode(count: &size)
-        var pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
-        encryptedPacket.RAW_encode(dest: pointer)
-        defer{
-            pointer.deallocate()
-        }
-        let byteBuffer = Array(UnsafeBufferPointer(start: pointer, count: size))
+
+        let byteBuffer: [UInt8] = {
+            let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+            defer { pointer.deallocate() }
+
+            encryptedPacket.RAW_encode(dest: pointer)
+            return Array(UnsafeBufferPointer(start: pointer, count: size))
+        }()
+
         let allocator = ByteBufferAllocator()
         var buffer = allocator.buffer(capacity: byteBuffer.count)
         buffer.writeBytes(byteBuffer)

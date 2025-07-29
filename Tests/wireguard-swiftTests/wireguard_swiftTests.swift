@@ -65,11 +65,11 @@ import RAW
     
     let message:String = "This is a message to be encrypted"
     let messageBytes: [UInt8] = Array(message.utf8)
-    var nonce_i:Result8 = Result8(RAW_native: 0)
+    var nonce_i:Counter = Counter(RAW_native: 0)
     
     var encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: senderIndex, nonce: &nonce_i, transportKey: TIsend, plainText: messageBytes)
     
-    var nonce_r:Result8 = Result8(RAW_native: 0)
+    var nonce_r:Counter = Counter(RAW_native: 0)
     
     let decryptedPacket = try DataMessage.decryptDataMessage(&encryptedPacket, transportKey: TRrecv)
     if let recoveredMessage = String(bytes: decryptedPacket, encoding: .utf8) {

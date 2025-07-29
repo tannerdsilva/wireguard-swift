@@ -11,7 +11,7 @@ import RAW_base64
 internal struct Result8:Sendable {}
 
 internal struct DataMessage:Sendable {
-    internal static func forgeDataMessage(receiverIndex:PeerIndex, nonce:inout Result8, transportKey: Result32, plainText:[UInt8]) throws -> DataPayload {
+    internal static func forgeDataMessage(receiverIndex:PeerIndex, nonce:inout Counter, transportKey: Result32, plainText:[UInt8]) throws -> DataPayload {
         // step 1: P := P || 0... Zero Padding the Packet
         let PLength:Int = plainText.count
         let zeros = [UInt8](repeating: 0, count: 16 * Int(ceil(Double(PLength)/16.0)) - PLength)
@@ -29,12 +29,11 @@ internal struct DataMessage:Sendable {
         
         // step 4: nonce := nonce + 1
         nonceUInt64 += 1
-        nonce = Result8(RAW_native: nonceUInt64)
+        nonce = Counter(RAW_native: nonceUInt64)
         
         return DataPayload(payload: Payload(receiverIndex: receiverIndex, counter:msgCounter, packetTag:packetTag), data: packet)
     }
     
-    /// Need to figure out 0 byte padding descryption
     internal static func decryptDataMessage(_ message: UnsafePointer<DataMessage.DataPayload>, transportKey: Result32) throws -> [UInt8] {
         
         // step 1: msg.packet := AEAD(Tm, Nm, P, e)
@@ -46,19 +45,19 @@ internal struct DataMessage:Sendable {
         return packetData
     }
     
-    @RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Result8.self, Tag.self)
+    @RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Counter.self, Tag.self)
     internal struct Payload:Sendable {
         /// message type (type and reserved)
         let typeHeader:TypeHeading
         /// responder's peer index (I_r)
         internal let receiverIndex:PeerIndex
         /// packet counter key
-        internal let counter:Result8
+        internal let counter:Counter
         /// packet tag of message
         internal let packetTag:Tag
 
         /// initializes a new HandshakeResponseMessage
-        fileprivate init(receiverIndex:PeerIndex, counter:Result8, packetTag:Tag) {
+        fileprivate init(receiverIndex:PeerIndex, counter:Counter, packetTag:Tag) {
             self.typeHeader = 0x4
             self.receiverIndex = receiverIndex
             self.counter = counter
@@ -72,7 +71,7 @@ internal struct DataMessage:Sendable {
             var RAW_decode = RAW_decode
             let typeHeading = try! TypeHeading(RAW_staticbuff_seeking: &RAW_decode)
             let receiverIndex = try! PeerIndex(RAW_staticbuff_seeking: &RAW_decode)
-            let counter = try! Result8(RAW_staticbuff_seeking: &RAW_decode)
+            let counter = try! Counter(RAW_staticbuff_seeking: &RAW_decode)
             self.data = try! [UInt8](RAW_decode: RAW_decode, count: count - MemoryLayout<Payload>.size)
             RAW_decode = RAW_decode.advanced(by: self.data.count)
             let packetTag = try! Tag(RAW_staticbuff_seeking: &RAW_decode)
