@@ -15,12 +15,23 @@ internal struct Zeros:Sendable {
 internal struct Counter:Sendable {}
 
 @RAW_staticbuff(concat:Zeros.self, Counter.self)
-internal struct CountedNonce:Sendable {
+internal struct CountedNonce:Sendable, ExpressibleByIntegerLiteral, Equatable, Hashable, Comparable {
+    internal init(integerLiteral value: UInt64) {
+        self.zeros = Zeros()
+        self.counter = Counter(RAW_native:value)
+    }
+    typealias IntegerLiteralType = UInt64
 	internal let zeros:Zeros
 	internal let counter:Counter
-	internal init(counter:UInt64) {
+	internal init(counter:consuming UInt64) {
 		self.zeros = Zeros()
 		self.counter = Counter(RAW_native:counter)
+	}
+	internal static func + (lhs:CountedNonce, rhs:UInt64) -> CountedNonce {
+		return CountedNonce(counter:lhs.counter.RAW_native() + rhs)
+	}
+	internal static func += (lhs:inout CountedNonce, rhs:UInt64) {
+		lhs = CountedNonce(counter:lhs.counter.RAW_native() + rhs)
 	}
 }
 

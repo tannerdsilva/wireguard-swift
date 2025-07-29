@@ -15,10 +15,11 @@ internal func wgHash<A>(_ data:borrowing A) throws -> Result32 where A:RAW_acces
 	return try newHasher.finish()
 }
 internal typealias WGHasher = RAW_blake2.Hasher<S, Result32>
+internal typealias WGHasherV2 = RAW_blake2.Hasher<S, UnsafeMutableRawPointer>
 
 @RAW_staticbuff(bytes:16)
 internal struct Result16:Sendable, Hashable, Equatable, Comparable, CustomDebugStringConvertible {
-	internal var debugDescription: String {
+	internal var debugDescription:String {
 		return "\(RAW_base64.encode(self))"
 	}
 }
@@ -34,7 +35,6 @@ internal func wgMACv2(key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRa
 	try newHasher.update(data, count:dataCount)
 	return try newHasher.finish()
 }
-
 internal func wgHmac<K, A>(key:consuming K, data:consuming A) throws -> Result32 where A:RAW_accessible, K:RAW_accessible {
 	var hmac = try HMAC<RAW_blake2.Hasher<S, Result32>>(key:key)
 	try hmac.update(message:data)

@@ -65,7 +65,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 
 		// step 1: calculate the hash of the static construction string
 		var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
-
+		
 		// step 2: h = hash(ci || identifier)
 		var hasher = try WGHasher()
 		try hasher.update(c)

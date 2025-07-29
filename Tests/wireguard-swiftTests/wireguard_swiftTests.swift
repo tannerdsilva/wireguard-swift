@@ -21,6 +21,16 @@ import RAW
     }
 }
 
+@Test func countedNonceSortTest() throws {
+	let nonce1 = CountedNonce(integerLiteral:1)
+	let nonce2 = CountedNonce(integerLiteral:2)
+	let nonce3 = nonce2 + 1
+	
+	#expect(nonce1 < nonce2)
+	#expect(nonce2 < nonce3)
+	#expect(nonce3 > nonce1)
+}
+
 @Test func selfValidateInitiation() throws {
 	var initiatorPrivateKey = try PrivateKey()
 	var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
