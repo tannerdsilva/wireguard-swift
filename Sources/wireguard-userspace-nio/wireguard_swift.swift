@@ -36,7 +36,7 @@ public final class WGInterface: Sendable {
 
         let peerPublicKeyBase64 = String(RAW_base64.encode(peerPublicKey))
         var privKeyCopy = staticPrivateKey
-        let myPublicKeyBase64 = String(RAW_base64.encode(PublicKey(&privKeyCopy)))
+        let myPublicKeyBase64 = String(RAW_base64.encode(PublicKey(privateKey:&privKeyCopy)))
         
         print("Peer Public Key: \(peerPublicKeyBase64)")
         print("My Public Key: \(myPublicKeyBase64)")

@@ -21,11 +21,21 @@ import RAW
     }
 }
 
+@Test func countedNonceSortTest() throws {
+	let nonce1 = CountedNonce(integerLiteral:1)
+	let nonce2 = CountedNonce(integerLiteral:2)
+	let nonce3 = nonce2 + 1
+	
+	#expect(nonce1 < nonce2)
+	#expect(nonce2 < nonce3)
+	#expect(nonce3 > nonce1)
+}
+
 @Test func selfValidateInitiation() throws {
 	var initiatorPrivateKey = try PrivateKey()
-	var initiatorPublicKey = PublicKey(&initiatorPrivateKey)
+	var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
 	var responderStaticPrivateKey = try PrivateKey()
-	var responderStaticPublicKey = PublicKey(&responderStaticPrivateKey)
+	var responderStaticPublicKey = PublicKey(privateKey:&responderStaticPrivateKey)
 	var constructedPacket = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
 	var authenticatedPacketToSend = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: &responderStaticPublicKey, payload: constructedPacket.payload)
 	let responderValidationStep = try HandshakeInitiationMessage.validateInitiationMessage(&authenticatedPacketToSend, responderStaticPrivateKey: &responderStaticPrivateKey)
@@ -33,9 +43,9 @@ import RAW
 
 @Test func selfValidateResponse() throws {
     var initiatorPrivateKey = try PrivateKey()
-    var initiatorPublicKey = PublicKey(&initiatorPrivateKey)
+    var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
     var initiatorEphemeralPrivateKey = try PrivateKey()
-    var initiatorEphemeralPublicKey = PublicKey(&initiatorEphemeralPrivateKey)
+    var initiatorEphemeralPublicKey = PublicKey(privateKey:&initiatorEphemeralPrivateKey)
     var sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()) // 0^32 shared key default
     var senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
     var constructedPacket = try HandshakeResponseMessage.forgeResponseState(c: sharedKey, h: sharedKey, initiatorPeerIndex: senderIndex, initiatorStaticPublicKey: &initiatorPublicKey, initiatorEphemeralPublicKey: initiatorEphemeralPublicKey, preSharedKey: sharedKey)

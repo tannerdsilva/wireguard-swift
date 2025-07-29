@@ -12,15 +12,41 @@ internal struct Zeros:Sendable {
 
 @RAW_staticbuff(bytes:8)
 @RAW_staticbuff_fixedwidthinteger_type<UInt64>(bigEndian:false)
-internal struct Counter:Sendable {}
+internal struct Counter:Sendable, ExpressibleByIntegerLiteral, Equatable, Hashable, Comparable {
+	typealias IntegerLiteralType = UInt64
+	internal init(integerLiteral value:UInt64) {
+		self.init(RAW_native:value)
+	}
+	internal static func + (lhs:Counter, rhs:UInt64) -> Counter {
+		return Counter(RAW_native:lhs.RAW_native() + rhs)
+	}
+	internal static func += (lhs:inout Counter, rhs:UInt64) {
+		lhs = Counter(RAW_native:lhs.RAW_native() + rhs)
+	}
+}
 
 @RAW_staticbuff(concat:Zeros.self, Counter.self)
-internal struct CountedNonce:Sendable {
+internal struct CountedNonce:Sendable, ExpressibleByIntegerLiteral, Equatable, Hashable, Comparable {
+    internal init(integerLiteral value:UInt64) {
+        self.zeros = Zeros()
+        self.counter = Counter(RAW_native:value)
+    }
+    typealias IntegerLiteralType = UInt64
 	internal let zeros:Zeros
 	internal let counter:Counter
-	internal init(counter:UInt64) {
+	internal init(counter:consuming UInt64) {
 		self.zeros = Zeros()
 		self.counter = Counter(RAW_native:counter)
+	}
+	internal init(counter:consuming Counter) {
+		self.zeros = Zeros()
+		self.counter = counter
+	}
+	internal static func + (lhs:CountedNonce, rhs:UInt64) -> CountedNonce {
+		return CountedNonce(counter:lhs.counter.RAW_native() + rhs)
+	}
+	internal static func += (lhs:inout CountedNonce, rhs:UInt64) {
+		lhs = CountedNonce(counter:lhs.counter.RAW_native() + rhs)
 	}
 }
 
