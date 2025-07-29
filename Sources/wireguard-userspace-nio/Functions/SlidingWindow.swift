@@ -1,14 +1,14 @@
-import struct RAW.size_t
+import RAW
 
-internal struct ReplayWindow {
-	internal let windowSize:size_t
-	private var bitmap:UInt64 = 0
-	private var lastSequence:UInt64 = 0
-	internal init(windowSize ws:size_t) {
+internal struct SlidingWindow<T:RAW_encoded_fixedwidthinteger> {
+	internal let windowSize:T.RAW_native_type
+	private var bitmap:T.RAW_native_type = 0
+	private var lastSequence:T.RAW_native_type = 0
+	internal init(windowSize ws:T.RAW_native_type) {
 		self.windowSize = ws
 	}
-	internal mutating func isPacketAllowed(_ counter:UInt64) -> Bool {
-		var diff:UInt64
+	internal mutating func isPacketAllowed(_ counter:T.RAW_native_type) -> Bool {
+		var diff:T.RAW_native_type
 		guard counter != 0 else {
 			// counter 0 is always valid
 			return false

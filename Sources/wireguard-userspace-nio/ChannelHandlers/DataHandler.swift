@@ -12,10 +12,10 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     
     /// Nsend increments by 1 for every outbound encrypted packet
     /// Nrecv used with sliding window to check if packet is valid
-    private var nonceCounters:[PeerIndex:(Nsend:Result8, Nrecv:Result8)] = [:]
+    private var nonceCounters:[PeerIndex:(Nsend:Counter, Nrecv:Counter)] = [:]
     private var transmitKeys:[PeerIndex:(Tsend:Result32, Trecv:Result32)] = [:]
     
-    private var slidingWindow:Result8 = Result8(RAW_staticbuff:Result8.RAW_staticbuff_zeroed())
+    private var slidingWindow = SlidingWindow<Counter>(windowSize:64)
     
     private let logger:Logger
 
@@ -26,7 +26,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     }
     
     public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        
         do {
             switch unwrapInboundIn(data) {
                 /// Decrypt the payload or send initiation message if unable to decrypt
@@ -34,7 +33,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     // later need to add condition for the handshake lifetime timer
                     if transmitKeys[payload.payload.receiverIndex] == nil {
                         logger.debug("Initiation Invoker send down to the handshake handler")
-                        context.writeAndFlush(self.wrapOutboundOut(PacketType.initiationInvoker(endpoint)))
+                        context.writeAndFlush(wrapOutboundOut(PacketType.initiationInvoker(endpoint)))
                         
                         // send initiation packet
                         // and somehow await for the keys to be made before processing? or something?
@@ -48,9 +47,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 case .keyExchange(let peersIndex, let c):
                     logger.debug("received key exchange packet")
                     if nonceCounters[peersIndex] == nil {
-                        nonceCounters[peersIndex] = (Result8(RAW_staticbuff:Result8.RAW_staticbuff_zeroed()), Result8(RAW_staticbuff:Result8.RAW_staticbuff_zeroed()))
+                        nonceCounters[peersIndex] = (Nsend:0, Nrecv:0)
                     } else {
-                        nonceCounters[peersIndex] = (Result8(RAW_staticbuff:Result8.RAW_staticbuff_zeroed()), Result8(RAW_staticbuff:Result8.RAW_staticbuff_zeroed()))
+                        nonceCounters[peersIndex] = (Nsend:nonceCounters[peersIndex]!.Nsend + 1, Nrecv:0)
                     }
                     let e:[UInt8] = []
                     let arr:[Result32] = try wgKDF(key: c, data: e, type: 2)
