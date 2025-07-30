@@ -13,7 +13,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	private let logger:Logger
 	internal let privateKey:PrivateKey
-    internal let peers:[SocketAddress:PublicKey]
+    internal var peers:[SocketAddress:PublicKey] = [:]
 
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
 	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
@@ -23,7 +23,6 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		buildLogger.logLevel = logLevel
 		self.logger = buildLogger
 		self.privateKey = privateKey
-        self.peers = peers
 	}
 
 	internal borrowing func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -48,7 +47,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
                         
                         /// Pass data for creating transit keys
-                        let keyPacket: PacketType = .keyExchange(endpoint, response.payload.responderIndex, response.c, false)
+                    let keyPacket: PacketType = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
                         logger.debug("Sending key exhange packet to data handler")
                         context.fireChannelRead(wrapInboundOut(keyPacket))
 						
@@ -68,14 +67,14 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
                                 
                                 /// Pass data for creating transit keys
-                                let packet: PacketType = .keyExchange(endpoint, payload.payload.responderIndex, val.c, true)
+                                let packet: PacketType = .keyExchange(peers[endpoint]!, endpoint, payload.payload.responderIndex, val.c, true)
                                 logger.debug("Sending key exhange packet to data handler")
                                 context.fireChannelRead(wrapInboundOut(packet))
 							}
 						}
-                    case .transit(let endpoint, let payload):
+                    case .encryptedTransit(let endpoint, let payload):
                         logger.debug("Data transit packet sent to data handler")
-                        context.fireChannelRead(wrapInboundOut(PacketType.transit(endpoint, payload)))
+                        context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(endpoint, payload)))
 					default:
 						return
 				}
@@ -94,13 +93,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		let invoke = unwrapOutboundIn(data)
 		
         switch invoke {
-            case let .initiationInvoker(endpoint):
+            case let .initiationInvoker(peerPublicKey, endpoint):
                 do {
-                    print("Peerss: \(peers)")
-                    guard let peerPublicKey = peers[endpoint] else {
-                        logger.debug("Peer for endpoint \(endpoint) not found")
-                        return
-                    }
+                    peers[endpoint] = peerPublicKey
                     try withUnsafePointer(to:privateKey) { privateKey in
                         try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
                             let (c, h, ephiPrivateKey, payload) = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
@@ -114,9 +109,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
                     context.fireErrorCaught(error)
                     promise?.fail(error)
                 }
-            case .transit(let endpoint, let payload):
+            case .encryptedTransit(let endpoint, let payload):
                 logger.debug("Sending transit packout down to packet handler")
-                context.writeAndFlush(wrapOutboundOut(PacketType.transit(endpoint, payload)), promise:promise)
+                context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, payload)), promise:promise)
             default:
                 return
         }

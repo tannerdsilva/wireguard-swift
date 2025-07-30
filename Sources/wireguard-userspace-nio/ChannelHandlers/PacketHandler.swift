@@ -1,6 +1,7 @@
 import NIO
 import Logging
 import RAW
+import RAW_dh25519
 
 internal enum PacketType {
 	/// represents a handshake initiation packet, sent by the initiator to start the handshake
@@ -9,12 +10,14 @@ internal enum PacketType {
 	case handshakeResponse(SocketAddress, HandshakeResponseMessage.AuthenticatedPayload)
 	/// represents a cookie packet.
 	case cookie
-	/// represents a transit packet, which is used to carry data between peers after the handshake is complete
-    case transit(SocketAddress, DataMessage.DataPayload)
+	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
+    case encryptedTransit(SocketAddress, DataMessage.DataPayload)
+    /// represents an outbound transit packet to be encrypted and sent out
+    case decryptedTransit([UInt8], ParsedIP)
     /// represents key creation information for post handshake validation
-    case keyExchange(SocketAddress, PeerIndex, Result32, Bool)
+    case keyExchange(PublicKey, SocketAddress, PeerIndex, Result32, Bool)
     /// represents a handshake invoker
-    case initiationInvoker(SocketAddress)
+    case initiationInvoker(PublicKey, SocketAddress)
 }
 
 
@@ -66,9 +69,15 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 					fallthrough
 				case 0x4:
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-                    context.fireChannelRead(wrapInboundOut(PacketType.transit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
+                    context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
 				default:
-					logger.warning("received packet with unknown type: \(byteBuffer[0])", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
+                    let bytes: [UInt8] = Array(byteBuffer)
+                    guard let ip = parseIPPacket(bytes) else {
+                        logger.warning("received invalid packet, discarding...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
+                        return
+                    }
+                    context.fireChannelRead(wrapInboundOut(PacketType.decryptedTransit(bytes, ip)))
+                   
 			}
 		}
 	}
@@ -93,7 +102,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 			case .cookie:
 				logger.warning("attempted to send cookie packet, which is not supported")
 				return
-            case .transit(let endpoint, let payload):
+            case .encryptedTransit(let endpoint, let payload):
                 logger.debug("Sending transit packout outbound")
                 var size: RAW.size_t = 0
                 payload.RAW_encode(count: &size)
@@ -116,6 +125,9 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
                 logger.warning("attempted to send transit packet, which is not supported")
                 return
             case .initiationInvoker:
+                logger.warning("attempted to send transit packet, which is not supported")
+                return
+            case .decryptedTransit:
                 logger.warning("attempted to send transit packet, which is not supported")
                 return
 		}
