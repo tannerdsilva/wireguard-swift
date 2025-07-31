@@ -6,7 +6,8 @@ import NIO
 import RAW_dh25519
 import RAW_base64
 
-public final class WGInterface: Sendable {
+/// primary wireguard interface. this is how connections will be made.
+public struct WGInterface:Sendable {
 	let ipAddress: String
 	let port: Int
 	
@@ -15,7 +16,7 @@ public final class WGInterface: Sendable {
 	
 	let group:MultiThreadedEventLoopGroup
 	
-	public init(ipAddress: String, port: Int, staticPrivateKey: consuming PrivateKey, peerPublicKey: PublicKey) throws {
+	public init(ipAddress:String, port:Int, staticPrivateKey: consuming PrivateKey, peerPublicKey: PublicKey) throws {
 		self.port = port
 		self.ipAddress = ipAddress
 
@@ -25,12 +26,6 @@ public final class WGInterface: Sendable {
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 		
 	}
-    
-    public func run() async throws {
-//        let channel = try await self.connectedChannel.get()
-//        try await gracefulShutdown()
-//        try? await channel.close()
-    }
 	
 	public func sendInitialPacket() throws {
         
@@ -45,6 +40,8 @@ public final class WGInterface: Sendable {
         let peers = [peerInfo(publicKey: peerPublicKey, allowedIPs: ["172.15.1.78"], endpoint: address, internalKeepAlive: .seconds(15))]
 
         let peerPublicKeys = [address: peerPublicKey]
+
+		let dh = DataHandler(logLevel: .trace, initialConfiguration: peers)
 		// Create Channel
 		let bootstrap =  DatagramBootstrap(group: group)
 			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -52,8 +49,13 @@ public final class WGInterface: Sendable {
 				channel.pipeline.addHandlers([
 				PacketHandler(logLevel:.trace),
                 HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace),
-                DataHandler(logLevel: .trace, initialConfiguration: peers),
+                dh
 			])
+		}
+		let asyncConsumer = dh.pendingOutgoingPackets.makeAsyncConsumer()
+		while let (publicKey, data) = try await asyncConsumer.next() {
+			let  = nextPacket
+			
 		}
 
 		// Start Channel
