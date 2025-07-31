@@ -6,43 +6,55 @@ import NIO
 import RAW_dh25519
 import RAW_base64
 
+/// Represents a peer on the WireGuard interface. Each peer has a unique public key assosiated with it.
+public struct Peer:Sendable {
+    let publicKey:PublicKey
+    
+    let endpoint:SocketAddress?
+    let internalKeepAlive:TimeAmount?
+    
+    public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
+        self.publicKey = publicKey
+        self.internalKeepAlive = internalKeepAlive
+        
+        if (ipAddress != nil && port != nil) {
+            do {
+                self.endpoint = try SocketAddress(ipAddress: ipAddress!, port: port!)
+            } catch {
+                self.endpoint = nil
+            }
+        } else {
+            self.endpoint = nil
+        }
+    }
+}
+
 /// primary wireguard interface. this is how connections will be made.
 public struct WGInterface:Sendable {
-	let ipAddress: String
-	let port: Int
 	
+    /// The private key of the interface (owners private key)
 	let staticPrivateKey:PrivateKey
-	let peerPublicKey:PublicKey
+    
+    /// The initial configuration for peers upon interface creation
+    let initialConfiguration:[Peer]
 	
-	let group:MultiThreadedEventLoopGroup
+	private let group:MultiThreadedEventLoopGroup
 	
-	public init(ipAddress:String, port:Int, staticPrivateKey: consuming PrivateKey, peerPublicKey: PublicKey) throws {
-		self.port = port
-		self.ipAddress = ipAddress
-
-		self.peerPublicKey = peerPublicKey
+    /// Initialize with owners `PrivateKey` and the configuration `[Peer]`
+    public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = []) throws {
 		self.staticPrivateKey = staticPrivateKey
+        self.initialConfiguration = initialConfiguration
 
-		self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		
 	}
 	
-	public func sendInitialPacket() throws {
+    /// Starts the WireGuard interface
+    public func run() async throws {
         
-        let peerPublicKeyBase64 = String(RAW_base64.encode(peerPublicKey))
-        var privKeyCopy = staticPrivateKey
-        let myPublicKeyBase64 = String(RAW_base64.encode(PublicKey(privateKey:&privKeyCopy)))
-        
-        print("Peer Public Key: \(peerPublicKeyBase64)")
-        print("My Public Key: \(myPublicKeyBase64)")
-        
-        let address = try SocketAddress(ipAddress: ipAddress, port: port)
-        let peers = [peerInfo(publicKey: peerPublicKey, allowedIPs: ["172.15.1.78"], endpoint: address, internalKeepAlive: .seconds(15))]
-
-        let peerPublicKeys = [address: peerPublicKey]
+        let peers = initialConfiguration
 
 		let dh = DataHandler(logLevel: .trace, initialConfiguration: peers)
-		// Create Channel
 		let bootstrap =  DatagramBootstrap(group: group)
 			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 			.channelInitializer { channel in
@@ -51,11 +63,6 @@ public struct WGInterface:Sendable {
                 HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace),
                 dh
 			])
-		}
-		let asyncConsumer = dh.pendingOutgoingPackets.makeAsyncConsumer()
-		while let (publicKey, data) = try await asyncConsumer.next() {
-			let  = nextPacket
-			
 		}
 
 		// Start Channel
@@ -74,35 +81,40 @@ public struct WGInterface:Sendable {
         let messageBytes: [UInt8] = Array(message.utf8)
         var nonce_i:Counter = Counter(RAW_native: 0)
         
-        var encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: senderIndex, nonce: &nonce_i, transportKey: TIsend, plainText: messageBytes)
+        var encryptedPacket = peers[0].publicKey
         var size: RAW.size_t = 0
         encryptedPacket.RAW_encode(count: &size)
 
-        let byteBuffer: [UInt8] = {
+        var byteBuffer: [UInt8] = {
             let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
             defer { pointer.deallocate() }
 
             encryptedPacket.RAW_encode(dest: pointer)
             return Array(UnsafeBufferPointer(start: pointer, count: size))
         }()
-
+        byteBuffer.append(contentsOf: messageBytes)
         let allocator = ByteBufferAllocator()
         var buffer = allocator.buffer(capacity: byteBuffer.count)
         buffer.writeBytes(byteBuffer)
         
-        let envelope = AddressedEnvelope(remoteAddress: try SocketAddress(ipAddress: ipAddress, port: port), data: buffer)
-//        channel.pipeline.fireChannelRead(envelope)
+        
+        
+        let envelope = AddressedEnvelope(remoteAddress: try peers[0].endpoint!, data: buffer)
+        channel.pipeline.fireChannelRead(envelope)
 
 
+        let asyncConsumer = dh.pendingOutgoingPackets.makeAsyncConsumer()
+        while let (publicKey, data) = try await asyncConsumer.next() {
+            // do something
+            
+        }
+        
 		try channel.closeFuture.wait()
 
 		print("Server closed.")
 		
 	}
 	
-	deinit {
-		try? group.syncShutdownGracefully()
-	}
 }
 
 

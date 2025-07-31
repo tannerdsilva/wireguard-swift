@@ -13,7 +13,7 @@ internal enum PacketType {
 	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
     case encryptedTransit(SocketAddress, DataMessage.DataPayload)
     /// represents an outbound transit packet to be encrypted and sent out
-    case decryptedTransit([UInt8], ParsedIP)
+    case decryptedTransit(PublicKey, [UInt8])
     /// represents key creation information for post handshake validation
     case keyExchange(PublicKey, SocketAddress, PeerIndex, Result32, Bool)
     /// represents a handshake invoker
@@ -72,11 +72,13 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
                     context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
 				default:
                     let bytes: [UInt8] = Array(byteBuffer)
-                    guard let ip = parseIPPacket(bytes) else {
-                        logger.warning("received invalid packet, discarding...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
+                    guard byteBuffer.count >= MemoryLayout<PublicKey>.size else {
+                        logger.error("No public key attached to packet")
+                        context.fireErrorCaught(Error.invalidPacketLengthForType(type:0x5, length:byteBuffer.count))
                         return
                     }
-                    context.fireChannelRead(wrapInboundOut(PacketType.decryptedTransit(bytes, ip)))
+                    let pubKey = PublicKey(RAW_decode: byteBuffer.baseAddress!, count: MemoryLayout<PublicKey>.size)
+                    context.fireChannelRead(wrapInboundOut(PacketType.decryptedTransit(pubKey!, bytes)))
                    
 			}
 		}

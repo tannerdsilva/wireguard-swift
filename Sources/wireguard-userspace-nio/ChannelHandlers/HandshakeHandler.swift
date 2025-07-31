@@ -52,8 +52,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							print("Handshake response sent to \(ep)")
 						}
                         
-                    /// Pass data for creating transit keys
-                    let keyPacket: PacketType = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
+                        /// Pass data for creating transit keys
+                        let keyPacket: PacketType = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
                         logger.debug("Sending key exhange packet to data handler")
                         context.fireChannelRead(wrapInboundOut(keyPacket))
 						
@@ -78,9 +78,15 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
                                 context.fireChannelRead(wrapInboundOut(packet))
 							}
 						}
+                        
                     case .encryptedTransit(let endpoint, let payload):
                         logger.debug("Data transit packet sent to data handler")
                         context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(endpoint, payload)))
+                        
+                    case .decryptedTransit(let pubKey, let payload):
+                        logger.debug("Data to be encrypted sent to data handler")
+                        context.fireChannelRead(wrapInboundOut(PacketType.decryptedTransit(pubKey, payload)))
+                        
 					default:
 						return
 				}

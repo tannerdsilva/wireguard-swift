@@ -5,7 +5,7 @@ import RAW_dh25519
 import RAW
 
 @main
-struct CLI:ParsableCommand {
+struct CLI:AsyncParsableCommand {
 	static let configuration = CommandConfiguration(
 		commandName:"wg-test-tool",
 		abstract:"a development tool to aid in the development of the wireguard-userspace-nio target (and others).",
@@ -49,7 +49,7 @@ struct CLI:ParsableCommand {
 		}
 	}
 
-    struct Initiator:ParsableCommand {
+    struct Initiator:AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             subcommands: []
         )
@@ -63,9 +63,10 @@ struct CLI:ParsableCommand {
 		@Argument(help:"The public key that the responder is expected to be operating with.")
 		var respondersPublicKey:PublicKey
 
-		func run() throws {
-			let interface = try WGInterface(ipAddress: ipAddress, port: port, staticPrivateKey: myPrivateKey, peerPublicKey: respondersPublicKey)
-			try interface.sendInitialPacket()
+		func run() async throws {
+            let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
+			let interface = try WGInterface( staticPrivateKey: myPrivateKey, initialConfiguration: peers)
+			try await interface.run()
 		}
     }
     
