@@ -13,12 +13,17 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	private let logger:Logger
 	internal let privateKey:PrivateKey
+    
+    /// Storing public keys for validating responses after we send initiation
     internal var peers:[SocketAddress:PublicKey] = [:]
+    
+    /// Timers for checking incoming initation packets
+    internal var initiationTimers:[PeerIndex:TAI64N] = [:]
 
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
 	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
 	
-	internal init(privateKey:consuming PrivateKey, peers: [SocketAddress:PublicKey], logLevel:Logger.Level) {
+	internal init(privateKey:consuming PrivateKey, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		self.logger = buildLogger
@@ -34,6 +39,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		do {
 			try withUnsafePointer(to:privateKey) { responderPrivateKey in
 				switch unwrapInboundIn(data) {
+                    /// Validate initiation packet and send response upon successfull validation
 					case .handshakeInitiation(let endpoint, let payload):
 						logger.debug("received handshake initiation packet", metadata:["remote_address":"\(endpoint.description)"])
 						var val = try HandshakeInitiationMessage.validateInitiationMessage([payload], responderStaticPrivateKey: responderPrivateKey)
@@ -46,7 +52,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							print("Handshake response sent to \(ep)")
 						}
                         
-                        /// Pass data for creating transit keys
+                    /// Pass data for creating transit keys
                     let keyPacket: PacketType = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
                         logger.debug("Sending key exhange packet to data handler")
                         context.fireChannelRead(wrapInboundOut(keyPacket))

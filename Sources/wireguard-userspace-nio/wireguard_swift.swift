@@ -33,7 +33,7 @@ public final class WGInterface: Sendable {
     }
 	
 	public func sendInitialPacket() throws {
-
+        
         let peerPublicKeyBase64 = String(RAW_base64.encode(peerPublicKey))
         var privKeyCopy = staticPrivateKey
         let myPublicKeyBase64 = String(RAW_base64.encode(PublicKey(privateKey:&privKeyCopy)))
@@ -42,6 +42,8 @@ public final class WGInterface: Sendable {
         print("My Public Key: \(myPublicKeyBase64)")
         
         let address = try SocketAddress(ipAddress: ipAddress, port: port)
+        let peers = [peerInfo(publicKey: peerPublicKey, allowedIPs: ["172.15.1.78"], endpoint: address, internalKeepAlive: .seconds(15))]
+
         let peerPublicKeys = [address: peerPublicKey]
 		// Create Channel
 		let bootstrap =  DatagramBootstrap(group: group)
@@ -49,8 +51,8 @@ public final class WGInterface: Sendable {
 			.channelInitializer { channel in
 				channel.pipeline.addHandlers([
 				PacketHandler(logLevel:.trace),
-                HandshakeHandler(privateKey:self.staticPrivateKey, peers: peerPublicKeys, logLevel:.trace),
-                DataHandler(logLevel: .trace),
+                HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace),
+                DataHandler(logLevel: .trace, initialConfiguration: peers),
 			])
 		}
 

@@ -4,13 +4,18 @@ internal struct SlidingWindow<T:RAW_encoded_fixedwidthinteger> {
 	internal let windowSize:T.RAW_native_type
 	private var bitmap:T.RAW_native_type = 0
 	private var lastSequence:T.RAW_native_type = 0
+    private var firstPacket:Bool = true
 	internal init(windowSize ws:T.RAW_native_type) {
 		self.windowSize = ws
 	}
 	internal mutating func isPacketAllowed(_ counter:T.RAW_native_type) -> Bool {
 		var diff:T.RAW_native_type
+        if firstPacket {
+            firstPacket = false
+            return true
+        }
 		guard counter != 0 else {
-			// counter 0 is always valid
+			// counter 0 is always invalid unless it's the first packet after handshake
 			return false
 		}
 		if counter > lastSequence {
