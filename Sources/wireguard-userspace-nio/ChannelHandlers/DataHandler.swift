@@ -41,10 +41,10 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     
     /// Pending incoming and outgoing packets
     private var pendingWriteFutures: [PublicKey: [(data:[UInt8], promise:EventLoopPromise<Void>)]] = [:]
-    private let pendingOutgoingPackets: FIFO<[UInt8], Swift.Error> = .init()
+    private let pendingOutgoingPackets: FIFO<(PublicKey,[UInt8]), Swift.Error> = .init()
     
     /// KeepAlive variables
-    private var keepaliveTasks: [PeerIndex: RepeatedTask] = [:] // change socket addresses to peer index
+    private var keepaliveTasks: [PeerIndex: RepeatedTask] = [:] 
     private var lastOutbound: [PeerIndex: NIODeadline] = [:]
 
     /// KeepAlive interval. Default 25 seconds
@@ -59,8 +59,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private let softRekey: TimeAmount = .seconds(120)
     private let checkEvery: TimeAmount = .seconds(5)
     private let reinitBackoff: TimeAmount = .seconds(5)
-    
-    private var slidingWindow = SlidingWindow<Counter>(windowSize:64)
     
     private let logger:Logger
 
@@ -285,14 +283,13 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     guard let ip = parseIPPacket(decryptedPacket) else {
                         return
                     }
-                    let srcIP = {
-                        switch ip {
-                            case .ipv4(let src, _, _, _, _):
-                                return src
-                            case .ipv6(let src, _, _, _):
-                                return src
-                        }
-                    }()
+                    
+                    let srcIP = switch ip {
+                        case .ipv4(let src, _, _, _, _):
+                            src
+                        case .ipv6(let src, _, _, _):
+                            src
+                    }
                     
                     /// Check if srcIP is in the routing table, else drop packet
                     guard let _ = IPtoKey[srcIP] else {
@@ -300,18 +297,17 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     }
                     
                     /// Add plaintext packet to queue
-                    pendingOutgoingPackets.yield(decryptedPacket)
+                    pendingOutgoingPackets.yield((publicKey, decryptedPacket))
                     logger.debug("Decrypted plaintext packet added to queue")
                 
                 case .decryptedTransit(let bytes, let ip):
-                    let dstIP = {
-                        switch ip {
-                            case .ipv4(_, let dst, _, _, _):
-                                return dst
-                            case .ipv6(_, let dst, _, _):
-                                return dst
-                        }
-                    }()
+                    let dstIP = switch ip {
+                        case .ipv4(_, let dst, _, _, _):
+                            dst
+                        case .ipv6(_, let dst, _, _):
+                            dst
+                    }
+                    
                     /// Check for allowed IPs, else drop packet and send
                     /// Inform user by a standard ICMP "no route to host" packet. Return -ENOKEY to user space
                     guard let publicKey = IPtoKey[dstIP] else {
