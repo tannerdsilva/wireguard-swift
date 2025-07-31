@@ -25,42 +25,39 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     public typealias OutboundIn = InterfaceInstruction
     public typealias OutboundOut = PacketType
     
-    /// Nsend increments by 1 for every outbound encrypted packet
-    /// Nrecv used with sliding window to check if packet is valid
+    // Nsend increments by 1 for every outbound encrypted packet
+    // Nrecv used with sliding window to check if packet is valid
     private var nonceCounters:[PeerIndex:(Nsend:Counter, Nrecv:SlidingWindow<Counter>)] = [:]
     private var transmitKeys:[PeerIndex:(Tsend:Result32, Trecv:Result32)] = [:]
     
-    /// Wireguard peer configuration of peer `public key` to `(allowed IPs, Internet Endpoint)`
-    private var configuration:[PublicKey:(allowedIPs: Set<String>, endpoint: SocketAddress?)] = [:]
+    // Wireguard peer configuration of peer `public key` to `(allowed IPs, Internet Endpoint)`
+    private var configuration:[PublicKey:(allowedIPs: Set<String>, endpoint:SocketAddress?)] = [:]
     private var IPtoKey: [String:PublicKey] = [:]
     
-    /// Active wireguard sessions
+    // Active wireguard sessions
     private var sessions:[PublicKey:PeerIndex] = [:] // PublicKey: (PeerIndex, PeerIndex, PeerIndex)
     private var sessionsInv:[PeerIndex: PublicKey] = [:]
     
+    // Pending incoming and outgoing packets
+    private var pendingWriteFutures:[PublicKey:[(data:[UInt8], promise:EventLoopPromise<Void>)]] = [:]
+    internal let pendingOutgoingPackets:FIFO<(PublicKey, [UInt8]), Swift.Error> = .init()
     
-    /// Pending incoming and outgoing packets
-    private var pendingWriteFutures: [PublicKey: [(data:[UInt8], promise:EventLoopPromise<Void>)]] = [:]
-    private let pendingOutgoingPackets: FIFO<[UInt8], Swift.Error> = .init()
-    
-    /// KeepAlive variables
+    // KeepAlive variables
     private var keepaliveTasks: [PeerIndex: RepeatedTask] = [:] // change socket addresses to peer index
     private var lastOutbound: [PeerIndex: NIODeadline] = [:]
 
-    /// KeepAlive interval. Default 25 seconds
+    // KeepAlive interval. Default 25 seconds
     private var keepaliveInterval:[PublicKey:TimeAmount] = [:]
     
-    /// Re handshake variables
+    // Re handshake variables
     private var lastHandshake: [PeerIndex: NIODeadline] = [:]
     private var rehandshakeTasks: [PeerIndex: RepeatedTask] = [:]
     private var nextAllowedReinit: [PeerIndex: NIODeadline] = [:]
     
-    /// Re handshake time intervals
-    private let softRekey: TimeAmount = .seconds(120)
-    private let checkEvery: TimeAmount = .seconds(5)
-    private let reinitBackoff: TimeAmount = .seconds(5)
-    
-    private var slidingWindow = SlidingWindow<Counter>(windowSize:64)
+    // Re handshake time intervals
+    private let softRekey:TimeAmount = .seconds(120)
+    private let checkEvery:TimeAmount = .seconds(5)
+    private let reinitBackoff:TimeAmount = .seconds(5)
     
     private let logger:Logger
 
@@ -69,7 +66,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         buildLogger.logLevel = logLevel
         self.logger = buildLogger
         
-        if(initialConfiguration != nil) {
+        if (initialConfiguration != nil) {
             for peer in initialConfiguration! {
                 addPeer(peer: peer)
             }
@@ -79,6 +76,13 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private func startKeepalive(for endpoint: PeerIndex, context: ChannelHandlerContext, peerPublicKey: PublicKey) {
         // Avoid duplicates
         if keepaliveTasks[endpoint] != nil { return }
+
+		Task { [f = pendingOutgoingPackets] in
+			let myItt = f.makeAsyncConsumer()
+			while let nextData = try await myItt.next() {
+				
+			}
+		}
 
         guard let peer = sessions[peerPublicKey] else {
             return
@@ -90,8 +94,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         ) { [weak self] _ in
             guard let self = self else { return }
             // All handler state is accessed on the channel event loop
-            guard self.transmitKeys[peer] != nil,
-                  self.nonceCounters[peer] != nil else { return }
+            guard self.transmitKeys[peer] != nil, self.nonceCounters[peer] != nil else {
+				return
+			}
 
             // Idle check: only send if no outbound for >= interval.
             let now = NIODeadline.now()

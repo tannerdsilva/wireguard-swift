@@ -9,10 +9,8 @@ let package = Package(
 		.macOS(.v15)
 	],
 	products: [
-		// Products define the executables and libraries a package produces, making them visible to other packages.
-		.executable(
-			name: "wg-test-tool",
-			targets: ["wg-test-tool"]),
+		.executable(name:"wg-test-tool", targets:["wg-test-tool"]),
+		.library(name:"wireguard-userspace-nio", targets: ["wireguard-userspace-nio"]),
 	],
 	dependencies: [
         .package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"b93bec78670cde02446adc9d8bbdbfb50a09d14b"),
@@ -48,6 +46,7 @@ let package = Package(
 				.product(name:"RAW_blake2", package:"rawdog"),
 				.product(name:"RAW_hmac", package:"rawdog"),
                 .product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
+				.product(name:"bedrock_ip", package:"bedrock"),
 			]
 		),
 		.testTarget(
