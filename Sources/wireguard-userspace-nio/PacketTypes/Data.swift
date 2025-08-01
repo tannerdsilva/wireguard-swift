@@ -70,11 +70,11 @@ internal struct DataMessage:Sendable {
             guard count >= MemoryLayout<Payload>.size else { return nil }
             var RAW_decode = RAW_decode
             let typeHeading = try! TypeHeading(RAW_staticbuff_seeking: &RAW_decode)
-            let receiverIndex = try! PeerIndex(RAW_staticbuff_seeking: &RAW_decode)
-            let counter = try! Counter(RAW_staticbuff_seeking: &RAW_decode)
-            self.data = try! [UInt8](RAW_decode: RAW_decode, count: count - MemoryLayout<Payload>.size)
+            let receiverIndex = PeerIndex(RAW_staticbuff_seeking: &RAW_decode)
+            let counter = Counter(RAW_staticbuff_seeking: &RAW_decode)
+            self.data = [UInt8](RAW_decode: RAW_decode, count: count - MemoryLayout<Payload>.size)
             RAW_decode = RAW_decode.advanced(by: self.data.count)
-            let packetTag = try! Tag(RAW_staticbuff_seeking: &RAW_decode)
+            let packetTag = Tag(RAW_staticbuff_seeking: &RAW_decode)
             self.payload = Payload(receiverIndex: receiverIndex, counter: counter, packetTag: packetTag)
         }
         

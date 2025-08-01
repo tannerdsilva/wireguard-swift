@@ -13,10 +13,10 @@ let package = Package(
 		.library(name:"wireguard-userspace-nio", targets: ["wireguard-userspace-nio"]),
 	],
 	dependencies: [
-        .package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"b93bec78670cde02446adc9d8bbdbfb50a09d14b"),
+        .package(url:"https://github.com/tannerdsilva/rawdog.git", "18.0.0"..<"19.0.0"),
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
-		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.0"..<"7.0.0"),
+		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.1"..<"7.0.0"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
         .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0")
 	],
@@ -31,6 +31,7 @@ let package = Package(
 				.product(name:"RAW_dh25519", package:"rawdog"),
 				.product(name:"RAW_base64", package:"rawdog"),
 				.product(name:"RAW", package:"rawdog"),
+				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 			]
 		),
 		.target(

@@ -8,6 +8,8 @@ internal enum InterfaceInstruction {
     case addPeer(Peer)
     // Remove peer from pipeline configuration
     case removePeer(Peer)
+	/// indicates a series of bytes that are to be encrypted and sent to the peer
+	case encryptAndTransmit(PublicKey, [UInt8])
 }
 
 // Handles the data packet encryption and decryption
@@ -345,6 +347,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 addPeer(peer: peer)
             case .removePeer(let peer):
                 removePeer(peer: peer)
+			case .encryptAndTransmit(let publicKey, let data):
+				// encrypt and transmit data to the peer
+				PacketType.
         }
     }
     

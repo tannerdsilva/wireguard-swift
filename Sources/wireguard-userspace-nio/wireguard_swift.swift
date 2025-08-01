@@ -90,7 +90,7 @@ public actor WGInterface:Sendable {
 		
 	}
     
-    public func write(publicKey: PublicKey, data:[UInt8]) throws {
+    public func write(publicKey: PublicKey, data:[UInt8]) async throws {
         guard let channel = channel else {
             print("Channel not yet established. Use run() to start the channel")
             return
@@ -106,7 +106,7 @@ public actor WGInterface:Sendable {
         var size: RAW.size_t = 0
         keyBytes.RAW_encode(count: &size)
 
-        var byteBuffer: [UInt8] = {
+        var byteBuffer:[UInt8] = {
             let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
             defer { pointer.deallocate() }
 
@@ -118,7 +118,7 @@ public actor WGInterface:Sendable {
         var buffer = allocator.buffer(capacity: byteBuffer.count)
         buffer.writeBytes(byteBuffer)
         
-        let envelope = AddressedEnvelope(remoteAddress: try ep, data: buffer)
+        let envelope = AddressedEnvelope(remoteAddress:ep, data: buffer)
         channel.pipeline.fireChannelRead(envelope)
     }
     
