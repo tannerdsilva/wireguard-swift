@@ -12,8 +12,6 @@ internal enum PacketType {
 	case cookie
 	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
     case encryptedTransit(SocketAddress, DataMessage.DataPayload)
-    /// represents an outbound transit packet to be encrypted and sent out
-    case decryptedTransit(PublicKey, [UInt8])
     /// represents key creation information for post handshake validation
     case keyExchange(PublicKey, SocketAddress, PeerIndex, Result32, Bool)
     /// represents a handshake invoker
@@ -71,15 +69,8 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
                     context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
 				default:
+                    logger.debug("Invalid Packet type \(byteBuffer[0])")
                     let bytes: [UInt8] = Array(byteBuffer)
-                    guard byteBuffer.count >= MemoryLayout<PublicKey>.size else {
-                        logger.error("No public key attached to packet")
-                        context.fireErrorCaught(Error.invalidPacketLengthForType(type:0x5, length:byteBuffer.count))
-                        return
-                    }
-                    let pubKey = PublicKey(RAW_decode: byteBuffer.baseAddress!, count: MemoryLayout<PublicKey>.size)
-                    context.fireChannelRead(wrapInboundOut(PacketType.decryptedTransit(pubKey!, bytes)))
-                   
 			}
 		}
 	}
@@ -127,9 +118,6 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
                 logger.warning("attempted to send transit packet, which is not supported")
                 return
             case .initiationInvoker:
-                logger.warning("attempted to send transit packet, which is not supported")
-                return
-            case .decryptedTransit:
                 logger.warning("attempted to send transit packet, which is not supported")
                 return
 		}

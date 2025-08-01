@@ -265,32 +265,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     pendingOutgoingPackets.yield((publicKey, decryptedPacket))
                     logger.debug("Decrypted plaintext packet added to queue")
                 
-                case .decryptedTransit(let publicKey, let bytes):
-                    // Check for available endpoint, else drop packet and send
-                    // Inform user by ICMP message. Return -EHOSTUNRECH to user space
-                    guard let endpoint = configuration[publicKey]! else {
-                        return
-                    }
-                    // Encrypt packet and send it out to peer
-                    do {
-                        if let peerIndex = sessions[publicKey] {
-                            let encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: peerIndex, nonce: &nonceCounters[peerIndex]!.Nsend, transportKey: transmitKeys[peerIndex]!.Trecv, plainText: bytes)
-                            context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise: nil)
-                            lastOutbound[peerIndex] = .now()
-                        } else {
-                            // Send handshake since there is no active session
-                            logger.debug("Initiation Invoker send down to the handshake handler")
-                            context.writeAndFlush(self.wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise: nil)
-                            
-                            // Add packet to be encrypted after handshake
-                            let promise = context.eventLoop.makePromise(of: Void.self)
-                            pendingWriteFutures[publicKey, default: []].append((bytes, promise))
-                        }
-                    } catch {
-                        logger.debug("Unable to encrypt incoming data into a transit packet")
-                        context.fireErrorCaught(error)
-                    }
-                
                 // Calculate transmit keys and set nonce counters to 0
                 case .keyExchange(let peerPublicKey, let endpoint, let peerIndex, let c, let isInitiator):
                     logger.debug("received key exchange packet")
@@ -347,9 +321,31 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 addPeer(peer: peer)
             case .removePeer(let peer):
                 removePeer(peer: peer)
-			case .encryptAndTransmit(let publicKey, let data):
-				// encrypt and transmit data to the peer
-				PacketType.
+			case .encryptAndTransmit(let publicKey, let bytes):
+                // Check for available endpoint, else drop packet and send
+                // Inform user by ICMP message. Return -EHOSTUNRECH to user space
+                guard let endpoint = configuration[publicKey]! else {
+                    return
+                }
+                // Encrypt packet and send it out to peer
+                do {
+                    if let peerIndex = sessions[publicKey] {
+                        let encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: peerIndex, nonce: &nonceCounters[peerIndex]!.Nsend, transportKey: transmitKeys[peerIndex]!.Trecv, plainText: bytes)
+                        context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise: nil)
+                        lastOutbound[peerIndex] = .now()
+                    } else {
+                        // Send handshake since there is no active session
+                        logger.debug("Initiation Invoker send down to the handshake handler")
+                        context.writeAndFlush(self.wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise: nil)
+                        
+                        // Add packet to be encrypted after handshake
+                        let promise = context.eventLoop.makePromise(of: Void.self)
+                        pendingWriteFutures[publicKey, default: []].append((bytes, promise))
+                    }
+                } catch {
+                    logger.debug("Unable to encrypt incoming data into a transit packet")
+                    context.fireErrorCaught(error)
+                }
         }
     }
     

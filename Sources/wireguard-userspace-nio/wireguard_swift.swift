@@ -97,29 +97,7 @@ public actor WGInterface:Sendable {
         }
         let peers = dh.getConfiguration()
         
-        guard let ep = peers[publicKey]! else {
-            print("Peer not found for public key: \(publicKey)")
-            return
-        }
-        
-        var keyBytes = publicKey
-        var size: RAW.size_t = 0
-        keyBytes.RAW_encode(count: &size)
-
-        var byteBuffer:[UInt8] = {
-            let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
-            defer { pointer.deallocate() }
-
-            keyBytes.RAW_encode(dest: pointer)
-            return Array(UnsafeBufferPointer(start: pointer, count: size))
-        }()
-        byteBuffer.append(contentsOf: data)
-        let allocator = ByteBufferAllocator()
-        var buffer = allocator.buffer(capacity: byteBuffer.count)
-        buffer.writeBytes(byteBuffer)
-        
-        let envelope = AddressedEnvelope(remoteAddress:ep, data: buffer)
-        channel.pipeline.fireChannelRead(envelope)
+        channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise: nil)
     }
     
     public func addPeer(_ peer: Peer) {

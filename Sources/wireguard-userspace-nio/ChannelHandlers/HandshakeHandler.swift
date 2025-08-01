@@ -83,10 +83,6 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
                         logger.debug("Data transit packet sent to data handler")
                         context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(endpoint, payload)))
                         
-                    case .decryptedTransit(let pubKey, let payload):
-                        logger.debug("Data to be encrypted sent to data handler")
-                        context.fireChannelRead(wrapInboundOut(PacketType.decryptedTransit(pubKey, payload)))
-                        
 					default:
 						return
 				}
