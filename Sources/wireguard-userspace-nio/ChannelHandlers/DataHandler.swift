@@ -298,7 +298,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     for packet in packets {
                         if let peer = sessions[peerPublicKey] {
                             let encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Trecv, plainText: packet.data)
-                            context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise: packet.promise)
+                            context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:packet.promise)
                             lastOutbound[peerIndex] = .now()
                         }
                     }
@@ -331,12 +331,12 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 do {
                     if let peerIndex = sessions[publicKey] {
                         let encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: peerIndex, nonce: &nonceCounters[peerIndex]!.Nsend, transportKey: transmitKeys[peerIndex]!.Trecv, plainText: bytes)
-                        context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise: nil)
+                        context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:promise)
                         lastOutbound[peerIndex] = .now()
                     } else {
                         // Send handshake since there is no active session
                         logger.debug("Initiation Invoker send down to the handshake handler")
-                        context.writeAndFlush(self.wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise: nil)
+                        context.writeAndFlush(wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise:nil)
                         
                         // Add packet to be encrypted after handshake
                         let promise = context.eventLoop.makePromise(of: Void.self)

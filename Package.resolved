@@ -1,9 +1,5 @@
 {
-<<<<<<< Updated upstream
   "originHash" : "fc27070910252679fb7ceef8df6638cb46ebd66967eb74567ce99c566872fe39",
-=======
-  "originHash" : "64a491588bc77a7a4883e4f20b5d424f3c066f111f6c4bd8b38dc3500f0ab6fa",
->>>>>>> Stashed changes
   "pins" : [
     {
       "identity" : "bedrock",

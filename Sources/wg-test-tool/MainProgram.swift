@@ -3,7 +3,8 @@ import wireguard_userspace_nio
 import RAW_base64
 import RAW_dh25519
 import RAW
-
+import ServiceLifecycle
+import Logging
 @main
 struct CLI:AsyncParsableCommand {
 	static let configuration = CommandConfiguration(
@@ -64,11 +65,20 @@ struct CLI:AsyncParsableCommand {
 		var respondersPublicKey:PublicKey
 
 		func run() async throws {
+			var cliLogger = Logger(label: "wg-test-tool.initiator")
+			cliLogger.logLevel = .trace
             let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
-			let interface = try WGInterface( staticPrivateKey: myPrivateKey, initialConfiguration: peers)
-            
-			try await interface.run()
-            try await interface.write(publicKey: respondersPublicKey, data: [0x1, 0x2, 0x3])
+			let interface = try WGInterface(staticPrivateKey:myPrivateKey, initialConfiguration:peers, logLevel:.trace)
+			Task {
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await interface.waitForChannelInit()
+				cliLogger.info("Channel initialized. Sending handshake initiation message...")
+				try await interface.write(publicKey: respondersPublicKey, data: [0x1, 0x2, 0x3])
+			}
+
+			let sg = ServiceGroupConfiguration(services:[interface], gracefulShutdownSignals:[.sigint],logger: cliLogger)
+			let lifecycle = ServiceGroup(configuration:sg)
+			try await lifecycle.run()
 		}
     }
     
