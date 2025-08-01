@@ -66,7 +66,9 @@ struct CLI:AsyncParsableCommand {
 		func run() async throws {
             let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
 			let interface = try WGInterface( staticPrivateKey: myPrivateKey, initialConfiguration: peers)
+            
 			try await interface.run()
+            try await interface.write(publicKey: respondersPublicKey, data: [0x1, 0x2, 0x3])
 		}
     }
     

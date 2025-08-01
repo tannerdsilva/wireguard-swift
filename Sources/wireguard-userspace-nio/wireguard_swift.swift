@@ -1,6 +1,7 @@
 // The Swift Programming Language
 // https://docs.swift.org/swift-book
 
+import Foundation
 import RAW
 import NIO
 import RAW_dh25519
@@ -30,13 +31,19 @@ public struct Peer:Sendable {
 }
 
 /// primary wireguard interface. this is how connections will be made.
-public struct WGInterface:Sendable {
+public actor WGInterface:Sendable {
 	
     /// The private key of the interface (owners private key)
 	let staticPrivateKey:PrivateKey
     
     /// The initial configuration for peers upon interface creation
     let initialConfiguration:[Peer]
+    
+    /// Data handler channel
+    let dh:DataHandler
+    
+    /// Data channel
+    var channel:Channel? = nil
 	
 	private let group:MultiThreadedEventLoopGroup
 	
@@ -46,74 +53,82 @@ public struct WGInterface:Sendable {
         self.initialConfiguration = initialConfiguration
 
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-		
+        self.dh = DataHandler(logLevel: .trace, initialConfiguration: initialConfiguration)
 	}
 	
     /// Starts the WireGuard interface
     public func run() async throws {
-        
-        let peers = initialConfiguration
-
-		let dh = DataHandler(logLevel: .trace, initialConfiguration: peers)
+        let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
 		let bootstrap =  DatagramBootstrap(group: group)
 			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 			.channelInitializer { channel in
 				channel.pipeline.addHandlers([
 				PacketHandler(logLevel:.trace),
-                HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace),
-                dh
+                hs,
+                self.dh
 			])
 		}
 
 		// Start Channel
-		let channel = try bootstrap.bind(host:"0.0.0.0", port:36361).wait()
+        do {
+            channel = try bootstrap.bind(host:"0.0.0.0", port:36361).wait()
+        } catch {
+            throw POSIXError(.ECONNREFUSED)
+        }
 		
-		print("Server started successfully on \(channel.localAddress?.description ?? "unknown address")")
+		print("Server started successfully on \(channel!.localAddress?.description ?? "unknown address")")
         
-        let c: Result32 = Result32(RAW_staticbuff: try generateRandomBytes(count: 32))
-        let e:[UInt8] = []
-        let arr:[Result32] = try wgKDF(key: c, data: e, type: 2)
-        let TIsend = arr[0]
-        
-        let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
-        
-        let message:String = "This is a message to be encrypted"
-        let messageBytes: [UInt8] = Array(message.utf8)
-        var nonce_i:Counter = Counter(RAW_native: 0)
-        
-        var encryptedPacket = peers[0].publicKey
-        var size: RAW.size_t = 0
-        encryptedPacket.RAW_encode(count: &size)
-
-        var byteBuffer: [UInt8] = {
-            let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
-            defer { pointer.deallocate() }
-
-            encryptedPacket.RAW_encode(dest: pointer)
-            return Array(UnsafeBufferPointer(start: pointer, count: size))
-        }()
-        byteBuffer.append(contentsOf: messageBytes)
-        let allocator = ByteBufferAllocator()
-        var buffer = allocator.buffer(capacity: byteBuffer.count)
-        buffer.writeBytes(byteBuffer)
-        
-        
-        
-        let envelope = AddressedEnvelope(remoteAddress: try peers[0].endpoint!, data: buffer)
-        channel.pipeline.fireChannelRead(envelope)
-
-
         let asyncConsumer = dh.pendingOutgoingPackets.makeAsyncConsumer()
         while let (publicKey, data) = try await asyncConsumer.next() {
             // do something
             
         }
         
-		try channel.closeFuture.wait()
+		try channel!.closeFuture.wait()
 
 		print("Server closed.")
 		
 	}
+    
+    public func write(publicKey: PublicKey, data:[UInt8]) throws {
+        guard let channel = channel else {
+            print("Channel not yet established. Use run() to start the channel")
+            return
+        }
+        let peers = dh.getConfiguration()
+        
+        guard let ep = peers[publicKey]! else {
+            print("Peer not found for public key: \(publicKey)")
+            return
+        }
+        
+        var keyBytes = publicKey
+        var size: RAW.size_t = 0
+        keyBytes.RAW_encode(count: &size)
+
+        var byteBuffer: [UInt8] = {
+            let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+            defer { pointer.deallocate() }
+
+            keyBytes.RAW_encode(dest: pointer)
+            return Array(UnsafeBufferPointer(start: pointer, count: size))
+        }()
+        byteBuffer.append(contentsOf: data)
+        let allocator = ByteBufferAllocator()
+        var buffer = allocator.buffer(capacity: byteBuffer.count)
+        buffer.writeBytes(byteBuffer)
+        
+        let envelope = AddressedEnvelope(remoteAddress: try ep, data: buffer)
+        channel.pipeline.fireChannelRead(envelope)
+    }
+    
+    public func addPeer(_ peer: Peer) {
+        dh.addPeer(peer: peer)
+    }
+    
+    public func removePeer(_ peer: Peer) {
+        dh.removePeer(peer: peer)
+    }
 	
 }
 

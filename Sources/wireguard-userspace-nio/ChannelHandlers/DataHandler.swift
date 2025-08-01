@@ -23,7 +23,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private var nonceCounters:[PeerIndex:(Nsend:Counter, Nrecv:SlidingWindow<Counter>)] = [:]
     private var transmitKeys:[PeerIndex:(Tsend:Result32, Trecv:Result32)] = [:]
     
-    // Wireguard peer configuration of peer `public key` to `(allowed IPs, Internet Endpoint)`
+    // Wireguard peer configuration of peer `public key` to `Internet Endpoint`
     private var configuration:[PublicKey: SocketAddress?] = [:]
     
     // Active wireguard sessions
@@ -47,7 +47,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private var nextAllowedReinit: [PeerIndex: NIODeadline] = [:]
     
     // Re handshake time intervals
-    private let softRekey:TimeAmount = .seconds(120)
+    private let softRekey:TimeAmount = .seconds(25)
     private let checkEvery:TimeAmount = .seconds(5)
     private let reinitBackoff:TimeAmount = .seconds(5)
     
@@ -190,7 +190,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
-    private func addPeer(peer: Peer) {
+    internal func addPeer(peer: Peer) {
         // Add endpoint
         configuration[peer.publicKey] = peer.endpoint
         
@@ -203,7 +203,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
-    private func removePeer(peer: Peer) {
+    internal func removePeer(peer: Peer) {
         configuration[peer.publicKey] = nil
         keepaliveInterval[peer.publicKey] = nil
     }
@@ -222,6 +222,10 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         stopRehandshake(for: peerIndex)
         
         logger.debug("Killed session for \(peerIndex)")
+    }
+
+    internal func getConfiguration() -> [PublicKey: SocketAddress?] {
+        return configuration
     }
     
     public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
