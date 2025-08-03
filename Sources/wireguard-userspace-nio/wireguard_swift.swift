@@ -60,14 +60,14 @@ public final actor WGInterface:Sendable, Service {
 	public let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
 	
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(fifo:FIFO<(PublicKey, [UInt8]), Swift.Error>, staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level) throws {
+	public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.initialConfiguration = initialConfiguration
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-		self.dh = DataHandler(fifo: inboundData, logLevel: .trace, initialConfiguration: initialConfiguration)
+		self.dh = DataHandler(logLevel: .trace, initialConfiguration: initialConfiguration)
 	}
 
 	public func waitForChannelInit() async throws {

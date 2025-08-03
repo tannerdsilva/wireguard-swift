@@ -4,6 +4,36 @@ import RAW_dh25519
 import RAW_base64
 import RAW
 
+// final actor HelloClass {
+// 	var message = "God is good"
+// 	init(altInput:Bool) {
+// 		if altInput {
+// 			print("hello world :(")
+// 		} else {
+// 			print("HELLO WORLD :)")
+// 		}
+// 	}
+// 	func mutateMessage(newMessage: String) {
+// 		message = newMessage
+// 	}
+// 	deinit {
+// 		print(message)
+// 	}
+// }
+
+// @Test func helloTest() async throws {
+// 	var hello: HelloClass = HelloClass(altInput:false)
+// 	let longTask = Task { [h = hello] in
+// 		await h.mutateMessage(newMessage: "poop")
+// 		// wait 10 seconds
+// 		try await Task.sleep(nanoseconds: 10_000_000_000)
+// 	}
+// 	// delay 2 seconds
+// 	try await Task.sleep(nanoseconds: 2_000_000_000)
+// 	await hello.mutateMessage(newMessage: "around the world")
+// 	_ = try await longTask.result
+// }
+
 @Test func testCreateInitilizationMessage() throws {
     let staticPublicKey = try dhGenerate()
     let peerPublicKey = try dhGenerate().0

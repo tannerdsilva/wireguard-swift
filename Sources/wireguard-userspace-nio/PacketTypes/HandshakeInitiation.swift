@@ -113,17 +113,18 @@ internal struct HandshakeInitiationMessage:Sendable {
 					(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey))
 
 					// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
-					var newTai = TAI64N()
-					let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:&newTai, aad:hPtr.assumingMemoryBound(to:Result32.self))
+					return try withUnsafePointer(to:TAI64N()) { taiPointer in
+						let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:taiPointer, aad:hPtr.assumingMemoryBound(to:Result32.self))
 
-					// step 13: h = hash(h || msg.timestamp)
-					hasher = try WGHasher()
-					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
-					try hasher.update(tsDat)
-					try hasher.update(tsTag)
-					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
+						// step 13: h = hash(h || msg.timestamp)
+						hasher = try WGHasher()
+						try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+						try hasher.update(tsDat)
+						try hasher.update(tsTag)
+						hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
-					return (cPtr.assumingMemoryBound(to:Result32.self).pointee, hPtr.assumingMemoryBound(to:Result32.self).pointee, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+						return (cPtr.assumingMemoryBound(to:Result32.self).pointee, hPtr.assumingMemoryBound(to:Result32.self).pointee, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+					}
 				}
 			}
 		}
@@ -156,65 +157,67 @@ internal struct HandshakeInitiationMessage:Sendable {
 			try hasher.update(cPtr, count:MemoryLayout<Result32>.size)
 			try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
 			var h = try hasher.finish()
+			return try h.RAW_access_staticbuff_mutating { hPtr in
+				// step 3: h = hash(h || responderStaticPublicKey)
+				hasher = try WGHasher()
+				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+				try hasher.update(responderStaticPublicKey)
+				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
-			// step 3: h = hash(h || responderStaticPublicKey)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(responderStaticPublicKey)
-			h = try hasher.finish()
-
-			// step 3.5 - store the initiators ephemeral key
-			var initiatorEphemeralPublicKey = message.pointee.payload.ephemeral
-		
-			// step 5: c = KDF^1(c, initiatorEphemeralPublicKey)
-			cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2(Result32.self, key:cPtr, count:MemoryLayout<Result32>.size, data:initiatorEphemeralPublicKey)
-
-			// step 6: h = hash(h || initiatorEphemeralPublicKey)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(initiatorEphemeralPublicKey)
-			h = try hasher.finish()
-
-			// step 7: (c, k) = KDF^2(c, dh(responderStaticPrivateKey, initiatorEphemeralPublicKey))
-			var k:Result32
-			(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initiatorEphemeralPublicKey))
-
-			// step 8: decrypt the msg.static to determine the initStaticPublicKey
-			var initStaticPublicKey = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.staticRegion)!, aad:&h, tag:message.pointer(to:\.payload.staticTag)!.pointee)
+				// step 3.5 - store the initiators ephemeral key
+				var initiatorEphemeralPublicKey = message.pointer(to:\.payload)!.pointer(to:\.ephemeral)!.pointee
 			
-			let publickey = String(try RAW_base64.encode(initStaticPublicKey))
-		
-			// step 9: h = hash(h || msg.static)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(message.pointee.payload.staticRegion)
-			try hasher.update(message.pointee.payload.staticTag)
-			h = try hasher.finish()
+				// step 5: c = KDF^1(c, initiatorEphemeralPublicKey)
+				cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2(Result32.self, key:cPtr, count:MemoryLayout<Result32>.size, data:initiatorEphemeralPublicKey)
 
-			// step 10: (c, k) = KDF^2(c, dh(msg.static [initiatorStaticPublicKey], responderStaticPrivateKey))
-			(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initStaticPublicKey))
+				// step 6: h = hash(h || initiatorEphemeralPublicKey)
+				hasher = try WGHasher()
+				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+				try hasher.update(initiatorEphemeralPublicKey)
+				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
-			// step 11: descrypt the msg.timestamp to find the intial timestamp
-			let sentTimestamp = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:&h, tag:message.pointee.payload.timestampTag)
+				// step 7: (c, k) = KDF^2(c, dh(responderStaticPrivateKey, initiatorEphemeralPublicKey))
+				var k:Result32
+				(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initiatorEphemeralPublicKey))
 
-			// step 12: h = hash(h || msg.static)
-			hasher = try WGHasher()
-			try hasher.update(h)
-			try hasher.update(message.pointee.payload.timestamp)
-			try hasher.update(message.pointee.payload.timestampTag)
-			h = try hasher.finish()
+				// step 8: decrypt the msg.static to determine the initStaticPublicKey
+				var initStaticPublicKey = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.staticRegion)!, aad:hPtr.assumingMemoryBound(to:Result32.self), tag:message.pointer(to:\.payload.staticTag)!.pointee)
+
+				let publickey = String(try RAW_base64.encode(initStaticPublicKey))
 			
-			// step 13: create MAC1
-			hasher = try WGHasher()
-			try hasher.update([UInt8]("mac1----".utf8))
-			try hasher.update(responderStaticPublicKey)
-			let mac1 = try wgMac(key:try hasher.finish(), data: message.pointee.payload)
-			
-			guard mac1 == message.pointee.msgMac1 else {
-				throw MAC1InvalidError()
+				// step 9: h = hash(h || msg.static)
+				hasher = try WGHasher()
+				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.staticRegion)!, count:MemoryLayout<PublicKey>.size)
+				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.staticTag)!, count:MemoryLayout<Tag>.size)
+				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
+
+				// step 10: (c, k) = KDF^2(c, dh(msg.static [initiatorStaticPublicKey], responderStaticPrivateKey))
+				(cPtr.assumingMemoryBound(to:Result32.self).pointee, k) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initStaticPublicKey))
+
+				// step 11: descrypt the msg.timestamp to find the intial timestamp
+				let sentTimestamp = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:hPtr.assumingMemoryBound(to:Result32.self), tag:message.pointer(to:\.payload)!.pointer(to:\.timestampTag)!.pointee)
+
+				// step 12: h = hash(h || msg.static)
+				hasher = try WGHasher()
+				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
+				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.timestamp)!, count:MemoryLayout<TAI64N>.size)
+				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.timestampTag)!, count:MemoryLayout<Tag>.size)
+				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
+
+				// step 13: create MAC1
+				hasher = try WGHasher()
+				try hasher.update([UInt8]("mac1----".utf8))
+				try hasher.update(responderStaticPublicKey)
+				let mac1 = try hasher.finish().RAW_access_staticbuff { hasherOutputPtr in
+					return try wgMACv2(key:hasherOutputPtr, count:MemoryLayout<Result32>.size, data: message.pointer(to:\.payload)!, count:MemoryLayout<HandshakeInitiationMessage.Payload>.size)
+				}
+				guard mac1 == message.pointer(to:\.msgMac1)!.pointee else {
+					throw MAC1InvalidError()
+				}
+
+				return (cPtr.assumingMemoryBound(to:Result32.self).pointee, hPtr.assumingMemoryBound(to:Result32.self).pointee, initStaticPublicKey, sentTimestamp)
 			}
-			
-			return (cPtr.assumingMemoryBound(to:Result32.self).pointee, h, initStaticPublicKey, sentTimestamp)
 		}
 	}
 
