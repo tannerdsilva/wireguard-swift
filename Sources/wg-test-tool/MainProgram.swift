@@ -73,7 +73,7 @@ struct CLI:AsyncParsableCommand {
 				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
 				try await interface.waitForChannelInit()
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await interface.write(publicKey: respondersPublicKey, data: [0x1, 0x2, 0x3])
+				try await interface.write(publicKey: respondersPublicKey, data: [])
 			}
 
 			let sg = ServiceGroupConfiguration(services:[interface], gracefulShutdownSignals:[.sigint],logger: cliLogger)

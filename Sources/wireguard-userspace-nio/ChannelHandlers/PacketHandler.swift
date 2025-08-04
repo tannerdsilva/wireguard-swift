@@ -9,7 +9,7 @@ internal enum PacketType {
 	/// represents a handshake response packet, sent by the responder to complete the handshake sent by the initiator
 	case handshakeResponse(SocketAddress, HandshakeResponseMessage.AuthenticatedPayload)
 	/// represents a cookie packet.
-	case cookie
+	case cookie(SocketAddress, CookieReplyMessage.Payload)
 	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
     case encryptedTransit(SocketAddress, DataMessage.DataPayload)
     /// represents key creation information for post handshake validation
@@ -64,13 +64,13 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 					logger.debug("received handshake response packet. sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
 					context.fireChannelRead(wrapInboundOut(PacketType.handshakeResponse(envelope.remoteAddress, HandshakeResponseMessage.AuthenticatedPayload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<HandshakeResponseMessage.AuthenticatedPayload>.size)!)))
 				case 0x3:
-					fallthrough
+					logger.debug("received cookie response packet. sending downstream in pipeline")
+					context.fireChannelRead(wrapInboundOut(PacketType.cookie(envelope.remoteAddress, CookieReplyMessage.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<CookieReplyMessage.Payload>.size)!)))
 				case 0x4:
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
                     context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
 				default:
                     logger.debug("Invalid Packet type \(byteBuffer[0])")
-                    let bytes: [UInt8] = Array(byteBuffer)
 			}
 		}
 	}
@@ -100,13 +100,11 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
                 var size: RAW.size_t = 0
                 payload.RAW_encode(count: &size)
 
-                let byteBuffer: [UInt8] = {
-                    let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
-                    defer { pointer.deallocate() }
+				let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+				defer { pointer.deallocate() }
 
-                    payload.RAW_encode(dest: pointer)
-                    return Array(UnsafeBufferPointer(start: pointer, count: size))
-                }()
+				payload.RAW_encode(dest: pointer)
+				let byteBuffer = Array(UnsafeBufferPointer(start: pointer, count: size))
 
                 let allocator = ByteBufferAllocator()
                 var buffer = allocator.buffer(capacity: byteBuffer.count)

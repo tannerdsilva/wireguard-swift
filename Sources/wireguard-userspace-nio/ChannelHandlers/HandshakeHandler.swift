@@ -1,9 +1,10 @@
 import NIO
 import RAW_dh25519
 import Logging
+import RAW
 
-/// handles the handshakes for the WireGuard protocol.
-/// - NOTE: this handler is marked as `@unchecked Sendable` because it trusts NIO event loops to manage its internal state correctly
+// handles the handshakes for the WireGuard protocol.
+// - NOTE: this handler is marked as `@unchecked Sendable` because it trusts NIO event loops to manage its internal state correctly
 internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = PacketType
 	internal typealias InboundOut = PacketType
@@ -14,10 +15,18 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	private let logger:Logger
 	internal let privateKey:PrivateKey
     
-    /// Storing public keys for validating responses after we send initiation
-    internal var peers:[SocketAddress:PublicKey] = [:]
+    // Storing public keys for validating responses after we send initiation
+    internal var peers:[PeerIndex:PublicKey] = [:]
+	
+	// Temp var for testing
+	internal var underLoad:Bool = true
     
-    /// Timers for checking incoming initation packets
+	// When will the cookies be ready?
+	internal let ovenTimer:TimeAmount = .seconds(120)
+	
+	internal var secretCookieR:Result8 = try! generateSecureRandomBytes(as:Result8.self)
+	
+    // Timers for checking incoming initation packets
     internal var initiationTimers:[PeerIndex:TAI64N] = [:]
 
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
@@ -29,6 +38,13 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		self.logger = buildLogger
 		self.privateKey = privateKey
 	}
+	
+	private func generateNewCookieR(context: ChannelHandlerContext) {
+		context.eventLoop.scheduleRepeatedTask(initialDelay: ovenTimer, delay: ovenTimer) { [weak self] _ in
+			guard let self = self else { return }
+			self.secretCookieR = try! generateSecureRandomBytes(as:Result8.self)
+		}
+	}
 
 	internal borrowing func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		#if DEBUG
@@ -39,20 +55,42 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		do {
 			try withUnsafePointer(to:privateKey) { responderPrivateKey in
 				switch unwrapInboundIn(data) {
-                    /// Validate initiation packet and send response upon successfull validation
+                    // Validate initiation packet and send response upon successfull validation
 					case .handshakeInitiation(let endpoint, let payload):
 						logger.debug("received handshake initiation packet", metadata:["remote_address":"\(endpoint.description)"])
 						var val = try HandshakeInitiationMessage.validateInitiationMessage([payload], responderStaticPrivateKey: responderPrivateKey)
+						peers[payload.payload.initiatorPeerIndex] = val.initPublicKey
+						
+						// Check handshake packet time
+						if let initiationTime = initiationTimers[payload.payload.initiatorPeerIndex] {
+							if(val.timestamp <= initiationTime) {
+								return
+							}
+						}
+						initiationTimers[payload.payload.initiatorPeerIndex] = val.timestamp
+						
+						// Check if we are under heavy load
+						if underLoad {
+							// Create and send cookie
+							let publicKey = withUnsafePointer(to: privateKey) { privateKey in
+								return PublicKey(privateKey: privateKey)
+							}
+							let cookie = try CookieReplyMessage.forgeCookieReply(receiverPeerIndex: payload.payload.initiatorPeerIndex, myStaticPublicKey: publicKey, R: secretCookieR, A: endpoint, M: payload.msgMac1)
+							let packet: PacketType = .cookie(endpoint, cookie)
+							context.writeAndFlush(self.wrapOutboundOut(packet)).whenSuccess {
+								print("Cookie reply message sent to \(endpoint)")
+							}
+						}
 						let sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
 						let response = try HandshakeResponseMessage.forgeResponseState(c:val.c, h:val.h, initiatorPeerIndex: payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
 						let authResponse = try HandshakeResponseMessage.finalizeResponseState(initiatorStaticPublicKey: &val.initPublicKey, payload:response.payload)
 						let packet: PacketType = .handshakeResponse(endpoint, authResponse)
 						
-						context.writeAndFlush(self.wrapOutboundOut(packet)).whenSuccess { [ep = endpoint] in
-							print("Handshake response sent to \(ep)")
+						context.writeAndFlush(self.wrapOutboundOut(packet)).whenSuccess {
+							print("Handshake response sent to \(endpoint)")
 						}
                         
-                        /// Pass data for creating transit keys
+                        // Pass data for creating transit keys
                         let keyPacket: PacketType = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
                         logger.debug("Sending key exhange packet to data handler")
                         context.fireChannelRead(wrapInboundOut(keyPacket))
@@ -72,10 +110,24 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								let val = try HandshakeResponseMessage.validateResponseMessage(c:existingC, h:existingH, message:&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
                                 
-                                /// Pass data for creating transit keys
-                                let packet: PacketType = .keyExchange(peers[endpoint]!, endpoint, payload.payload.responderIndex, val.c, true)
+                                // Pass data for creating transit keys
+								let packet: PacketType = .keyExchange(peers[payload.payload.responderIndex]!, endpoint, payload.payload.responderIndex, val.c, true)
                                 logger.debug("Sending key exhange packet to data handler")
                                 context.fireChannelRead(wrapInboundOut(packet))
+							}
+						}
+						
+					case .cookie(let endpoint, let payload):
+						logger.debug("received cookie packet", metadata:["remote_address":"\(endpoint.description)"])
+						
+						guard let peerPublicKey = peers[payload.receiverIndex] else { return }
+						try withUnsafePointer(to:privateKey) { privateKey in
+							try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
+								let (c, h, ephiPrivateKey, payload) = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
+								initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
+								initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
+								logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(endpoint.description)", "peer_public_key":"\(peerPublicKey.debugDescription)"])
+								context.writeAndFlush(wrapOutboundOut(PacketType.handshakeInitiation(endpoint, try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload:payload))), promise:nil)
 							}
 						}
                         
@@ -103,7 +155,6 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
         switch invoke {
             case let .initiationInvoker(peerPublicKey, endpoint):
                 do {
-                    peers[endpoint] = peerPublicKey
                     try withUnsafePointer(to:privateKey) { privateKey in
                         try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
                             let (c, h, ephiPrivateKey, payload) = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)

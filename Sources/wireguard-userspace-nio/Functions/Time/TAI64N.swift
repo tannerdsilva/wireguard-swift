@@ -9,7 +9,7 @@ public struct _uint64_be:Sendable {}
 public struct _uint32_be:Sendable {}
 
 @RAW_staticbuff(concat:_uint64_be.self, _uint32_be.self)
-public struct TAI64N:Sendable, CustomDebugStringConvertible {
+public struct TAI64N:Sendable, CustomDebugStringConvertible, Comparable {
 	public let seconds:_uint64_be
 	public let nano:_uint32_be
 
