@@ -49,9 +49,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private var nextAllowedReinit: [PeerIndex: NIODeadline] = [:]
     
     // Re handshake time intervals
-    private let softRekey:TimeAmount = .seconds(120)
+    private let rekeyAfterTime:TimeAmount = .seconds(120)
     private let checkEvery:TimeAmount = .seconds(5)
-    private let reinitBackoff:TimeAmount = .seconds(5)
+    private let rekeyTimeout:TimeAmount = .seconds(5)
     
     private let logger:Logger
 
@@ -67,6 +67,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
+	
+	// MARK: - Keep Alive Task
     private func startKeepalive(for peerIndex: PeerIndex, context: ChannelHandlerContext, peerPublicKey: PublicKey) {
         // Avoid duplicates
         if keepaliveTasks[peerIndex] != nil { return }
@@ -80,6 +82,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             delay: keepaliveInterval[peerPublicKey]!
         ) { [weak self] _ in
             guard let self = self else { return }
+			
             // All handler state is accessed on the channel event loop
             guard self.transmitKeys[peerIndex] != nil, self.nonceCounters[peerIndex] != nil else {
 				return
@@ -122,6 +125,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
+	// MARK: - Re-Handshake Task
     private func startRehandshakeTimer(for peerIndex: PeerIndex, context: ChannelHandlerContext, peerPublicKey: PublicKey) {
         guard rehandshakeTasks[peerIndex] == nil else { return }
 
@@ -145,11 +149,11 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 			print(sessions[peerPublicKey])
 
             // If the current session is older than the soft rekey target, trigger a handshake
-            guard now - last >= self.softRekey else { return }
+            guard now - last >= self.rekeyAfterTime else { return }
 
             // Simple rate limiting to avoid storms
             if let next = self.nextAllowedReinit[peerIndex], now < next { return }
-            self.nextAllowedReinit[peerIndex] = now + self.reinitBackoff
+            self.nextAllowedReinit[peerIndex] = now + self.rekeyTimeout
 
             guard let ep = configuration[peerPublicKey]! else {
                 return
@@ -169,6 +173,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         nextAllowedReinit.removeValue(forKey: endpoint)
     }
 	
+	// Scheduled task to eleminate the `previous` session after 10 seconds
 	private func startDeathSentence(for peerIndex: PeerIndex, context: ChannelHandlerContext, delay: TimeAmount = .seconds(10)) {
 		context.eventLoop.scheduleTask(in: delay) { [weak self] in
 			guard let self = self else { return }
@@ -185,6 +190,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         nextAllowedReinit.removeAll()
     }
     
+	// Helper function for decrypting (authenticating) an encrypted packet
     private func decryptPacket(peerPublicKey: PublicKey, packet:consuming DataMessage.DataPayload, transportKey: Result32) -> [UInt8]? {
         // Check validity of the nonce
         if(nonceCounters[packet.payload.receiverIndex]!.Nrecv.isPacketAllowed(packet.payload.counter.RAW_native())){
@@ -221,6 +227,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         keepaliveInterval[peer.publicKey] = nil
     }
 	
+	// Specifically kills and removes the `previous` session
 	private func removePreviousSession(peerPublicKey: PublicKey) {
 		guard let peerSessions = sessions[peerPublicKey] else { return }
 		guard let previous = peerSessions.previous else { return }
@@ -229,6 +236,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 		sessions[peerPublicKey]!.previous = nil
 	}
 	
+	// Rotates sessions to the left (nil <- previous <- current <- next)
 	private func rotateSessions(peerPublicKey: PublicKey, context: ChannelHandlerContext) {
 		removePreviousSession(peerPublicKey: peerPublicKey)
 		guard let peerSessions = sessions[peerPublicKey] else { return }

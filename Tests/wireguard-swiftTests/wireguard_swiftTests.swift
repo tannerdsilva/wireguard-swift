@@ -2,37 +2,9 @@ import Testing
 @testable import wireguard_userspace_nio
 import RAW_dh25519
 import RAW_base64
+import RAW_xchachapoly
 import RAW
-
-// final actor HelloClass {
-// 	var message = "God is good"
-// 	init(altInput:Bool) {
-// 		if altInput {
-// 			print("hello world :(")
-// 		} else {
-// 			print("HELLO WORLD :)")
-// 		}
-// 	}
-// 	func mutateMessage(newMessage: String) {
-// 		message = newMessage
-// 	}
-// 	deinit {
-// 		print(message)
-// 	}
-// }
-
-// @Test func helloTest() async throws {
-// 	var hello: HelloClass = HelloClass(altInput:false)
-// 	let longTask = Task { [h = hello] in
-// 		await h.mutateMessage(newMessage: "poop")
-// 		// wait 10 seconds
-// 		try await Task.sleep(nanoseconds: 10_000_000_000)
-// 	}
-// 	// delay 2 seconds
-// 	try await Task.sleep(nanoseconds: 2_000_000_000)
-// 	await hello.mutateMessage(newMessage: "around the world")
-// 	_ = try await longTask.result
-// }
+import NIO
 
 @Test func testCreateInitilizationMessage() throws {
     let staticPublicKey = try dhGenerate()
@@ -107,4 +79,33 @@ import RAW
     } else {
         print("Invalid UTF-8 data")
     }
+}
+
+@Test func selfValidateCookiePacket() throws {
+	var initiatorPrivateKey = try PrivateKey()
+	
+	var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
+	
+	var responderStaticPrivateKey = try PrivateKey()
+	
+	var responderStaticPublicKey = PublicKey(privateKey:&responderStaticPrivateKey)
+	
+	// Pre-computing HASH(LABEL-COOKIE || Spub)
+	var hasher = try! WGHasherV2<RAW_xchachapoly.Key>()
+	try! hasher.update([UInt8]("cookie--".utf8))
+	try! hasher.update(responderStaticPublicKey)
+	let precomputedCookieKey = try! hasher.finish()
+	
+	var constructedPacket = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
+	var authenticatedPacketToSend = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: &responderStaticPublicKey, payload: constructedPacket.payload)
+	let endpoint = try SocketAddress(ipAddress: "192.0.2.1", port: 51820)
+	let secretCookieR = try! generateSecureRandomBytes(as:Result8.self)
+	let cookie = try CookieReplyMessage.forgeCookieReply(receiverPeerIndex: authenticatedPacketToSend.payload.initiatorPeerIndex, k: precomputedCookieKey, R: secretCookieR, A: endpoint, M: authenticatedPacketToSend.msgMac1)
+	
+	authenticatedPacketToSend = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: &responderStaticPublicKey, payload: constructedPacket.payload, cookie: cookie)
+	
+	let (mac1Valid, mac2Valid) = try HandshakeInitiationMessage.validateUnderLoad([authenticatedPacketToSend], responderStaticPrivateKey: &responderStaticPrivateKey, R: secretCookieR, A: endpoint)
+	
+	#expect(mac1Valid)
+	#expect(mac2Valid)
 }

@@ -10,35 +10,37 @@ import NIO
 internal struct Result24:Sendable{}
 
 internal struct CookieReplyMessage:Sendable {
-	internal static func forgeCookieReply(receiverPeerIndex:PeerIndex, myStaticPublicKey:PublicKey, R: Result8, A: SocketAddress, M:Result16) throws -> Payload {
+	internal static func forgeCookieReply(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key , R: Result8, A: SocketAddress, M:Result16) throws -> Payload {
 		
-		var address:String
+		var address:[UInt8]
 		switch A {
 			case .v4(let addr):
-				address = "\(addr.host):\(String(describing: A.port))"
+				let ipBytes = withUnsafeBytes(of: addr.address.sin_addr.s_addr.bigEndian) { Array($0) }
+				let portBytes = withUnsafeBytes(of: UInt16(A.port!).bigEndian) { Array($0) }
+				address = ipBytes + portBytes
+				
 			case .v6(let addr):
-				address = "[\(addr.host)]:\(String(describing: A.port))"
-			default :
-				address = ""
+				let ipBytes = withUnsafeBytes(of: addr.address.sin6_addr.__u6_addr.__u6_addr8) { Array($0) }
+				let portBytes = withUnsafeBytes(of: UInt16(A.port!).bigEndian) { Array($0) }
+				address = ipBytes + portBytes
+				
+			default:
+				address = []
 		}
 				
-		var T = try wgMac(key: R, data: address._base64Decoded())
+		let T = try wgMac(key: R, data: address)
 		
-		var nonce = try generateSecureRandomBytes(as:Nonce.self)
+		let nonce = try generateSecureRandomBytes(as:Nonce.self)
 		
-		var hasher = try WGHasherV2<RAW_xchachapoly.Key>()
-		try hasher.update([UInt8]("cookie--".utf8))
-		try hasher.update(myStaticPublicKey)
-		var k = try hasher.finish()
 		let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad: M)
 		
-		var msg:Result16 = Result16(RAW_staticbuff:cookieMsg)
+		let msg:Result16 = Result16(RAW_staticbuff:cookieMsg)
 		
 		return Payload(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg: msg, cookieTag: cookieTag)
 	}
 	
 	@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Nonce.self, Result16.self, Tag.self)
-	internal struct Payload:Sendable {
+	internal struct Payload:Sendable, Sequence {
 		/// message type (type and reserved)
 		let typeHeader:TypeHeading
 		/// responder's peer index (I_r)

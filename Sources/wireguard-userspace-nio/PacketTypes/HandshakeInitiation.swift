@@ -1,7 +1,9 @@
 import RAW
 import RAW_dh25519
 import RAW_chachapoly
+import RAW_xchachapoly
 import RAW_base64
+import NIO
 
 @RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
@@ -59,7 +61,7 @@ internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugSt
 
 
 internal struct HandshakeInitiationMessage:Sendable {
-	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
+	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, index:PeerIndex? = nil) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
 		// setup: get initiator public key
 		var initiatorStaticPublicKey = PublicKey(privateKey:initiatorStaticPrivateKey)
 
@@ -123,14 +125,21 @@ internal struct HandshakeInitiationMessage:Sendable {
 						try hasher.update(tsTag)
 						hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
-						return (cPtr.assumingMemoryBound(to:Result32.self).pointee, hPtr.assumingMemoryBound(to:Result32.self).pointee, ephiPrivate, Payload(initiatorPeerIndex:try generateSecureRandomBytes(as:PeerIndex.self), ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
+						// additional step: create new peer index if necessary
+						var myIndex:PeerIndex
+						if(index == nil) {
+							myIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+						} else {
+							myIndex = index!
+						}
+						return (cPtr.assumingMemoryBound(to:Result32.self).pointee, hPtr.assumingMemoryBound(to:Result32.self).pointee, ephiPrivate, Payload(initiatorPeerIndex:myIndex, ephemeral:ephiPublicPtr.assumingMemoryBound(to:PublicKey.self).pointee, staticRegion:msgStatic, staticTag:msgTag, timestamp:tsDat, timestampTag:tsTag))
 					}
 				}
 			}
 		}
 	}
 
-	internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {		
+	internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload, cookie: CookieReplyMessage.Payload? = nil) throws -> AuthenticatedPayload {
 		// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
 		var hasher = try WGHasher()
 		try hasher.update([UInt8]("mac1----".utf8))
@@ -138,9 +147,63 @@ internal struct HandshakeInitiationMessage:Sendable {
 		let mac1 = try wgMac(key:try hasher.finish(), data:copy payload)
 		
 		// step 15: msg.mac2 := 0^16
-		var mac2 = Result16(RAW_staticbuff:Result16.RAW_staticbuff_zeroed())
+		var mac2:Result16 = Result16(RAW_staticbuff:Result16.RAW_staticbuff_zeroed())
+		// if cookie: msg.mac2 := MAC(cookie.msg, msgb)
+		if cookie != nil {
+			var hasher = try WGHasherV2<RAW_xchachapoly.Key>()
+			try hasher.update([UInt8]("cookie--".utf8))
+			try hasher.update(responderStaticPublicKey)
+			let key = try hasher.finish()
+			let cookieMsg = try xaeadDecrypt(key: key, nonce: cookie!.nonce, cipherText: cookie!.cookieMsg, aad: mac1, tag: cookie!.cookieTag)
+			mac2 = try wgMac(key:cookieMsg, data:msgB(payload: copy payload, msgMac1: mac1))
+		}
 
 		return AuthenticatedPayload(payload:payload, msgMac1: mac1, msgMac2: mac2)        
+	}
+	
+	internal static func validateUnderLoad(_ message:UnsafePointer<HandshakeInitiationMessage.AuthenticatedPayload>, responderStaticPrivateKey:UnsafePointer<PrivateKey>, R: Result8, A: SocketAddress) throws -> (mac1Valid:Bool, mac2Valid:Bool) {
+		
+		// setup: get responder public key
+		let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
+		
+		// Try validating msgMac1
+		var hasher = try WGHasher()
+		try hasher.update([UInt8]("mac1----".utf8))
+		try hasher.update(responderStaticPublicKey)
+		let mac1 = try hasher.finish().RAW_access_staticbuff { hasherOutputPtr in
+			return try wgMACv2(key:hasherOutputPtr, count:MemoryLayout<Result32>.size, data: message.pointer(to:\.payload)!, count:MemoryLayout<HandshakeInitiationMessage.Payload>.size)
+		}
+		guard mac1 == message.pointer(to:\.msgMac1)!.pointee else {
+			return (false, false)
+		}
+		
+		// Try validating msgMac2
+		var address:[UInt8]
+		switch A {
+			case .v4(let addr):
+				let ipBytes = withUnsafeBytes(of: addr.address.sin_addr.s_addr.bigEndian) { Array($0) }
+				let portBytes = withUnsafeBytes(of: UInt16(A.port!).bigEndian) { Array($0) }
+				address = ipBytes + portBytes
+				
+			case .v6(let addr):
+				let ipBytes = withUnsafeBytes(of: addr.address.sin6_addr.__u6_addr.__u6_addr8) { Array($0) }
+				let portBytes = withUnsafeBytes(of: UInt16(A.port!).bigEndian) { Array($0) }
+				address = ipBytes + portBytes
+				
+			default:
+				address = []
+		}
+		
+		let T = try wgMac(key: R, data: address)
+
+		let mac2 = try wgMac(key:T, data:msgB(payload: message.pointee.payload, msgMac1: mac1))
+		print(mac2)
+		guard mac2 == message.pointer(to:\.msgMac2)!.pointee else {
+			return (true, false)
+		}
+		
+		// Both macs valid
+		return (true, true)
 	}
 	
 	internal struct MAC1InvalidError:Swift.Error {}
@@ -246,6 +309,16 @@ internal struct HandshakeInitiationMessage:Sendable {
 			self.staticTag = staticTag
 			self.timestamp = timestamp
 			self.timestampTag = timestampTag
+		}
+	}
+	
+	@RAW_staticbuff(concat:Payload.self, Result16.self)
+	internal struct msgB:Sendable {
+		internal let payload:Payload
+		internal let msgMac1:Result16
+		fileprivate init(payload:Payload, msgMac1:Result16) {
+			self.payload = payload
+			self.msgMac1 = msgMac1
 		}
 	}
 	

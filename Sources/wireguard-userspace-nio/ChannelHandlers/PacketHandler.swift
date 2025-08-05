@@ -92,9 +92,12 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				destinationEndpoint = endpoint
 				sendBuffer = buffer
 				logger.debug("sending handshake response packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
-			case .cookie:
-				logger.warning("attempted to send cookie packet, which is not supported")
-				return
+			case let .cookie(endpoint, payload):
+				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<CookieReplyMessage.Payload>.size)
+				buffer.writeBytes(payload)
+				destinationEndpoint = endpoint
+				sendBuffer = buffer
+				logger.debug("sending cookie packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
             case .encryptedTransit(let endpoint, let payload):
                 logger.debug("Sending transit packout outbound")
                 var size: RAW.size_t = 0
