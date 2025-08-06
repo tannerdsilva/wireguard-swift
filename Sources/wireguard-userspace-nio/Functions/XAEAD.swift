@@ -16,8 +16,8 @@ internal func xaead(key:RAW_xchachapoly.Key, counter:UInt64, text:borrowing [UIn
 	}, ourTag)
 }
 
-internal func xaeadDecrypt(key:RAW_xchachapoly.Key, counter:UInt64, cipherText:borrowing [UInt8], aad:consuming [UInt8], tag:consuming Tag) throws -> [UInt8] {
-	return try [UInt8](unsafeUninitializedCapacity: cipherText.count) { plainText, initializedCount in
+internal func xaeadDecrypt(key:RAW_xchachapoly.Key, counter:UInt64, cipherText:borrowing [UInt8], aad:consuming [UInt8], tag:consuming Tag) throws -> Result16 {
+	return try Result16(RAW_staticbuff:[UInt8](unsafeUninitializedCapacity: cipherText.count) { plainText, initializedCount in
 		var context = RAW_xchachapoly.Context(key:key)
 		try cipherText.RAW_access { cipherTextBuff in
 			try aad.RAW_access { aadBuff in
@@ -27,5 +27,5 @@ internal func xaeadDecrypt(key:RAW_xchachapoly.Key, counter:UInt64, cipherText:b
 			}
 		}
 		initializedCount = cipherText.count
-	}
+	})
 }

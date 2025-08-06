@@ -51,6 +51,12 @@ let package = Package(
 				.product(name:"bedrock_ip", package:"bedrock"),
 			]
 		),
+		.target(
+			name:"kcp-core",
+			dependencies:[
+				.product(name:"RAW", package:"rawdog"),
+			]
+		),
 		.testTarget(
 			name: "wireguard-swiftTests",
 			dependencies: [
