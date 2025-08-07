@@ -72,19 +72,20 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	// Sends the cookie after REKEY-TIMEOUT time
 	private func sendCookieInitiation(context: ChannelHandlerContext, cookie:PacketType) {
-		context.eventLoop.scheduleTask(in: .seconds(5)) { [weak self] in
+		context.eventLoop.scheduleTask(in:.seconds(5)) { [weak self, c = ContextContainer(context:context)] in
 			guard let self = self else { return }
-			context.writeAndFlush(wrapOutboundOut(cookie), promise:nil)
+			c.accessContext { contextPointer in
+				contextPointer.pointee.writeAndFlush(wrapOutboundOut(cookie), promise:nil)
+			}
 		}
 	}
 	
 	// Rekey attempt when initiation doesn't get a valid response
 	private func startRekeyAttempts(for peerIndex: PeerIndex, context: ChannelHandlerContext, peerPublicKey: PublicKey, endpoint: SocketAddress) {
 		guard rekeyAttemptTasks[peerIndex] == nil else { return }
-
 		rekeyAttemptsStartTime[peerIndex] = .now()
 
-		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: rekeyTimeout, delay: rekeyTimeout) { [weak self] _ in
+		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: rekeyTimeout, delay: rekeyTimeout) { [weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 
 			let now = NIODeadline.now()
@@ -96,8 +97,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 				return
 			}
 
-			self.logger.debug("Retrying handshake for peer \(peerIndex) due to timeout")
-			context.writeAndFlush(self.wrapOutboundOut(.handshakeInitiation(endpoint, <#T##HandshakeInitiationMessage.AuthenticatedPayload#>)), promise: nil)
+			logger.debug("Retrying handshake for peer \(peerIndex) due to timeout")
+			c.accessContext { contextPointer in
+				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.handshakeInitiation(endpoint, initiationPackets[peerIndex]!)), promise: nil)
+			}
 		}
 		
 		rekeyAttemptTasks[peerIndex] = task
@@ -122,8 +125,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							
 							let (mac1Valid, mac2Valid) = try HandshakeInitiationMessage.validateUnderLoad([payload], responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, A: endpoint)
 							
-							if(!mac1Valid) { return }
-							else if(!mac2Valid) {
+							if (!mac1Valid) {
+								return 
+							} else if(!mac2Valid) {
 								// Create and send cookie
 								let cookie = try CookieReplyMessage.forgeCookieReply(receiverPeerIndex: payload.payload.initiatorPeerIndex, k: precomputedCookieKey, R: secretCookieR, A: endpoint, M: payload.msgMac1)
 								let packet: PacketType = .cookie(endpoint, cookie)

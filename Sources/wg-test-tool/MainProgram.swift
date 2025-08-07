@@ -25,8 +25,8 @@ struct CLI:AsyncParsableCommand {
 
 		func run() throws {
 			let (publicKey, privateKey) = try dhGenerate()
-			let publicKeyBase64 = String(try RAW_base64.encode(publicKey))
-			let privateKeyBase64 = String(try RAW_base64.encode(privateKey))
+			let publicKeyBase64 = String(RAW_base64.encode(publicKey))
+			let privateKeyBase64 = String(RAW_base64.encode(privateKey))
 			print("Public Key: \(publicKeyBase64)")
 			print("Private Key: \(privateKeyBase64)")
 		}
@@ -46,7 +46,7 @@ struct CLI:AsyncParsableCommand {
 			var privKeyCopy = privateKey
 			var pubKeyCopy = publicKey
 			let sharedKey = SharedKey.compute(privateKey: &privKeyCopy, publicKey: &pubKeyCopy)
-			print("shared secret: \(String(try RAW_base64.encode(sharedKey)))")
+			print("shared secret: \(String(RAW_base64.encode(sharedKey)))")
 		}
 	}
 
