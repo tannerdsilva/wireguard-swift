@@ -34,9 +34,13 @@ public struct Peer:Sendable {
 	}
 }
 
+protocol WGIMPL {
+	associatedtype OutputType
+}
+
 /// primary wireguard interface. this is how connections will be made.
 public final actor WGInterface:Sendable, Service {
-	
+
 	public struct InvalidInterfaceStateError:Swift.Error {}
 
 	let logger:Logger
