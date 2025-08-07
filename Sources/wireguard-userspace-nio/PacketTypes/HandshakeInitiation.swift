@@ -70,14 +70,14 @@ internal struct HandshakeInitiationMessage:Sendable {
 		return try c.RAW_access_staticbuff_mutating { cPtr in
 
 			// step 2: h = hash(ci || identifier)
-			var hasher = try WGHasher()
+			var hasher = try WGHasherV2<Result32>()
 			try hasher.update(cPtr, count:MemoryLayout<Result32>.size)
 			try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
 			var h = try hasher.finish()
 			return try h.RAW_access_staticbuff_mutating { hPtr in
 				
 				// step 3: h = hash(h || responderStaticPublicKey public key)
-				hasher = try WGHasher()
+				hasher = try WGHasherV2<Result32>()
 				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 				try hasher.update(responderStaticPublicKey, count:MemoryLayout<PublicKey>.size)
 				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -92,7 +92,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 					// step 6: assign e.Public to the ephemeral field
 
 					// step 7: h = hash(h | ephiPublic)
-					hasher = try WGHasher()
+					hasher = try WGHasherV2<Result32>()
 					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 					try hasher.update(ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
 					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -105,7 +105,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 					let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:hPtr.assumingMemoryBound(to:Result32.self))
 
 					// step 10: h = hash(h || msg.static)
-					hasher = try WGHasher()
+					hasher = try WGHasherV2<Result32>()
 					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 					try hasher.update(msgStatic)
 					try hasher.update(msgTag)
@@ -119,7 +119,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 						let (tsDat, tsTag) = try aeadEncrypt(key:&k, counter:0, text:taiPointer, aad:hPtr.assumingMemoryBound(to:Result32.self))
 
 						// step 13: h = hash(h || msg.timestamp)
-						hasher = try WGHasher()
+						hasher = try WGHasherV2<Result32>()
 						try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 						try hasher.update(tsDat)
 						try hasher.update(tsTag)
@@ -141,7 +141,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 
 	internal static func finalizeInitiationState(responderStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload, cookie: CookieReplyMessage.Payload? = nil) throws -> AuthenticatedPayload {
 		// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
-		var hasher = try WGHasher()
+		var hasher = try WGHasherV2<Result32>()
 		try hasher.update([UInt8]("mac1----".utf8))
 		try hasher.update(responderStaticPublicKey)
 		let mac1 = try wgMac(key:try hasher.finish(), data:copy payload)
@@ -167,7 +167,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 		let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
 		
 		// Try validating msgMac1
-		var hasher = try WGHasher()
+		var hasher = try WGHasherV2<Result32>()
 		try hasher.update([UInt8]("mac1----".utf8))
 		try hasher.update(responderStaticPublicKey)
 		let mac1 = try hasher.finish().RAW_access_staticbuff { hasherOutputPtr in
@@ -216,13 +216,13 @@ internal struct HandshakeInitiationMessage:Sendable {
 		var c = try wgHash([UInt8]("Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s".utf8))
 		return try c.RAW_access_staticbuff_mutating { cPtr in
 			// step 2: h = hash(ci || identifier)
-			var hasher = try WGHasher()
+			var hasher = try WGHasherV2<Result32>()
 			try hasher.update(cPtr, count:MemoryLayout<Result32>.size)
 			try hasher.update([UInt8]("WireGuard v1 zx2c4 Jason@zx2c4.com".utf8))
 			var h = try hasher.finish()
 			return try h.RAW_access_staticbuff_mutating { hPtr in
 				// step 3: h = hash(h || responderStaticPublicKey)
-				hasher = try WGHasher()
+				hasher = try WGHasherV2<Result32>()
 				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 				try hasher.update(responderStaticPublicKey)
 				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -234,7 +234,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 				cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2(Result32.self, key:cPtr, count:MemoryLayout<Result32>.size, data:initiatorEphemeralPublicKey)
 
 				// step 6: h = hash(h || initiatorEphemeralPublicKey)
-				hasher = try WGHasher()
+				hasher = try WGHasherV2<Result32>()
 				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 				try hasher.update(initiatorEphemeralPublicKey)
 				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -249,7 +249,7 @@ internal struct HandshakeInitiationMessage:Sendable {
 				let publickey = String(try RAW_base64.encode(initStaticPublicKey))
 			
 				// step 9: h = hash(h || msg.static)
-				hasher = try WGHasher()
+				hasher = try WGHasherV2<Result32>()
 				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.staticRegion)!, count:MemoryLayout<PublicKey>.size)
 				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.staticTag)!, count:MemoryLayout<Tag>.size)
@@ -262,14 +262,14 @@ internal struct HandshakeInitiationMessage:Sendable {
 				let sentTimestamp = try aeadDecrypt(key:&k, counter:0, cipherText:message.pointer(to:\.payload.timestamp)!, aad:hPtr.assumingMemoryBound(to:Result32.self), tag:message.pointer(to:\.payload)!.pointer(to:\.timestampTag)!.pointee)
 
 				// step 12: h = hash(h || msg.static)
-				hasher = try WGHasher()
+				hasher = try WGHasherV2<Result32>()
 				try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.timestamp)!, count:MemoryLayout<TAI64N>.size)
 				try hasher.update(message.pointer(to:\.payload)!.pointer(to:\.timestampTag)!, count:MemoryLayout<Tag>.size)
 				hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
 
 				// step 13: create MAC1
-				hasher = try WGHasher()
+				hasher = try WGHasherV2<Result32>()
 				try hasher.update([UInt8]("mac1----".utf8))
 				try hasher.update(responderStaticPublicKey)
 				let mac1 = try hasher.finish().RAW_access_staticbuff { hasherOutputPtr in

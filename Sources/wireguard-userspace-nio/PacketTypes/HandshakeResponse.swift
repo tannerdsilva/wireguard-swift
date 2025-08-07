@@ -17,7 +17,7 @@ internal struct HandshakeResponseMessage:Sendable {
 					cPtr.assumingMemoryBound(to:Result32.self).pointee = try wgKDFv2(Result32.self, key:cPtr, count:MemoryLayout<Result32>.size, data:ephiPublic, count:MemoryLayout<Result32>.size)
 					
 					// step 4: h := HASH(h || msg.ephemeral)
-					var hasher = try WGHasher()
+					var hasher = try WGHasherV2<Result32>()
 					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 					try hasher.update(ephiPublic, count:MemoryLayout<PublicKey>.size)
 					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -36,7 +36,7 @@ internal struct HandshakeResponseMessage:Sendable {
 					(cPtr.assumingMemoryBound(to:Result32.self).pointee, T, k) = try wgKDFv2((Result32, Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:preSharedKey)
 					
 					// step 8: h := HASH(H || T)
-					hasher = try WGHasher()
+					hasher = try WGHasherV2<Result32>()
 					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 					try hasher.update(T)
 					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -46,7 +46,7 @@ internal struct HandshakeResponseMessage:Sendable {
 					let (_, emptyTag) = try aeadEncrypt(key:&k, counter:0, text:&e, aad:hPtr.assumingMemoryBound(to:Result32.self))
 					
 					// step 10: h := HASH(h || msg.empty)
-					hasher = try WGHasher()
+					hasher = try WGHasherV2<Result32>()
 					try hasher.update(hPtr, count:MemoryLayout<Result32>.size)
 					try hasher.update(emptyTag)
 					hPtr.assumingMemoryBound(to:Result32.self).pointee = try hasher.finish()
@@ -59,7 +59,7 @@ internal struct HandshakeResponseMessage:Sendable {
 	
 	internal static func finalizeResponseState(initiatorStaticPublicKey:UnsafePointer<PublicKey>, payload:consuming Payload) throws -> AuthenticatedPayload {
 		// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
-		var hasher = try WGHasher()
+		var hasher = try WGHasherV2<Result32>()
 		try hasher.update([UInt8]("mac1----".utf8))
 		try hasher.update(initiatorStaticPublicKey)
 		let mac1 = try wgMac(key:try hasher.finish(), data:copy payload)
@@ -85,7 +85,7 @@ internal struct HandshakeResponseMessage:Sendable {
 		c = try! wgKDF(key:c, data:responderEphemeralPublicKey, type:1)[0]
 		
 		// step 4: h := HASH(h || msg.ephemeral)
-		var hasher = try WGHasher()
+		var hasher = try WGHasherV2<Result32>()
 		try hasher.update(h)
 		try hasher.update(responderEphemeralPublicKey)
 		h = try hasher.finish()
@@ -104,7 +104,7 @@ internal struct HandshakeResponseMessage:Sendable {
 		c = arr[0]; T = arr[1]; k = arr[2]
 		
 		// step 8: h := HASH(H || T)
-		hasher = try WGHasher()
+		hasher = try WGHasherV2<Result32>()
 		try hasher.update(h)
 		try hasher.update(T)
 		h = try hasher.finish()
@@ -114,13 +114,13 @@ internal struct HandshakeResponseMessage:Sendable {
 		var msgEmpty = try! aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:&h, tag:message.pointer(to:\.payload.emptyTag)!.pointee)
 
 		// step 10: h := HASH(h || msg.empty)
-		hasher = try WGHasher()
+		hasher = try WGHasherV2<Result32>()
 		try hasher.update(h)
 		try hasher.update(message.pointee.payload.emptyTag)
 		h = try hasher.finish()
 		
 		// step 13: create MAC1
-		hasher = try WGHasher()
+		hasher = try WGHasherV2<Result32>()
 		try hasher.update([UInt8]("mac1----".utf8))
 		try hasher.update(initiatorStaticPublicKey)
 		let mac1 = try! wgMac(key:try hasher.finish(), data: message.pointee.payload)

@@ -14,7 +14,6 @@ internal func wgHash<A>(_ data:borrowing A) throws -> Result32 where A:RAW_acces
 	try newHasher.update(data)
 	return try newHasher.finish()
 }
-internal typealias WGHasher = RAW_blake2.Hasher<S, Result32>
 internal typealias WGHasherV2<K> = RAW_blake2.Hasher<S, K> where K:RAW_staticbuff
 
 @RAW_staticbuff(bytes:16)
