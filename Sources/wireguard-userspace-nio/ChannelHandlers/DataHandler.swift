@@ -171,7 +171,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	// Scheduled task to eleminate the `previous` session after 10 seconds
 	private func startDeathSentence(for peerIndex: PeerIndex, context: ChannelHandlerContext, delay: TimeAmount = .seconds(10)) {
-		context.eventLoop.scheduleTask(in: delay) { [weak self] in
+		context.eventLoop.scheduleTask(in:delay) { [weak self] in
 			guard let self = self else { return }
 			self.killSession(peerIndex: peerIndex)
 			self.logger.debug("Session for peerIndex \(peerIndex) killed after delay")
@@ -281,22 +281,22 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 		
 		sessions.removeValue(forKey: peerPublicKey)
-        logger.debug("Killed all sessions for \(peerPublicKey)")
+        logger.debug("killed all sessions for \(peerPublicKey)")
     }
 
     internal func getConfiguration() -> [PublicKey: SocketAddress?] {
         return configuration
     }
     
-    public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+    internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         do {
             switch unwrapInboundIn(data) {
                 // Decrypt the payload or send initiation message if unable to decrypt
                 case .encryptedTransit(let endpoint, let payload):
                     let peerIndex = payload.payload.receiverIndex
-                    // Find assosiated peer session, else drop packet
+                    // Find associated peer session, else drop packet
                     guard let publicKey = sessionsInv[peerIndex] else {
-                        logger.debug("Received Packet from unknown source")
+                        logger.debug("received packet from unknown source")
                         return
                     }
                     // Authenticate packet, else drop packet
@@ -363,7 +363,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     } else {
                         transmitKeys[peerIndex] = (arr[1], arr[0])
                     }
-                    logger.debug("Transmit keys calculated")
+                    logger.debug("transmit keys calculated")
                 
                     // Start session timers (keep alive, re-handshake timer, ...)
 					
@@ -397,7 +397,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     }
     
     // Handles writing inbound data into an encrypted transit packet
-    func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+    internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
         switch unwrapOutboundIn(data) {
             case .addPeer(let peer):
                 addPeer(peer: peer)
@@ -417,7 +417,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						lastOutbound[peerIndex.current!] = .now()
                     } else {
                         // Send handshake since there is no active session
-                        logger.debug("Initiation Invoker send down to the handshake handler")
+                        logger.debug("initiation invoker send down to the handshake handler")
                         context.writeAndFlush(wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise:nil)
                         
                         // Add packet to be encrypted after handshake
@@ -425,14 +425,14 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                         pendingWriteFutures[publicKey, default: []].append((bytes, promise))
                     }
                 } catch {
-                    logger.debug("Unable to encrypt incoming data into a transit packet")
+                    logger.debug("unable to encrypt incoming data into a transit packet")
                     context.fireErrorCaught(error)
                 }
         }
     }
     
     // Finish the queue when channel shuts down
-    func channelInactive(context: ChannelHandlerContext) {
+    internal func channelInactive(context: ChannelHandlerContext) {
 		// there used to be some code here but it has since been removed and now this function does nothing.
     }
 }

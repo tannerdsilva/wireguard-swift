@@ -1,14 +1,12 @@
-// Yummmm, Cookie
-
+// yummmm, cookie
 import RAW
 import RAW_dh25519
 import RAW_xchachapoly
 import RAW_base64
-import NIO
+import enum NIO.SocketAddress
 
-@RAW_staticbuff(bytes: 24)
-internal struct Result24:Sendable{}
-
+@RAW_staticbuff(bytes:24)
+internal struct Result24:Sendable {}
 internal struct CookieReplyMessage:Sendable {
 	internal static func forgeCookieReply(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key , R: Result8, A: SocketAddress, M:Result16) throws -> Payload {
 		

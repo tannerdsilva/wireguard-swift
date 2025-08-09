@@ -99,21 +99,14 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				sendBuffer = buffer
 				logger.debug("sending cookie packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
             case .encryptedTransit(let endpoint, let payload):
-                logger.debug("Sending transit packout outbound")
+                logger.trace("sending transit packet outbound")
                 var size: RAW.size_t = 0
                 payload.RAW_encode(count: &size)
-
-				let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
-				defer { pointer.deallocate() }
-
-				payload.RAW_encode(dest: pointer)
-				let byteBuffer = Array(UnsafeBufferPointer(start: pointer, count: size))
-
-                let allocator = ByteBufferAllocator()
-                var buffer = allocator.buffer(capacity: byteBuffer.count)
-                buffer.writeBytes(byteBuffer)
+                var buffer = context.channel.allocator.buffer(capacity:size)
+                buffer.writeWithUnsafeMutableBytes(minimumWritableBytes:size) { [p = payload] ob in
+					return ob.baseAddress!.distance(to:p.RAW_encode(dest:ob.baseAddress!.assumingMemoryBound(to:UInt8.self)))
+				}
                 sendBuffer = buffer
-            
                 destinationEndpoint = endpoint
             case .keyExchange:
                 logger.warning("attempted to send transit packet, which is not supported")

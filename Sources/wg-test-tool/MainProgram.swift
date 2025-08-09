@@ -22,7 +22,6 @@ struct CLI:AsyncParsableCommand {
 		static let configuration = CommandConfiguration(
 			abstract:"Generate a new WireGuard key pair."
 		)
-
 		func run() throws {
 			let (publicKey, privateKey) = try dhGenerate()
 			let publicKeyBase64 = String(RAW_base64.encode(publicKey))

@@ -65,9 +65,7 @@ internal struct HandshakeResponseMessage:Sendable {
 		let mac1 = try wgMac(key:try hasher.finish(), data:copy payload)
 		
 		// step 15: msg.mac2 := 0^16
-		var mac2 = Result16(RAW_staticbuff:Result16.RAW_staticbuff_zeroed())
-
-		return AuthenticatedPayload(payload:payload, msgMac1: mac1, msgMac2: mac2)
+		return AuthenticatedPayload(payload:payload, msgMac1: mac1, msgMac2:Result16(RAW_staticbuff:Result16.RAW_staticbuff_zeroed()))
 	}
 	
 	internal struct MAC1InvalidError:Swift.Error {}
@@ -158,11 +156,8 @@ internal struct HandshakeResponseMessage:Sendable {
 	@RAW_staticbuff(concat:Payload.self, Result16.self, Result16.self)
 	internal struct AuthenticatedPayload:Sendable, Sequence {
 		let payload:Payload
-		
 		let msgMac1:Result16
-		
 		let msgMac2:Result16
-		
 		fileprivate init(payload:Payload, msgMac1:Result16, msgMac2:Result16) {
 			self.payload = payload
 			self.msgMac1 = msgMac1

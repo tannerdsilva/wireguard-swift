@@ -5,61 +5,6 @@ import RAW_xchachapoly
 import RAW_base64
 import NIO
 
-@RAW_staticbuff(bytes:4)
-@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-internal struct PeerIndex:Sendable, Hashable, CustomDebugStringConvertible {
-	internal static func random() throws -> Self {
-		return try generateSecureRandomBytes(as:Self.self)
-	}
-	public var debugDescription:String {
-		return "\(RAW_native())"
-	}
-}
-
-/// defines the reserved field that follows the message type byte. these two items make up the first 4 bytes of any wireguard packet, unconditionally.
-@RAW_staticbuff(bytes:3)
-internal struct Reserved:Sendable {
-	/// initializes a new Reserved
-	internal init() {
-		self = Self(RAW_staticbuff:[0, 0, 0])
-	}
-}
-
-/// makes up the first 4 bytes of any wireguard packet, unconditionally.
-@RAW_staticbuff(concat:RAW_byte.self, Reserved.self)
-internal struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugStringConvertible {
-	/// the type of packet
-	internal let type:RAW_byte
-	/// reserved bytes that follow the type byte
-	internal let reserved:Reserved
-
-	internal init(integerLiteral value:UInt8) {
-		self.type = RAW_byte(RAW_native:value)
-		self.reserved = Reserved()
-	}
-
-	internal var debugDescription: String {
-		return "\(type.RAW_native())"
-	}
-
-	/// validates that the type is a valid wireguard packet type and that the reserved bytes are all zero.
-	/// - returns: true if the type is valid and the reserved bytes are all zero, false otherwise.
-	internal func isValid() -> Bool {
-		return reserved.RAW_access {
-			guard $0[0] == 0 && $0[1] == 0 && $0[2] == 0 else {
-				return false
-			}
-			switch type.RAW_native() {
-				case 0x1, 0x2, 0x3, 0x4:
-					return true
-				default:
-					return false
-			}
-		}
-	}
-}
-
-
 internal struct HandshakeInitiationMessage:Sendable {
 	internal static func forgeInitiationState(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, index:PeerIndex? = nil) throws -> (c:Result32, h:Result32, ephiPrivateKey:PrivateKey, payload:Payload) {
 		// setup: get initiator public key
