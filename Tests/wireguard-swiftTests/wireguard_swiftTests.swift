@@ -75,6 +75,8 @@ import NIO
     
     let decryptedPacket = try DataMessage.decryptDataMessage(&encryptedPacket, transportKey: TRrecv)
     if let recoveredMessage = String(bytes: decryptedPacket, encoding: .utf8) {
+		print("Recovered message: '\(recoveredMessage) @ \(recoveredMessage.count) bytes'")
+		print("Original message: '\(message)' @ \(message.count) bytes'")
 		#expect(recoveredMessage == message)
     } else {
         struct InvalidUTF8Error:Swift.Error {}

@@ -79,7 +79,7 @@ extension Message {
 			}
 
 			public borrowing func decrypt(transportKey:borrowing Result32) throws -> [UInt8] {
-				return try aeadDecryptV2(key:transportKey, counter:header.counter.RAW_native(), cipherText:data, aad:[], tag:header.packetTag)
+				return try aeadDecryptV2(as:[UInt8].self, key:transportKey, counter:header.counter.RAW_native(), cipherText:data, aad:[], tag:header.packetTag)
 			}
 
 			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result32, plainText:[UInt8]) throws -> Self {

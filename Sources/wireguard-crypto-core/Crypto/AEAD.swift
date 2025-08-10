@@ -16,7 +16,7 @@ internal func aeadEncrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, text:Un
 	}
 }
 
-internal func aeadEncryptV2<A, D, K>(key:borrowing K, counter:UInt64, text:borrowing A, aad:UnsafePointer<D>) throws -> (A, Tag) where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
+internal func aeadEncryptV2<A, D, K, O>(as _:O.Type = A.self, key:borrowing K, counter:UInt64, text:borrowing A, aad:UnsafePointer<D>) throws -> (O, Tag) where A:RAW_staticbuff, O:RAW_staticbuff, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype, A.RAW_staticbuff_storetype == O.RAW_staticbuff_storetype {
 	var context = RAW_chachapoly.Context(key:key)
 	return try text.RAW_access { textBuff in
 		let cipherText = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:textBuff.count)
@@ -26,7 +26,7 @@ internal func aeadEncryptV2<A, D, K>(key:borrowing K, counter:UInt64, text:borro
 				try context.encrypt(nonce:$0.load(as:Nonce.self), associatedData:aadBuff, inputData:textBuff, output:cipherText.baseAddress!)
 			}
 		}
-		return (A(RAW_decode:cipherText.baseAddress!, count: textBuff.count)!, tag)
+		return (O(RAW_decode:cipherText.baseAddress!, count: textBuff.count)!, tag)
 	}
 }
 
@@ -44,7 +44,7 @@ internal func aeadDecrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, cipherT
 	}
 }
 
-internal func aeadDecryptV2<A, D, K>(key:borrowing K, counter:UInt64, cipherText:borrowing [UInt8], aad:consuming D, tag:Tag) throws -> A where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
+internal func aeadDecryptV2<A, D, K, O>(as _:O.Type, key:borrowing K, counter:UInt64, cipherText:borrowing A, aad:consuming D, tag:Tag) throws -> O where A:RAW_accessible, O:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
 	var context = RAW_chachapoly.Context(key:key)
 	return try cipherText.RAW_access { cipherTextBuff in
 		let plainText = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:cipherTextBuff.count)
@@ -54,6 +54,6 @@ internal func aeadDecryptV2<A, D, K>(key:borrowing K, counter:UInt64, cipherText
 				try context.decrypt(tag:tag, nonce:$0.load(as:Nonce.self), associatedData:aadBuff, inputData:cipherTextBuff, output:plainText.baseAddress!)
 			}
 		}
-		return A(RAW_decode:plainText.baseAddress!, count:cipherTextBuff.count)!
+		return O(RAW_decode:plainText.baseAddress!, count:cipherTextBuff.count)!
 	}
 }
