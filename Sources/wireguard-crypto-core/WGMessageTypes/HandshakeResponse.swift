@@ -110,7 +110,7 @@ extension Message.Response.Payload {
 			self.msgMac2 = msgMac2
 		}
 
-		internal borrowing func validate(c cIn:consuming Result32, h hIn:consuming Result32, initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, initiatorEphemeralPrivateKey:UnsafePointer<PrivateKey>, preSharedKey:Result32) throws -> (c:Result32, h:Result32) {
+		public borrowing func validate(c cIn:consuming Result32, h hIn:consuming Result32, initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, initiatorEphemeralPrivateKey:UnsafePointer<PrivateKey>, preSharedKey:Result32) throws -> (c:Result32, h:Result32) {
 			return try withUnsafePointer(to:self) { selfPtr in
 				try cIn.RAW_access_staticbuff_mutating { cPtr in
 					try hIn.RAW_access_staticbuff_mutating { hPtr in

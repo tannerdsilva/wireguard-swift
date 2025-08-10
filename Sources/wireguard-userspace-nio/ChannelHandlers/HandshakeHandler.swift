@@ -3,6 +3,7 @@ import RAW_dh25519
 import RAW_xchachapoly
 import Logging
 import RAW
+import wireguard_crypto_core
 
 // handles the handshakes for the WireGuard protocol.
 // - NOTE: this handler is marked as `@unchecked Sendable` because it trusts NIO event loops to manage its internal state correctly
@@ -20,8 +21,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var peers:[PeerIndex:PublicKey] = [:]
 	internal var peersAddressBook:[SocketAddress:PublicKey] = [:]
 	
-	// Storing initiation packets unless they recieve a validation
-	internal var initiationPackets:[PeerIndex:HandshakeInitiationMessage.AuthenticatedPayload] = [:]
+	// Storing initiation packets unless they recieve a valid response
+	internal var initiationPackets:[PeerIndex:Message.Initiation.Payload.Authenticated] = [:]
 	
 	// Precomputed key for the cookie
 	internal var precomputedCookieKey:RAW_xchachapoly.Key
@@ -116,23 +117,25 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 						// Check if we are under heavy load
 						if underLoad {
-							
-							let (mac1Valid, mac2Valid) = try HandshakeInitiationMessage.validateUnderLoad([payload], responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, A: endpoint)
-							
-							if (!mac1Valid) {
-								return 
-							} else if (!mac2Valid) {
+
+							do {
+								try payload.validateUnderLoad(responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, A: endpoint)
+							} catch Message.Initiation.Payload.Authenticated.Error.mac2Invalid {
 								// Create and send cookie
-								let cookie = try CookieReplyMessage.forgeCookieReply(receiverPeerIndex: payload.payload.initiatorPeerIndex, k: precomputedCookieKey, R: secretCookieR, A: endpoint, M: payload.msgMac1)
+								let cookie = try Message.Cookie.Payload.forge(receiverPeerIndex: payload.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, a: endpoint, m: payload.msgMac1)
 								let packet: PacketType = .cookie(endpoint, cookie)
 								context.writeAndFlush(wrapOutboundOut(packet)).whenSuccess { [logger = logger, e = endpoint] in
 									logger.debug("cookie reply message sent to endpoint", metadata:["endpoint":"\(e)"])
 								}
 								return
+							} catch Message.Initiation.Payload.Authenticated.Error.mac1Invalid {
+								// Ignore the packet, it is invalid
+								logger.debug("received invalid handshake initiation packet, ignoring")
+								return
 							}
 						}
-						
-						var val = try HandshakeInitiationMessage.validateInitiationMessage([payload], responderStaticPrivateKey: responderPrivateKey)
+
+						var val = try payload.validate(responderStaticPrivateKey: responderPrivateKey)
 						peers[payload.payload.initiatorPeerIndex] = val.initPublicKey
 						
 						// Check handshake packet time
@@ -144,8 +147,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						initiationTimers[payload.payload.initiatorPeerIndex] = val.timestamp
 						
 						let sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
-						let response = try HandshakeResponseMessage.forgeResponseState(c:val.c, h:val.h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
-						let authResponse = try HandshakeResponseMessage.finalizeResponseState(initiatorStaticPublicKey:&val.initPublicKey, payload:response.payload)
+						let response = try Message.Response.Payload.forge(c:val.c, h:val.h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
+						let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&val.initPublicKey)
 						let packet:PacketType = .handshakeResponse(endpoint, authResponse)
 						
 						context.writeAndFlush(wrapOutboundOut(packet)).whenSuccess { [logger = logger] in
@@ -174,7 +177,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						try withUnsafePointer(to:privateKey) { myPrivateKeyPointer in
 							try withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorEphiPrivateKeyPtr in
 								// Validate handshake response
-								let val = try HandshakeResponseMessage.validateResponseMessage(c:existingC, h:existingH, message:&payload, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
+								let val = try payload.validate(c:existingC, h:existingH, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
 								
 								// Remove held initiation packet
@@ -208,7 +211,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
 								var phantomCookie: PacketType
 								do {
-									let authCookiePacket = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload:initiationPacket.payload, cookie: cookiePayload)
+									let authCookiePacket = try initiationPacket.payload.finalize(responderStaticPublicKey: expectedPeerPublicKey, cookie: cookiePayload)
 									initiationPackets[initiationPacket.payload.initiatorPeerIndex] = authCookiePacket
 									phantomCookie = PacketType.handshakeInitiation(endpoint, authCookiePacket)
 								} catch {
@@ -254,7 +257,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					try withUnsafePointer(to:privateKey) { privateKey in
 						try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
 							// Forge initiation packet
-							let (c, h, ephiPrivateKey, payload) = try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
+							let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey: privateKey, responderStaticPublicKey:expectedPeerPublicKey)
 							
 							// Store keys and c/h for response
 							initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
@@ -262,7 +265,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							
 							// Send initiation packet to packet handler
 							logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(endpoint.description)", "peer_public_key":"\(peerPublicKey.debugDescription)"])
-							let authPayload = try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: expectedPeerPublicKey, payload:payload)
+							let authPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
 							context.writeAndFlush(wrapOutboundOut(PacketType.handshakeInitiation(endpoint, authPayload)), promise:promise)
 							
 							// Store packet for potential cookie

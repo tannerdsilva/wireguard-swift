@@ -5,6 +5,7 @@ import RAW_dh25519
 import RAW
 import ServiceLifecycle
 import Logging
+import wireguard_crypto_core
 @main
 struct CLI:AsyncParsableCommand {
 	static let configuration = CommandConfiguration(

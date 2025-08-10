@@ -73,7 +73,8 @@ let package = Package(
 				.product(name:"ArgumentParser", package:"swift-argument-parser"),
 				.product(name:"RAW_dh25519", package:"rawdog"),
 				.product(name:"RAW_base64", package:"rawdog"),
-				.product(name:"RAW", package:"rawdog")
+				.product(name:"RAW", package:"rawdog"),
+				"wireguard-crypto-core",
 			]
 		),
 	]

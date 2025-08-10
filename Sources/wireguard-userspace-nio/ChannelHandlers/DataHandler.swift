@@ -2,6 +2,7 @@ import NIO
 import RAW_dh25519
 import Logging
 import bedrock_fifo
+import wireguard_crypto_core
 
 internal enum InterfaceInstruction {
     // Add peer to pipeline configuration
@@ -93,7 +94,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 				return
 			}
             do {
-                let keepalive = try DataMessage.forgeDataMessage(receiverIndex:peerIndex, nonce:&nonceCounterState!.Nsend, transportKey:tansportKeysState!.Tsend, plainText:[])
+                let keepalive = try Message.Data.Payload.forge(receiverIndex:peerIndex, nonce:&nonceCounterState!.Nsend, transportKey:tansportKeysState!.Tsend, plainText:[])
 				nonceCounters[peerIndex] = nonceCounterState
                 // Emit as a transit packet to the specific endpoint
                 guard let ep = configuration[peerPublicKey]! else {
@@ -187,13 +188,12 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     }
     
 	// Helper function for decrypting (authenticating) an encrypted packet
-    private func decryptPacket(peerPublicKey: PublicKey, packet:consuming DataMessage.DataPayload, transportKey: Result32) -> [UInt8]? {
+    private func decryptPacket(peerPublicKey: PublicKey, packet:borrowing Message.Data.Payload, transportKey: Result32) -> [UInt8]? {
         // Check validity of the nonce
         if(nonceCounters[packet.payload.receiverIndex]!.Nrecv.isPacketAllowed(packet.payload.counter.RAW_native())){
             // Authenticate (decrypt) packet
             do {
-                let decryptedPacket = try DataMessage.decryptDataMessage(&packet, transportKey: transportKey)
-                
+                let decryptedPacket = try packet.decrypt(transportKey: transportKey)
                 return decryptedPacket
             } catch {
                 logger.debug("Authentication tag failed verification")
@@ -334,58 +334,58 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 // Calculate transmit keys and set nonce counters to 0
                 case .keyExchange(let peerPublicKey, let endpoint, let peerIndex, let c, let isInitiator):
                     logger.debug("received key exchange packet")
-                    
-                    // Store session information
-					if(isInitiator) {
-						if(sessions[peerPublicKey] == nil) { sessions[peerPublicKey] = (nil, peerIndex, nil) }
-						else { rotateSessions(peerPublicKey: peerPublicKey, context: context)
-							sessions[peerPublicKey]!.current = peerIndex
+                    try withUnsafePointer(to:c) { cPtr in
+							
+						// Store session information
+						if(isInitiator) {
+							if(sessions[peerPublicKey] == nil) { sessions[peerPublicKey] = (nil, peerIndex, nil) }
+							else { rotateSessions(peerPublicKey: peerPublicKey, context: context)
+								sessions[peerPublicKey]!.current = peerIndex
+							}
+						} else {
+							if(sessions[peerPublicKey] == nil) { sessions[peerPublicKey] = (nil, nil, peerIndex) }
+							else {
+								if(sessions[peerPublicKey]!.next == nil) { sessions[peerPublicKey]!.next = peerIndex }
+								else { killSession(peerIndex: sessions[peerPublicKey]!.next!)
+									sessions[peerPublicKey]!.next = peerIndex}
+							}
 						}
-					} else {
-						if(sessions[peerPublicKey] == nil) { sessions[peerPublicKey] = (nil, nil, peerIndex) }
-						else {
-							if(sessions[peerPublicKey]!.next == nil) { sessions[peerPublicKey]!.next = peerIndex }
-							else { killSession(peerIndex: sessions[peerPublicKey]!.next!)
-								sessions[peerPublicKey]!.next = peerIndex}
+						
+						sessionsInv[peerIndex] = peerPublicKey
+						
+						// Initialize nonce counters
+						nonceCounters[peerIndex] = (Nsend:0, Nrecv:SlidingWindow<Counter>(windowSize: 64))
+						
+						// Calculate transmit keys
+						let (lhs, rhs) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:[] as [UInt8], count:0)
+						if(isInitiator){
+							transmitKeys[peerIndex] = (lhs, rhs)
+						} else {
+							transmitKeys[peerIndex] = (rhs, lhs)
 						}
-					}
-                    
-                    sessionsInv[peerIndex] = peerPublicKey
-                    
-                    // Initialize nonce counters
-                    nonceCounters[peerIndex] = (Nsend:0, Nrecv:SlidingWindow<Counter>(windowSize: 64))
-                    
-                    // Calculate transmit keys
-                    let e:[UInt8] = []
-                    let arr:[Result32] = try wgKDF(key: c, data: e, type: 2)
-                    if(isInitiator){
-                        transmitKeys[peerIndex] = (arr[0], arr[1])
-                    } else {
-                        transmitKeys[peerIndex] = (arr[1], arr[0])
-                    }
-                    logger.debug("transmit keys calculated")
-                
-                    // Start session timers (keep alive, re-handshake timer, ...)
+						logger.debug("transmit keys calculated")
 					
-					if(isInitiator) {
-						lastHandshake[peerIndex] = .now()
-						startKeepalive(for: peerIndex, context: context, peerPublicKey:peerPublicKey)
-						startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: peerPublicKey)
+						// Start session timers (keep alive, re-handshake timer, ...)
+						
+						if(isInitiator) {
+							lastHandshake[peerIndex] = .now()
+							startKeepalive(for: peerIndex, context: context, peerPublicKey:peerPublicKey)
+							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: peerPublicKey)
+						}
+						
+						// Handle encrypting packets waiting on handshake completion
+						guard let packets = pendingWriteFutures[peerPublicKey] else {
+							return
+						}
+						for packet in packets {
+							if let peer = sessions[peerPublicKey]!.current {
+								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Trecv, plainText: packet.data)
+								context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:packet.promise)
+								lastOutbound[peerIndex] = .now()
+							}
+						}
+						pendingWriteFutures[peerPublicKey] = nil
 					}
-                    
-                    // Handle encrypting packets waiting on handshake completion
-                    guard let packets = pendingWriteFutures[peerPublicKey] else {
-                        return
-                    }
-                    for packet in packets {
-						if let peer = sessions[peerPublicKey]!.current {
-                            let encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Trecv, plainText: packet.data)
-                            context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:packet.promise)
-                            lastOutbound[peerIndex] = .now()
-                        }
-                    }
-                    pendingWriteFutures[peerPublicKey] = nil
-                
                 default:
                     return
             }
@@ -412,7 +412,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 // Encrypt packet and send it out to peer
                 do {
                     if let peerIndex = sessions[publicKey] {
-						let encryptedPacket = try DataMessage.forgeDataMessage(receiverIndex: peerIndex.current!, nonce: &nonceCounters[peerIndex.current!]!.Nsend, transportKey: transmitKeys[peerIndex.current!]!.Trecv, plainText: bytes)
+						let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peerIndex.current!, nonce: &nonceCounters[peerIndex.current!]!.Nsend, transportKey: transmitKeys[peerIndex.current!]!.Trecv, plainText: bytes)
                         context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:promise)
 						lastOutbound[peerIndex.current!] = .now()
                     } else {

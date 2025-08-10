@@ -7,6 +7,11 @@ import func Foundation.ceil
 // legacy support for DataMessage
 @available(*, deprecated, renamed: "Message.Data")
 public typealias DataMessage = Message.Data
+extension Message.Data {
+	@available(*, deprecated, renamed: "Payload")
+	public typealias DataPayload = Payload
+}
+
 // legay support for payload stored variable
 extension Message.Data.Payload {
 	@available(*, deprecated, renamed: "header")

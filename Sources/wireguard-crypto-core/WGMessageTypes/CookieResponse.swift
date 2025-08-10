@@ -35,15 +35,15 @@ extension Message {
 		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Nonce.self, Result16.self, Tag.self)
 		public struct Payload:Sendable, Sequence {
 			/// message type (type and reserved)
-			internal let typeHeader:TypeHeading
+			public let typeHeader:TypeHeading
 			/// responder's peer index (I_r)
-			internal let receiverIndex:PeerIndex
+			public let receiverIndex:PeerIndex
 			/// random nonce
-			internal let nonce:Nonce
+			public let nonce:Nonce
 			/// cookie message
-			internal let cookieMsg:Result16
+			public let cookieMsg:Result16
 			/// cookie tag
-			internal let cookieTag:Tag
+			public let cookieTag:Tag
 
 			/// initializes a new HandshakeResponseMessage
 			fileprivate init(receiverIndex:PeerIndex, nonce:Nonce, cookieMsg:Result16, cookieTag:Tag) {
@@ -54,7 +54,7 @@ extension Message {
 				self.cookieTag = cookieTag
 			}
 
-			internal static func forge(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key , r:Result8, a:NIO.SocketAddress, m:Result16) throws -> Self {
+			public static func forge(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key , r:Result8, a:NIO.SocketAddress, m:Result16) throws -> Self {
 				var address:[UInt8]
 				switch a {
 					case .v4(let addr):
@@ -75,10 +75,9 @@ extension Message {
 				let nonce = try generateSecureRandomBytes(as:Nonce.self)
 				
 				let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad:m)
+		
 				
-				let msg:Result16 = Result16(RAW_staticbuff:cookieMsg)
-				
-				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg: msg, cookieTag: cookieTag)
+				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg:Result16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
 			}
 		}
 	}

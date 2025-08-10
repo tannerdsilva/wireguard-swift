@@ -7,6 +7,6 @@ public func dhGenerate() throws -> (PublicKey, PrivateKey) {
 	}
 }
 
-internal func dhKeyExchange(privateKey:UnsafePointer<PrivateKey>, publicKey:UnsafePointer<PublicKey>) throws -> SharedKey {
+public func dhKeyExchange(privateKey:UnsafePointer<PrivateKey>, publicKey:UnsafePointer<PublicKey>) throws -> SharedKey {
 	return SharedKey.compute(privateKey: privateKey, publicKey: publicKey)
 }

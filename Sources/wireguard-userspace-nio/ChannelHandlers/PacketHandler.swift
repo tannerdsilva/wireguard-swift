@@ -2,16 +2,18 @@ import NIO
 import Logging
 import RAW
 import RAW_dh25519
+import wireguard_crypto_core
 
+@available(*, deprecated, renamed: "Message")
 internal enum PacketType {
 	/// represents a handshake initiation packet, sent by the initiator to start the handshake
-	case handshakeInitiation(SocketAddress, HandshakeInitiationMessage.AuthenticatedPayload)
+	case handshakeInitiation(SocketAddress, Message.Initiation.Payload.Authenticated)
 	/// represents a handshake response packet, sent by the responder to complete the handshake sent by the initiator
-	case handshakeResponse(SocketAddress, HandshakeResponseMessage.AuthenticatedPayload)
+	case handshakeResponse(SocketAddress, Message.Response.Payload.Authenticated)
 	/// represents a cookie packet.
-	case cookie(SocketAddress, CookieReplyMessage.Payload)
+	case cookie(SocketAddress, Message.Cookie.Payload)
 	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
-    case encryptedTransit(SocketAddress, DataMessage.DataPayload)
+    case encryptedTransit(SocketAddress, Message.Data.Payload)
     /// represents key creation information for post handshake validation
     case keyExchange(PublicKey, SocketAddress, PeerIndex, Result32, Bool)
     /// represents a handshake invoker
@@ -48,24 +50,24 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 			// proceed based on the first byte of the buffer
 			switch byteBuffer[0] {
 				case 0x1:
-					guard byteBuffer.count == MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size else {
-						logger.error("invalid handshake initiation packet size: \(byteBuffer.count)", metadata:["expected_length":"\(MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)", "remote_address":"\(envelope.remoteAddress.description)"])
+					guard byteBuffer.count == MemoryLayout<Message.Initiation.Payload.Authenticated>.size else {
+						logger.error("invalid handshake initiation packet size: \(byteBuffer.count)", metadata:["expected_length":"\(MemoryLayout<Message.Initiation.Payload.Authenticated>.size)", "remote_address":"\(envelope.remoteAddress.description)"])
 						context.fireErrorCaught(Error.invalidPacketLengthForType(type:0x1, length:byteBuffer.count))
 						return
 					}
 					logger.debug("received handshake initiation packet. sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-					context.fireChannelRead(wrapInboundOut(PacketType.handshakeInitiation(envelope.remoteAddress, HandshakeInitiationMessage.AuthenticatedPayload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)!)))
+					context.fireChannelRead(wrapInboundOut(PacketType.handshakeInitiation(envelope.remoteAddress, Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!)))
 				case 0x2:
-					guard byteBuffer.count == MemoryLayout<HandshakeResponseMessage.AuthenticatedPayload>.size else {
-						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<HandshakeResponseMessage.AuthenticatedPayload>.size)", "remote_address":"\(envelope.remoteAddress.description)"])
+					guard byteBuffer.count == MemoryLayout<Message.Response.Payload.Authenticated>.size else {
+						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)", "remote_address":"\(envelope.remoteAddress.description)"])
 						context.fireErrorCaught(Error.invalidPacketLengthForType(type:0x2, length:byteBuffer.count))
 						return
 					}
 					logger.debug("received handshake response packet. sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-					context.fireChannelRead(wrapInboundOut(PacketType.handshakeResponse(envelope.remoteAddress, HandshakeResponseMessage.AuthenticatedPayload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<HandshakeResponseMessage.AuthenticatedPayload>.size)!)))
+					context.fireChannelRead(wrapInboundOut(PacketType.handshakeResponse(envelope.remoteAddress, Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Response.Payload.Authenticated>.size)!)))
 				case 0x3:
 					logger.debug("received cookie response packet. sending downstream in pipeline")
-					context.fireChannelRead(wrapInboundOut(PacketType.cookie(envelope.remoteAddress, CookieReplyMessage.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<CookieReplyMessage.Payload>.size)!)))
+					context.fireChannelRead(wrapInboundOut(PacketType.cookie(envelope.remoteAddress, Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Cookie.Payload>.size)!)))
 				case 0x4:
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
                     context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
@@ -81,13 +83,13 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 		let sendBuffer: ByteBuffer
 		switch unwrapOutboundIn(data) {
 			case let .handshakeInitiation(endpoint, payload):
-				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)
+				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)
 				buffer.writeBytes(payload)
 				destinationEndpoint = endpoint
 				sendBuffer = buffer
 				logger.debug("sending handshake initiation packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
 			case let .handshakeResponse(endpoint, payload):
-				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<HandshakeResponseMessage.AuthenticatedPayload>.size)
+				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Response.Payload.Authenticated>.size)
 				buffer.writeBytes(payload)
 				destinationEndpoint = endpoint
 				sendBuffer = buffer

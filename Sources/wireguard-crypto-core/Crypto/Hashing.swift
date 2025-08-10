@@ -9,10 +9,10 @@ internal func wgHash<A>(_ data:borrowing A) throws -> Result32 where A:RAW_acces
 	return try newHasher.finish()
 }
 
-internal typealias WGHasher<K> = RAW_blake2.Hasher<S, K> where K:RAW_staticbuff
+public typealias WGHasher<K> = RAW_blake2.Hasher<S, K> where K:RAW_staticbuff
 
 @available(*, deprecated, renamed: "WGHasher")
-internal typealias WGHasherV2<K> = RAW_blake2.Hasher<S, K> where K:RAW_staticbuff
+public typealias WGHasherV2<K> = RAW_blake2.Hasher<S, K> where K:RAW_staticbuff
 
 @available(*, deprecated, renamed: "wgMACv2")
 internal func wgMac<K, A>(key:consuming K, data:consuming A) throws -> Result16 where A:RAW_accessible, K:RAW_accessible {
