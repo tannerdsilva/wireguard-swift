@@ -101,7 +101,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     return
                 }
                 c.accessContext { contextPointer in
-					contextPointer.pointee.writeAndFlush(wrapOutboundOut(.encryptedTransit(ep, keepalive)),promise: nil)
+					contextPointer.pointee.writeAndFlush(wrapOutboundOut(.encryptedTransit(ep, keepalive)), promise: nil)
 				}
 
                 // Update last outbound for this peer
@@ -190,7 +190,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Helper function for decrypting (authenticating) an encrypted packet
     private func decryptPacket(peerPublicKey: PublicKey, packet:borrowing Message.Data.Payload, transportKey: Result32) -> [UInt8]? {
         // Check validity of the nonce
-        if(nonceCounters[packet.payload.receiverIndex]!.Nrecv.isPacketAllowed(packet.payload.counter.RAW_native())){
+        if (nonceCounters[packet.payload.receiverIndex]!.Nrecv.isPacketAllowed(packet.payload.counter.RAW_native())) {
             // Authenticate (decrypt) packet
             do {
                 let decryptedPacket = try packet.decrypt(transportKey: transportKey)

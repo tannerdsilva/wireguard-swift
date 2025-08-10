@@ -31,9 +31,9 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 	}
 	
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
-	internal typealias InboundOut = PacketType
+	internal typealias InboundOut = (SocketAddress, Message)
 	
-	internal typealias OutboundIn = PacketType
+	internal typealias OutboundIn = (SocketAddress, Message)
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
 	private let logger:Logger
@@ -56,7 +56,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 						return
 					}
 					logger.debug("received handshake initiation packet. sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-					context.fireChannelRead(wrapInboundOut(PacketType.handshakeInitiation(envelope.remoteAddress, Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!)))
+					context.fireChannelRead(wrapInboundOut((envelope.remoteAddress, Message.initiation(Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!))))
 				case 0x2:
 					guard byteBuffer.count == MemoryLayout<Message.Response.Payload.Authenticated>.size else {
 						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)", "remote_address":"\(envelope.remoteAddress.description)"])
@@ -64,13 +64,13 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 						return
 					}
 					logger.debug("received handshake response packet. sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-					context.fireChannelRead(wrapInboundOut(PacketType.handshakeResponse(envelope.remoteAddress, Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Response.Payload.Authenticated>.size)!)))
+					context.fireChannelRead(wrapInboundOut((envelope.remoteAddress, Message.response(Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Response.Payload.Authenticated>.size)!))))
 				case 0x3:
 					logger.debug("received cookie response packet. sending downstream in pipeline")
-					context.fireChannelRead(wrapInboundOut(PacketType.cookie(envelope.remoteAddress, Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Cookie.Payload>.size)!)))
+					context.fireChannelRead(wrapInboundOut((envelope.remoteAddress, Message.cookie(Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Cookie.Payload>.size)!))))
 				case 0x4:
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-                    context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(envelope.remoteAddress, DataMessage.DataPayload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!)))
+                    context.fireChannelRead(wrapInboundOut((envelope.remoteAddress, Message.data(Message.Data.Payload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!))))
 				default:
                     logger.debug("Invalid Packet type \(byteBuffer[0])")
 			}
@@ -80,27 +80,26 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		// handles receiving Outbound Packets and sending out a UDP packet to the remote address
 		let destinationEndpoint:SocketAddress
+		let mode:Message
+		(destinationEndpoint, mode) = unwrapOutboundIn(data)
 		let sendBuffer: ByteBuffer
-		switch unwrapOutboundIn(data) {
-			case let .handshakeInitiation(endpoint, payload):
+		switch mode {
+			case let .initiation(payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)
 				buffer.writeBytes(payload)
-				destinationEndpoint = endpoint
 				sendBuffer = buffer
 				logger.debug("sending handshake initiation packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
-			case let .handshakeResponse(endpoint, payload):
+			case let .response(payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Response.Payload.Authenticated>.size)
 				buffer.writeBytes(payload)
-				destinationEndpoint = endpoint
 				sendBuffer = buffer
 				logger.debug("sending handshake response packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
-			case let .cookie(endpoint, payload):
+			case let .cookie(payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<CookieReplyMessage.Payload>.size)
 				buffer.writeBytes(payload)
-				destinationEndpoint = endpoint
 				sendBuffer = buffer
 				logger.debug("sending cookie packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
-            case .encryptedTransit(let endpoint, let payload):
+            case .data(let payload):
                 logger.trace("sending transit packet outbound")
                 var size: RAW.size_t = 0
                 payload.RAW_encode(count: &size)
@@ -109,13 +108,6 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 					return ob.baseAddress!.distance(to:p.RAW_encode(dest:ob.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 				}
                 sendBuffer = buffer
-                destinationEndpoint = endpoint
-            case .keyExchange:
-                logger.warning("attempted to send transit packet, which is not supported")
-                return
-            case .initiationInvoker:
-                logger.warning("attempted to send transit packet, which is not supported")
-                return
 		}
 		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:destinationEndpoint, data:sendBuffer)), promise:promise)
 	}

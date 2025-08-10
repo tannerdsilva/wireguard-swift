@@ -8,11 +8,11 @@ import wireguard_crypto_core
 // handles the handshakes for the WireGuard protocol.
 // - NOTE: this handler is marked as `@unchecked Sendable` because it trusts NIO event loops to manage its internal state correctly
 internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = PacketType
+	internal typealias InboundIn = (SocketAddress, Message)
 	internal typealias InboundOut = PacketType
 
 	internal typealias OutboundIn = PacketType
-	internal typealias OutboundOut = PacketType
+	internal typealias OutboundOut = (SocketAddress, Message)
 	
 	private let logger:Logger
 	internal let privateKey:PrivateKey
@@ -69,11 +69,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 	
 	// Sends the cookie after REKEY-TIMEOUT time
-	private func sendCookieInitiation(context:ChannelHandlerContext, cookie:PacketType) {
+	private func sendCookieInitiation(context:ChannelHandlerContext, endpoint:SocketAddress, cookie:Message) {
 		context.eventLoop.scheduleTask(in:.seconds(5)) { [weak self, c = ContextContainer(context:context)] in
 			guard let self = self else { return }
 			c.accessContext { contextPointer in
-				contextPointer.pointee.writeAndFlush(wrapOutboundOut(cookie), promise:nil)
+				contextPointer.pointee.writeAndFlush(wrapOutboundOut((endpoint, cookie)), promise:nil)
 			}
 		}
 	}
@@ -95,7 +95,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 			logger.debug("Retrying handshake for peer \(peerIndex) due to timeout")
 			c.accessContext { contextPointer in
-				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.handshakeInitiation(endpoint, initiationPackets[peerIndex]!)), promise: nil)
+				contextPointer.pointee.writeAndFlush(wrapOutboundOut((endpoint, .initiation(initiationPackets[peerIndex]!))), promise: nil)
 			}
 		}
 		rekeyAttemptTasks[peerIndex] = task
@@ -110,9 +110,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		// handles handshake packets, else passes them down
 		do {
 			try withUnsafePointer(to:privateKey) { responderPrivateKey in
-				switch unwrapInboundIn(data) {
+				let (endpoint, payload) = unwrapInboundIn(data)
+				switch payload {
 					// Validate initiation packet and send response upon successfull validation
-					case .handshakeInitiation(let endpoint, let payload):
+					case .initiation(let payload):
 						logger.debug("received handshake initiation packet", metadata:["remote_address":"\(endpoint.description)"])
 
 						// Check if we are under heavy load
@@ -123,8 +124,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							} catch Message.Initiation.Payload.Authenticated.Error.mac2Invalid {
 								// Create and send cookie
 								let cookie = try Message.Cookie.Payload.forge(receiverPeerIndex: payload.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, a: endpoint, m: payload.msgMac1)
-								let packet: PacketType = .cookie(endpoint, cookie)
-								context.writeAndFlush(wrapOutboundOut(packet)).whenSuccess { [logger = logger, e = endpoint] in
+								// let packet: PacketType = .cookie(endpoint, cookie)
+								context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
 									logger.debug("cookie reply message sent to endpoint", metadata:["endpoint":"\(e)"])
 								}
 								return
@@ -149,9 +150,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						let sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
 						let response = try Message.Response.Payload.forge(c:val.c, h:val.h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
 						let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&val.initPublicKey)
-						let packet:PacketType = .handshakeResponse(endpoint, authResponse)
-						
-						context.writeAndFlush(wrapOutboundOut(packet)).whenSuccess { [logger = logger] in
+						context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 							logger.debug("handshake response sent to \(endpoint)")
 						}
 						
@@ -160,7 +159,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						logger.debug("sending key exhange packet to data handler")
 						context.fireChannelRead(wrapInboundOut(keyPacket))
 						
-					case .handshakeResponse(let endpoint, var payload):
+					case .response(var payload):
 						logger.debug("received handshake response packet", metadata:["remote_address":"\(endpoint.description)"])
 						guard let initiatorEphiPrivateKey = initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
 							logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
@@ -196,7 +195,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
 						
 					// Received cookie, recreate initiation handshake message with mac2
-					case .cookie(let endpoint, let cookiePayload):
+					case .cookie(let cookiePayload):
 						logger.debug("received cookie packet", metadata:["remote_address":"\(endpoint.description)"])
 						
 						guard let peerPublicKey = peersAddressBook[endpoint] else {
@@ -209,17 +208,16 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
 						withUnsafePointer(to:privateKey) { privateKey in
 							withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
-								var phantomCookie: PacketType
+								var phantomCookie:Message.Initiation.Payload.Authenticated
 								do {
-									let authCookiePacket = try initiationPacket.payload.finalize(responderStaticPublicKey: expectedPeerPublicKey, cookie: cookiePayload)
-									initiationPackets[initiationPacket.payload.initiatorPeerIndex] = authCookiePacket
-									phantomCookie = PacketType.handshakeInitiation(endpoint, authCookiePacket)
+									phantomCookie = try initiationPacket.payload.finalize(responderStaticPublicKey: expectedPeerPublicKey, cookie: cookiePayload)
+									initiationPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
 								} catch {
 									logger.debug("failed to validate cookie and create msgMac2")
 									return
 								}
 								logger.debug("cookie sent to shipping container... (packet handler)")
-								sendCookieInitiation(context: context, cookie: phantomCookie)
+								sendCookieInitiation(context: context, endpoint:endpoint, cookie:.initiation(phantomCookie))
 								
 								rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex]?.cancel()
 								rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex] = nil
@@ -228,8 +226,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								startRekeyAttempts(for: initiationPacket.payload.initiatorPeerIndex, context: context, peerPublicKey: peerPublicKey, endpoint: endpoint)
 							}
 						}
-						
-					case .encryptedTransit(let endpoint, let payload):
+
+					case .data(let payload):
 						logger.debug("Data transit packet sent to data handler")
 						context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(endpoint, payload)))
 						
@@ -266,8 +264,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							// Send initiation packet to packet handler
 							logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(endpoint.description)", "peer_public_key":"\(peerPublicKey.debugDescription)"])
 							let authPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
-							context.writeAndFlush(wrapOutboundOut(PacketType.handshakeInitiation(endpoint, authPayload)), promise:promise)
-							
+							context.writeAndFlush(wrapOutboundOut((endpoint, .initiation(authPayload))), promise:promise)
+
 							// Store packet for potential cookie
 							initiationPackets[payload.initiatorPeerIndex] = authPayload
 							
@@ -280,8 +278,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					promise?.fail(error)
 				}
 			case .encryptedTransit(let endpoint, let payload):
-				logger.debug("Sending transit packout down to packet handler")
-				context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, payload)), promise:promise)
+				logger.debug("Sending transit packet down to packet handler")
+				context.writeAndFlush(wrapOutboundOut((endpoint, .data(payload))), promise:promise)
 			default:
 				return
 		}

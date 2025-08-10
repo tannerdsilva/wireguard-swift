@@ -57,32 +57,30 @@ import wireguard_crypto_core
 }
 
 @Test func selfValidateDataPacket() throws {
-    let c: Result32 = Result32(RAW_staticbuff: try generateRandomBytes(count: 32))
-    let e:[UInt8] = []
-    let arr_send:[Result32] = try wgKDF(key: c, data: e, type: 2)
-    let arr_recv:[Result32] = try wgKDF(key: c, data: e, type: 2)
-    let TIsend = arr_send[0]
-    let TRrecv = arr_recv[0]
-    
-    let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
-    
-    let message:String = "This is a message to be encrypted"
-    let messageBytes: [UInt8] = Array(message.utf8)
-    var nonce_i:Counter = Counter(RAW_native: 0)
-    
-    var encryptedPacket = try Message.Data.Payload.forge(receiverIndex: senderIndex, nonce: &nonce_i, transportKey: TIsend, plainText: messageBytes)
-    
-    var nonce_r:Counter = Counter(RAW_native: 0)
+	try Result32(RAW_staticbuff: try generateRandomBytes(count: 32)).RAW_access_staticbuff { cPtr in
+		let (TIsend, _) = try wgKDFv2((Result32, Result32).self, key: cPtr, count:MemoryLayout<Result32>.size, data: [] as [UInt8], count:0)
+		let (TRrecv, _) = try wgKDFv2((Result32, Result32).self, key: cPtr, count:MemoryLayout<Result32>.size, data: [] as [UInt8], count:0)
 
-    let decryptedPacket = try encryptedPacket.decrypt(transportKey: TRrecv)
-    if let recoveredMessage = String(bytes: decryptedPacket, encoding: .utf8) {
-		print("Recovered message: '\(recoveredMessage) @ \(recoveredMessage.count) bytes'")
-		print("Original message: '\(message)' @ \(message.count) bytes'")
-		#expect(recoveredMessage == message)
-    } else {
-        struct InvalidUTF8Error:Swift.Error {}
-        throw InvalidUTF8Error()
-    }
+		let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+		
+		let message:String = "This is a message to be encrypted"
+		let messageBytes: [UInt8] = Array(message.utf8)
+		var nonce_i:Counter = Counter(RAW_native: 0)
+		
+		var encryptedPacket = try Message.Data.Payload.forge(receiverIndex: senderIndex, nonce: &nonce_i, transportKey: TIsend, plainText: messageBytes)
+		
+		var nonce_r:Counter = Counter(RAW_native: 0)
+
+		let decryptedPacket = try encryptedPacket.decrypt(transportKey: TRrecv)
+		if let recoveredMessage = String(bytes: decryptedPacket, encoding: .utf8) {
+			print("Recovered message: '\(recoveredMessage) @ \(recoveredMessage.count) bytes'")
+			print("Original message: '\(message)' @ \(message.count) bytes'")
+			#expect(recoveredMessage == message)
+		} else {
+			struct InvalidUTF8Error:Swift.Error {}
+			throw InvalidUTF8Error()
+		}
+	}
 }
 
 @Test func selfValidateCookiePacket() throws {
