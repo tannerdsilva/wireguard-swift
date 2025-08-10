@@ -29,14 +29,14 @@ public struct Reserved:Sendable, CustomDebugStringConvertible {
 
 /// makes up the first 4 bytes of any wireguard packet, unconditionally.
 @RAW_staticbuff(concat:RAW_byte.self, Reserved.self)
-public struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugStringConvertible {
+public struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugStringConvertible, Equatable, Hashable {
 	/// the type of packet
 	public let type:RAW_byte
 	/// reserved bytes that follow the type byte
 	public let reserved:Reserved
 
-	public init(integerLiteral value:UInt8) {
-		self.type = RAW_byte(RAW_native:value)
+	public init(integerLiteral value:Int) {
+		self.type = RAW_byte(RAW_native:UInt8(value))
 		self.reserved = Reserved()
 	}
 

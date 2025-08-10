@@ -190,7 +190,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Helper function for decrypting (authenticating) an encrypted packet
     private func decryptPacket(peerPublicKey: PublicKey, packet:borrowing Message.Data.Payload, transportKey: Result32) -> [UInt8]? {
         // Check validity of the nonce
-        if (nonceCounters[packet.payload.receiverIndex]!.Nrecv.isPacketAllowed(packet.payload.counter.RAW_native())) {
+        if (nonceCounters[packet.header.receiverIndex]!.Nrecv.isPacketAllowed(packet.header.counter.RAW_native())) {
             // Authenticate (decrypt) packet
             do {
                 let decryptedPacket = try packet.decrypt(transportKey: transportKey)
@@ -274,12 +274,15 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private func killAllSessions(peerPublicKey: PublicKey) {
 		guard let peerSessions = sessions[peerPublicKey] else { return }
         configuration[peerPublicKey] = nil
-		let peerSessionsArray = [peerSessions.0, peerSessions.1, peerSessions.2]
-		for peer in peerSessionsArray {
-			guard let peer = peer else { continue }
-			killSession(peerIndex: peer)
+		if peerSessions.0 != nil {
+			killSession(peerIndex: peerSessions.0!)
 		}
-		
+		if peerSessions.1 != nil {
+			killSession(peerIndex: peerSessions.1!)
+		}
+		if peerSessions.2 != nil {
+			killSession(peerIndex: peerSessions.2!)
+		}
 		sessions.removeValue(forKey: peerPublicKey)
         logger.debug("killed all sessions for \(peerPublicKey)")
     }
@@ -293,7 +296,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             switch unwrapInboundIn(data) {
                 // Decrypt the payload or send initiation message if unable to decrypt
                 case .encryptedTransit(let endpoint, let payload):
-                    let peerIndex = payload.payload.receiverIndex
+                    let peerIndex = payload.header.receiverIndex
                     // Find associated peer session, else drop packet
                     guard let publicKey = sessionsInv[peerIndex] else {
                         logger.debug("received packet from unknown source")

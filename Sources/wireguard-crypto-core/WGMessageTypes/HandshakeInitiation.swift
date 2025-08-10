@@ -3,9 +3,8 @@ import RAW_dh25519
 import RAW_chachapoly
 import RAW_xchachapoly
 import RAW_base64
+import bedrock_ip // replacement target for NIO.SocketAddress
 import NIO
-
-
 
 extension Message {
 	public struct Initiation {
@@ -114,7 +113,7 @@ extension Message {
 				}
 			}
 
-			public borrowing func finalize(responderStaticPublicKey:UnsafePointer<PublicKey>, cookie:CookieReplyMessage.Payload? = nil) throws -> Authenticated {
+			public borrowing func finalize(responderStaticPublicKey:UnsafePointer<PublicKey>, cookie:Message.Cookie.Payload? = nil) throws -> Authenticated {
 				try withUnsafePointer(to:self) { selfPtr in
 					// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
 					var hasher = try WGHasherV2<Result32>()
@@ -123,7 +122,7 @@ extension Message {
 					let mac1 = try wgMac(key:try hasher.finish(), data:selfPtr.pointee)
 					
 					// step 15: msg.mac2 := 0^16
-					var mac2:Result16
+					let mac2:Result16
 					// if cookie: msg.mac2 := MAC(cookie.msg, msgb)
 					if cookie != nil {
 						var hasher = try WGHasherV2<RAW_xchachapoly.Key>()
@@ -159,6 +158,34 @@ extension Message.Initiation.Payload {
 			self.msgMac2 = msgMac2
 		}
 
+		public borrowing func validateUnderLoadNoNIO(responderStaticPrivateKey:UnsafePointer<PrivateKey>, R:Result8, endpoint:Endpoint) throws {
+			try withUnsafePointer(to:self) { selfPtr in
+				// setup: get responder public key
+				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
+				
+				// Try validating msgMac1
+				var hasher = try WGHasherV2<Result32>()
+				try hasher.update([UInt8]("mac1----".utf8))
+				try hasher.update(responderStaticPublicKey)
+				let mac1 = try wgMACv2(key:try hasher.finish(), data:selfPtr.pointer(to:\.payload)!.pointee)
+				guard mac1 == selfPtr.pointer(to:\.msgMac1)!.pointee else {
+					throw Error.mac1Invalid
+				}
+				
+				let T:Result16
+				switch endpoint {
+					case .v4(let v4ep):
+						T = try wgMACv2(key:R, data:v4ep)
+					case .v6(let v6ep):
+						T = try wgMACv2(key:R, data:v6ep)
+				}
+				let mac2 = try wgMACv2(key:T, data:MSGb(payload:selfPtr.pointer(to:\.payload)!.pointee, msgMac1:mac1))
+				guard mac2 == selfPtr.pointer(to:\.msgMac2)!.pointee else {
+					throw Error.mac2Invalid
+				}
+			}
+		}
+		@available(*, deprecated, renamed: "validateUnderLoadNoNIO")
 		public borrowing func validateUnderLoad(responderStaticPrivateKey:UnsafePointer<PrivateKey>, R:Result8, A:SocketAddress) throws {
 			try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key

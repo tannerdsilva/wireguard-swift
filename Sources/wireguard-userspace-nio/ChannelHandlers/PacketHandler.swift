@@ -4,14 +4,7 @@ import RAW
 import RAW_dh25519
 import wireguard_crypto_core
 
-@available(*, deprecated, renamed: "Message")
 internal enum PacketType {
-	/// represents a handshake initiation packet, sent by the initiator to start the handshake
-	case handshakeInitiation(SocketAddress, Message.Initiation.Payload.Authenticated)
-	/// represents a handshake response packet, sent by the responder to complete the handshake sent by the initiator
-	case handshakeResponse(SocketAddress, Message.Response.Payload.Authenticated)
-	/// represents a cookie packet.
-	case cookie(SocketAddress, Message.Cookie.Payload)
 	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
     case encryptedTransit(SocketAddress, Message.Data.Payload)
     /// represents key creation information for post handshake validation

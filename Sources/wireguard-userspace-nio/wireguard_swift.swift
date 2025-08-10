@@ -10,11 +10,25 @@ import Logging
 import bedrock_future
 import bedrock_fifo
 import ServiceLifecycle
+import bedrock_ip
+import wireguard_crypto_core
+
+extension Endpoint {
+	public init(_ socketAddress:SocketAddress) throws {
+		switch socketAddress {
+			case .v4(_):
+				self = .v4(V4(address:AddressV4(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
+			case .v6(_):
+				self = .v6(V6(address:AddressV6(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
+			default:
+				throw POSIXError(.ENOTSUP)
+		}
+	}
+}
 
 /// Represents a peer on the WireGuard interface. Each peer has a unique public key assosiated with it.
 public struct Peer:Sendable {
-	let publicKey:PublicKey
-	
+	public let publicKey:PublicKey
 	let endpoint:SocketAddress?
 	let internalKeepAlive:TimeAmount?
 	

@@ -41,8 +41,8 @@ extension Message {
 			public let tag:Tag
 
 			/// initializes a new HandshakeResponseMessage
-			fileprivate init(receiverIndex:PeerIndex, counter:Counter, packetTag tag:Tag) {
-				self.typeHeader = 0x4
+			fileprivate init(typeHeader:TypeHeading = 0x4, receiverIndex:PeerIndex, counter:Counter, packetTag tag:Tag) {
+				self.typeHeader = typeHeader
 				self.receiverIndex = receiverIndex
 				self.counter = counter
 				self.tag = tag
@@ -55,26 +55,26 @@ extension Message {
 
 			public init?(RAW_decode inputPtr:consuming UnsafeRawPointer, count:size_t) {
 				guard count >= MemoryLayout<Payload>.size else { return nil }
-				(header, data) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
+				 (header, data) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
 					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
 					let receiverIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
 					let counter = Counter(RAW_staticbuff_seeking:RAW_decode)
 					let dataCount = count - MemoryLayout<Payload>.size
 					let packetTag = Tag(RAW_staticbuff:RAW_decode.pointee.advanced(by:dataCount))
-					return (Header(receiverIndex:receiverIndex, counter:counter, packetTag:packetTag), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount))
+					return (Header(typeHeader:typeHeading, receiverIndex:receiverIndex, counter:counter, packetTag:packetTag), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount))
 				}
 			}
 			
 			public func RAW_encode(count: inout RAW.size_t) {
-				count = MemoryLayout<DataMessage.Payload>.size + data.count
+				count = MemoryLayout<Message.Data.Payload>.size + data.count
 			}
 			
 			public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
-				var dest = payload.typeHeader.RAW_encode(dest:dest)
-				dest = payload.receiverIndex.RAW_encode(dest:dest)
-				dest = payload.counter.RAW_encode(dest:dest)
+				var dest = header.typeHeader.RAW_encode(dest:dest)
+				dest = header.receiverIndex.RAW_encode(dest:dest)
+				dest = header.counter.RAW_encode(dest:dest)
 				dest = data.RAW_encode(dest:dest)
-				dest = payload.packetTag.RAW_encode(dest:dest)
+				dest = header.tag.RAW_encode(dest:dest)
 				return dest
 			}
 
@@ -84,7 +84,7 @@ extension Message {
 			}
 
 			public borrowing func decrypt(transportKey:borrowing Result32) throws -> [UInt8] {
-				return try aeadDecryptV2(as:[UInt8].self, key:transportKey, counter:header.counter.RAW_native(), cipherText:data, aad:[], tag:header.packetTag)
+				return try aeadDecryptV2(as:[UInt8].self, key:transportKey, counter:header.counter.RAW_native(), cipherText:data, aad:[], tag:header.tag)
 			}
 
 			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result32, plainText:[UInt8]) throws -> Self {

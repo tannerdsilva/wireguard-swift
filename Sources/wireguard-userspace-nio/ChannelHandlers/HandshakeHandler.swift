@@ -46,13 +46,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var initiationTimers:[PeerIndex:TAI64N] = [:]
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
 	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
-	
 	internal init(privateKey pkIn:consuming PrivateKey, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 		
-		// Pre-computing HASH(LABEL-COOKIE || Spub)
+		// pre-computing HASH(LABEL-COOKIE || Spub)
 		(privateKey, precomputedCookieKey) = withUnsafePointer(to:pkIn) { privateKeyPtr in
 			var hasher = try! WGHasherV2<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
@@ -120,10 +119,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						if underLoad {
 
 							do {
-								try payload.validateUnderLoad(responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, A: endpoint)
+								try payload.validateUnderLoadNoNIO(responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, endpoint:Endpoint(endpoint))
 							} catch Message.Initiation.Payload.Authenticated.Error.mac2Invalid {
 								// Create and send cookie
-								let cookie = try Message.Cookie.Payload.forge(receiverPeerIndex: payload.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, a: endpoint, m: payload.msgMac1)
+								let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:Endpoint(endpoint), m:payload.msgMac1)
 								// let packet: PacketType = .cookie(endpoint, cookie)
 								context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
 									logger.debug("cookie reply message sent to endpoint", metadata:["endpoint":"\(e)"])
@@ -159,7 +158,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						logger.debug("sending key exhange packet to data handler")
 						context.fireChannelRead(wrapInboundOut(keyPacket))
 						
-					case .response(var payload):
+					case .response(let payload):
 						logger.debug("received handshake response packet", metadata:["remote_address":"\(endpoint.description)"])
 						guard let initiatorEphiPrivateKey = initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
 							logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
@@ -197,7 +196,6 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					// Received cookie, recreate initiation handshake message with mac2
 					case .cookie(let cookiePayload):
 						logger.debug("received cookie packet", metadata:["remote_address":"\(endpoint.description)"])
-						
 						guard let peerPublicKey = peersAddressBook[endpoint] else {
 							logger.error("no peer public key for \(endpoint)")
 							return
@@ -217,12 +215,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 									return
 								}
 								logger.debug("cookie sent to shipping container... (packet handler)")
-								sendCookieInitiation(context: context, endpoint:endpoint, cookie:.initiation(phantomCookie))
-								
+								sendCookieInitiation(context:context, endpoint:endpoint, cookie:.initiation(phantomCookie))
 								rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex]?.cancel()
 								rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex] = nil
 								rekeyAttemptsStartTime[initiationPacket.payload.initiatorPeerIndex] = nil
-								
 								startRekeyAttempts(for: initiationPacket.payload.initiatorPeerIndex, context: context, peerPublicKey: peerPublicKey, endpoint: endpoint)
 							}
 						}
@@ -230,9 +226,6 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					case .data(let payload):
 						logger.debug("Data transit packet sent to data handler")
 						context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(endpoint, payload)))
-						
-					default:
-						return
 				}
 			}
 		} catch let error {
