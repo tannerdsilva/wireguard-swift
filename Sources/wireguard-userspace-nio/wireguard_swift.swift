@@ -1,230 +1,147 @@
 // The Swift Programming Language
 // https://docs.swift.org/swift-book
 
+import Foundation
 import RAW
 import NIO
 import RAW_dh25519
 import RAW_base64
+import Logging
+import bedrock_future
+import bedrock_fifo
+import ServiceLifecycle
+import bedrock_ip
+import wireguard_crypto_core
 
-public typealias Key = RAW_dh25519.PublicKey
-
-public final class WireguardInterface {
-    let elg: EventLoopGroup
-    let listeningPort:Int
-    let staticPublicKey:PublicKey
-
-    let connectedChannel:EventLoopFuture<Channel>
-    let peerRouter:PeerRouter
-
-    public init(loopGroupProvider:EventLoopGroup, staticPublicKey:PublicKey, listeningPort:Int? = nil) {
-        self.elg = loopGroupProvider
-
-        let lp:Int
-        if let listeningPort = listeningPort {
-            self.listeningPort = listeningPort
-            lp = listeningPort
-        } else {
-            lp = Int.random(in:10000..<16000)
-            self.listeningPort = lp
-        }
-
-        let pr = PeerRouter()
-        self.peerRouter = pr
-        self.staticPublicKey = staticPublicKey
-//        self.connectedChannel = DatagramBootstrap(group:elg.next())
-//            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-//            .channelInitializer({ [pr] channel in
-//                return channel.pipeline.addHandler(pr)
-//            }).bind(host:"0.0.0.0", port:lp)
-        self.connectedChannel = DatagramBootstrap(group:elg).bind(host: "0.0.0.0", port: lp)
-    }
-
-    public func run() async throws {
-//        let channel = try await self.connectedChannel.get()
-//        try await gracefulShutdown()
-//        try? await channel.close()
-    }
-}
-
-// Handler to process incoming and outgoing data
-internal final class PeerRouter:ChannelDuplexHandler {
-    internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
-    internal typealias InboundOut = AddressedEnvelope<ByteBuffer>
-    internal typealias OutboundIn = AddressedEnvelope<ByteBuffer> // receive to write
-    internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
-
-    private var handshakeStages = [SocketAddress:Int]()
-    
-    internal init() {}
-
-    internal func channelActive(context:ChannelHandlerContext) {
-        
-    }
-    
-    func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-        let envelope = self.unwrapInboundIn(data)
-        var body = envelope.data
-        
-        // what kind of message is this?
-        guard body.readableBytes >= 4 else {
-            return
-        }
-//        var wgHeader = TypeHeading(RAW_staticbuff:body.readBytes(length:4)!)
-//        guard wgHeader.isValid() else {
-//            return
-//        }
-        // switch wgHeader.type {
-        //     case 0x1:
-                
-        //     case 0x2:
-
-        //     case 0x3:
-
-        //     case 0x4:
-        // }
-    }
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("Error: \(error)")
-        context.close(promise: nil)
-    }
-}
-
-public final class WGInterface: Sendable {
-    let ipAddress: String
-    let port: Int
-    
-    let staticPrivateKey:PrivateKey
-    let peerPublicKey:PublicKey
-    
-    let group:MultiThreadedEventLoopGroup
-    
-    public init(ipAddress: String, port: Int, staticPrivateKey: consuming PrivateKey, peerPublicKey: PublicKey) throws {
-        self.port = port
-        self.ipAddress = ipAddress
-
-        self.peerPublicKey = peerPublicKey
-        self.staticPrivateKey = staticPrivateKey
-
-        self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        
-    }
-    
-    public func sendInitialPacket() throws {
-        
-        // Create Byte Payload
-        let (_,_,_,payload) = try withUnsafePointer(to: staticPrivateKey) { p in
-            try withUnsafePointer(to: peerPublicKey) { q in
-                return try HandshakeInitiationMessage.forgeInitiationState(initiatorStaticPrivateKey: p, responderStaticPublicKey: q)
-            }
-        }
-        
-		let authenticatedPacket = try withUnsafePointer(to: peerPublicKey) { q in
-			return try HandshakeInitiationMessage.finalizeInitiationState(responderStaticPublicKey: q, payload: payload)
+extension Endpoint {
+	public init(_ socketAddress:SocketAddress) throws {
+		switch socketAddress {
+			case .v4(_):
+				self = .v4(V4(address:AddressV4(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
+			case .v6(_):
+				self = .v6(V6(address:AddressV6(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
+			default:
+				throw POSIXError(.ENOTSUP)
 		}
-        
-        // Create Channel
-        let bootstrap =  DatagramBootstrap(group: group)
-            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .channelInitializer { channel in
-                channel.pipeline.addHandlers([
-                    InputHandler(data: authenticatedPacket, ipAddress: self.ipAddress, port: self.port, privateKey: self.staticPrivateKey)
-                ])
-            }
-        
-        // Start Channel
-        let channel = try bootstrap.bind(host:"0.0.0.0", port:Int.random(in:24245..<36367)).wait()
-
-        print("Server started successfully on \(channel.localAddress?.description ?? "unknown address")")
-        
-        let peerPublicKeyBase64 = String(try RAW_base64.encode(peerPublicKey))
-		var privKeyCopy = staticPrivateKey
-        let myPublicKeyBase64 = String(try RAW_base64.encode(PublicKey(&privKeyCopy)))
-        
-        print("Peer Public Key: \(peerPublicKeyBase64)")
-        print("My Public Key: \(myPublicKeyBase64)")
-        
-        // Create the addressed envolope with the destination port 
-        // Write and flush to the channel
-        
-        try channel.closeFuture.wait()
-
-        print("Server closed.")
-        
-    }
-    
-    
+	}
 }
 
-internal final class InputHandler: ChannelDuplexHandler, Sendable {
-    typealias InboundIn = AddressedEnvelope<ByteBuffer>
-    typealias InboundOut = Never
-
-    typealias OutboundIn = Never
-    typealias OutboundOut = AddressedEnvelope<ByteBuffer>
-
-    let data: HandshakeInitiationMessage.AuthenticatedPayload
-    let ipAddress: String
-    let port: Int
-    let privateKey: PrivateKey
-
-    init(data: HandshakeInitiationMessage.AuthenticatedPayload, ipAddress: String, port: Int, privateKey: PrivateKey) {
-        self.data = data
-        self.ipAddress = ipAddress
-        self.port = port
-        self.privateKey = privateKey
-    }
-    
-    func channelActive(context: ChannelHandlerContext) {
-        var allocated = context.channel.allocator.buffer(capacity:MemoryLayout<HandshakeInitiationMessage.AuthenticatedPayload>.size)
-        allocated.writeBytes(data)
-		allocated.withUnsafeReadableBytes { bytes in 
-			for i in 0..<bytes.count {
-				print("Byte \(i): \(bytes[i])")
+/// Represents a peer on the WireGuard interface. Each peer has a unique public key assosiated with it.
+public struct Peer:Sendable {
+	public let publicKey:PublicKey
+	let endpoint:SocketAddress?
+	let internalKeepAlive:TimeAmount?
+	
+	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
+		self.publicKey = publicKey
+		self.internalKeepAlive = internalKeepAlive
+		
+		if (ipAddress != nil && port != nil) {
+			do {
+				self.endpoint = try SocketAddress(ipAddress: ipAddress!, port: port!)
+			} catch {
+				self.endpoint = nil
 			}
+		} else {
+			self.endpoint = nil
 		}
-        let envolope = try! AddressedEnvelope(remoteAddress: SocketAddress(ipAddress: ipAddress, port: port), data: allocated)
-        let out = self.wrapOutboundOut(envolope)
-        var promise = context.eventLoop.makePromise(of: Void.self)
-        promise.futureResult.whenSuccess {
-            print("Promise completed")
-        }
-        context.writeAndFlush(out, promise: promise)
-    }
-
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        let envolope = self.unwrapInboundIn(data)
-        let buffer = envolope.data
-        let authPayload = buffer.withUnsafeReadableBytes{bytebuffer in
-            guard bytebuffer.count == 148 else {
-                fatalError("Wrong length \(bytebuffer.count)")
-            }
-            for i in 0..<bytebuffer.count {
-                print("Byte \(i): \(bytebuffer[i])")
-            }
-            return HandshakeInitiationMessage.AuthenticatedPayload(RAW_decode:bytebuffer.baseAddress!, count:148)
-        }
-        
-        let validation = try! withUnsafePointer(to: privateKey) { privateKey in
-            try! withUnsafePointer(to: authPayload!) { authPayload in
-                try! HandshakeInitiationMessage.validateInitiationMessage(authPayload, responderStaticPrivateKey: privateKey)
-            }
-        }
-        
-        fatalError("Successss")
-        let remoteAddress = envolope.remoteAddress
-        
-        let str = buffer.getString(at: 0, length: buffer.readableBytes) ?? ""
-        
-        let gstring = "\u{001B}[32m" + str + "\u{001B}[0m"
-        var outBuff = context.channel.allocator.buffer(capacity: gstring.utf8.count)
-        outBuff.writeString(gstring)
-        
-        let responseEnvelope = AddressedEnvelope(remoteAddress: remoteAddress, data: outBuff)
-        context.writeAndFlush(self.wrapOutboundOut(responseEnvelope), promise: nil)
-    }
+	}
 }
 
-internal struct HandshakeHandler {
-    
+protocol WGIMPL {
+	associatedtype OutputType
 }
+
+/// primary wireguard interface. this is how connections will be made.
+public final actor WGInterface:Sendable, Service {
+
+	public struct InvalidInterfaceStateError:Swift.Error {}
+
+	let logger:Logger
+
+	private let bootstrappedFuture:Future<Void, Swift.Error> = Future<Void, Swift.Error>()
+
+	/// The private key of the interface (owners private key)
+	let staticPrivateKey:PrivateKey
+	
+	/// The initial configuration for peers upon interface creation
+	let initialConfiguration:[Peer]
+	
+	/// Data handler channel
+	let dh:DataHandler
+	
+	/// Data channel
+	var channel:Channel? = nil
+	
+	private let group:MultiThreadedEventLoopGroup
+
+	public let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
+	
+	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
+	public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level) throws {
+		var makeLogger = Logger(label: "\(String(describing:Self.self))")
+		makeLogger.logLevel = logLevel
+		self.logger = makeLogger
+		self.staticPrivateKey = staticPrivateKey
+		self.initialConfiguration = initialConfiguration
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+		self.dh = DataHandler(logLevel: .trace, initialConfiguration: initialConfiguration)
+	}
+
+	public func waitForChannelInit() async throws {
+		_ = await bootstrappedFuture.result()
+	}
+	
+	/// Starts the WireGuard interface
+	public func run() async throws {
+		let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
+		let bootstrap =  DatagramBootstrap(group: group)
+			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+			.channelInitializer { channel in
+				channel.pipeline.addHandlers([
+				PacketHandler(logLevel:.trace),
+				hs,
+				self.dh
+			])
+		}
+
+		// Start Channel
+		do {
+			channel = try await bootstrap.bind(host:"0.0.0.0", port:36361).get()
+			try! bootstrappedFuture.setSuccess(())
+		} catch {
+			throw POSIXError(.ECONNREFUSED)
+		}
+		
+		logger.info("server started successfully on \(channel!.localAddress?.description ?? "unknown address")")
+
+		try await withGracefulShutdownHandler {
+			try await channel!.closeFuture.get()
+		} onGracefulShutdown: { [c = channel] in
+			_ = c!.close()
+		}
+
+		logger.info("server closed successfully.")
+	}
+	
+	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
+		guard let channel = channel else {
+			logger.error("channel is not initialized. cannot write data.")
+			throw InvalidInterfaceStateError()
+		}
+		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
+		channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise:myWritePromise)
+		try await myWritePromise.futureResult.get()
+	}
+	
+	public func addPeer(_ peer: Peer) {
+		dh.addPeer(peer: peer)
+	}
+	
+	public func removePeer(_ peer: Peer) {
+		dh.removePeer(peer: peer)
+	}
+	
+}
+
+

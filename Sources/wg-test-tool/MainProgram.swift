@@ -3,9 +3,11 @@ import wireguard_userspace_nio
 import RAW_base64
 import RAW_dh25519
 import RAW
-
+import ServiceLifecycle
+import Logging
+import wireguard_crypto_core
 @main
-struct CLI:ParsableCommand {
+struct CLI:AsyncParsableCommand {
 	static let configuration = CommandConfiguration(
 		commandName:"wg-test-tool",
 		abstract:"a development tool to aid in the development of the wireguard-userspace-nio target (and others).",
@@ -21,11 +23,10 @@ struct CLI:ParsableCommand {
 		static let configuration = CommandConfiguration(
 			abstract:"Generate a new WireGuard key pair."
 		)
-
 		func run() throws {
 			let (publicKey, privateKey) = try dhGenerate()
-			let publicKeyBase64 = String(try RAW_base64.encode(publicKey))
-			let privateKeyBase64 = String(try RAW_base64.encode(privateKey))
+			let publicKeyBase64 = String(RAW_base64.encode(publicKey))
+			let privateKeyBase64 = String(RAW_base64.encode(privateKey))
 			print("Public Key: \(publicKeyBase64)")
 			print("Private Key: \(privateKeyBase64)")
 		}
@@ -45,11 +46,11 @@ struct CLI:ParsableCommand {
 			var privKeyCopy = privateKey
 			var pubKeyCopy = publicKey
 			let sharedKey = SharedKey.compute(privateKey: &privKeyCopy, publicKey: &pubKeyCopy)
-			print("shared secret: \(String(try RAW_base64.encode(sharedKey)))")
+			print("shared secret: \(String(RAW_base64.encode(sharedKey)))")
 		}
 	}
 
-    struct Initiator:ParsableCommand {
+    struct Initiator:AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             subcommands: []
         )
@@ -63,9 +64,21 @@ struct CLI:ParsableCommand {
 		@Argument(help:"The public key that the responder is expected to be operating with.")
 		var respondersPublicKey:PublicKey
 
-		func run() throws {
-			let interface = try WGInterface(ipAddress: ipAddress, port: port, staticPrivateKey: myPrivateKey, peerPublicKey: respondersPublicKey)
-			try interface.sendInitialPacket()
+		func run() async throws {
+			var cliLogger = Logger(label: "wg-test-tool.initiator")
+			cliLogger.logLevel = .trace
+            let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
+			let interface = try WGInterface(staticPrivateKey:myPrivateKey, initialConfiguration:peers, logLevel:.trace)
+			Task {
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await interface.waitForChannelInit()
+				cliLogger.info("Channel initialized. Sending handshake initiation message...")
+				try await interface.write(publicKey: respondersPublicKey, data: [])
+			}
+
+			let sg = ServiceGroupConfiguration(services:[interface], gracefulShutdownSignals:[.sigint],logger: cliLogger)
+			let lifecycle = ServiceGroup(configuration:sg)
+			try await lifecycle.run()
 		}
     }
     
