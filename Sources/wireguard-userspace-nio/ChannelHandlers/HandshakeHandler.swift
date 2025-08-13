@@ -119,10 +119,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						if underLoad {
 
 							do {
-								try payload.validateUnderLoadNoNIO(responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, endpoint:Endpoint(endpoint))
+								try payload.validateUnderLoad(responderStaticPrivateKey: responderPrivateKey, R: secretCookieR, A:endpoint)
 							} catch Message.Initiation.Payload.Authenticated.Error.mac2Invalid {
 								// Create and send cookie
-								let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:Endpoint(endpoint), m:payload.msgMac1)
+								let cookie = try Message.Cookie.Payload.forge(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, a:endpoint, m:payload.msgMac1)
 								// let packet: PacketType = .cookie(endpoint, cookie)
 								context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
 									logger.debug("cookie reply message sent to endpoint", metadata:["endpoint":"\(e)"])

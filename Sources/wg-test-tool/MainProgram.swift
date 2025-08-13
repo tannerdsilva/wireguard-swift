@@ -68,7 +68,7 @@ struct CLI:AsyncParsableCommand {
 			var cliLogger = Logger(label: "wg-test-tool.initiator")
 			cliLogger.logLevel = .trace
             let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
-			let interface = try WGInterface(staticPrivateKey:myPrivateKey, initialConfiguration:peers, logLevel:.trace)
+			let interface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:peers, logLevel:.trace)
 			Task {
 				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
 				try await interface.waitForChannelInit()

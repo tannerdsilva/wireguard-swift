@@ -59,7 +59,7 @@ extension Message {
 					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
 					let receiverIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
 					let counter = Counter(RAW_staticbuff_seeking:RAW_decode)
-					let dataCount = count - MemoryLayout<Payload>.size
+					let dataCount = count - MemoryLayout<Header>.size
 					let packetTag = Tag(RAW_staticbuff:RAW_decode.pointee.advanced(by:dataCount))
 					return (Header(typeHeader:typeHeading, receiverIndex:receiverIndex, counter:counter, packetTag:packetTag), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount))
 				}

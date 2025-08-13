@@ -37,16 +37,16 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private var pendingWriteFutures:[PublicKey:[(data:[UInt8], promise:EventLoopPromise<Void>)]] = [:]
     
     // KeepAlive variables
-    private var keepaliveTasks:[PeerIndex: RepeatedTask] = [:] 
-    private var lastOutbound:[PeerIndex: NIODeadline] = [:]
+    private var keepaliveTasks:[PeerIndex:RepeatedTask] = [:]
+    private var lastOutbound:[PeerIndex:NIODeadline] = [:]
 
     // KeepAlive interval. Default 25 seconds
     private var keepaliveInterval:[PublicKey:TimeAmount] = [:]
     
     // Re handshake variables
-    private var lastHandshake:[PeerIndex: NIODeadline] = [:]
-    private var rehandshakeTasks:[PeerIndex: RepeatedTask] = [:]
-    private var nextAllowedReinit:[PeerIndex: NIODeadline] = [:]
+    private var lastHandshake:[PeerIndex:NIODeadline] = [:]
+    private var rehandshakeTasks:[PeerIndex:RepeatedTask] = [:]
+    private var nextAllowedReinit:[PeerIndex:NIODeadline] = [:]
 
     // Re handshake time intervals
     private let rekeyAfterTime:TimeAmount = .seconds(120)
@@ -69,6 +69,10 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	// MARK: - Keep Alive Task
     private func startKeepalive(for peerIndex:PeerIndex, context:ChannelHandlerContext, peerPublicKey:PublicKey) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		
         guard keepaliveTasks[peerIndex] == nil else {
 			return
 		}
@@ -286,10 +290,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 		sessions.removeValue(forKey: peerPublicKey)
         logger.debug("killed all sessions for \(peerPublicKey)")
     }
-
-    internal func getConfiguration() -> [PublicKey: SocketAddress?] {
-        return configuration
-    }
     
     internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         do {
@@ -325,7 +325,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 					}
                     
                     // Make sure the packet is not a keep alive packet
-                    if (decryptedPacket.isEmpty) {
+                    guard (decryptedPacket.isEmpty == false) else {
                         logger.debug("Received keep alive from \(String(describing: endpoint))")
                         return
                     }
