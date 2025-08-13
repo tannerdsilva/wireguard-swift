@@ -54,7 +54,7 @@ extension Message {
 			public let data:[UInt8]
 
 			public init?(RAW_decode inputPtr:consuming UnsafeRawPointer, count:size_t) {
-				guard count >= MemoryLayout<Payload>.size else { return nil }
+				guard count >= MemoryLayout<Header>.size else { return nil }
 				 (header, data) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
 					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
 					let receiverIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
@@ -66,7 +66,7 @@ extension Message {
 			}
 			
 			public func RAW_encode(count: inout RAW.size_t) {
-				count = MemoryLayout<Message.Data.Payload>.size + data.count
+				count = MemoryLayout<Message.Data.Header>.size + data.count
 			}
 			
 			public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
