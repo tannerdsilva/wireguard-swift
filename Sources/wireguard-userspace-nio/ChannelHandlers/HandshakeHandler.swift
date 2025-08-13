@@ -28,7 +28,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var precomputedCookieKey:RAW_xchachapoly.Key
 	
 	// Temp var for testing cookies
-	internal var underLoad:Bool = true
+	internal var underLoad:Bool = false
 	
 	// When will the cookies be ready? For the secretCookieR
 	internal let ovenTimer:TimeAmount = .seconds(120)

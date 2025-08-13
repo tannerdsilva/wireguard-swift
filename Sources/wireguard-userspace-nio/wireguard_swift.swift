@@ -104,6 +104,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 							PacketHandler(logLevel:.trace),
 							hs,
 							dh,
+							KcpHandler(logLevel: .trace),
+							SplicerHandler(logLevel: .trace),
 							dhh
 						])
 					}
@@ -127,14 +129,11 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .engaged(let channel):
 				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-				channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise:myWritePromise)
+				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
 				try await myWritePromise.futureResult.get()
 			default:
 				throw InvalidInterfaceStateError()
 		}
-		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-		channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
-		try await myWritePromise.futureResult.get()
 	}
 	
 	public func addPeer(_ peer: Peer) {
