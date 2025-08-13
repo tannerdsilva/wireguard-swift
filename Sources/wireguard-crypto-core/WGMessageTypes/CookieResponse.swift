@@ -12,7 +12,7 @@ public typealias CookieReplyMessage = Message.Cookie
 
 extension Message {
 	public struct Cookie {
-		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Nonce.self, Result16.self, Tag.self)
+		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Nonce.self, Result.Bytes16.self, Tag.self)
 		public struct Payload:Sendable, Sequence {
 			/// message type (type and reserved)
 			public let typeHeader:TypeHeading
@@ -21,12 +21,12 @@ extension Message {
 			/// random nonce
 			public let nonce:Nonce
 			/// cookie message
-			public let cookieMsg:Result16
+			public let cookieMsg:Result.Bytes16
 			/// cookie tag
 			public let cookieTag:Tag
 
 			/// initializes a new HandshakeResponseMessage
-			fileprivate init(receiverIndex:PeerIndex, nonce:Nonce, cookieMsg:Result16, cookieTag:Tag) {
+			fileprivate init(receiverIndex:PeerIndex, nonce:Nonce, cookieMsg:Result.Bytes16, cookieTag:Tag) {
 				self.typeHeader = 0x3
 				self.receiverIndex = receiverIndex
 				self.nonce = nonce
@@ -34,8 +34,8 @@ extension Message {
 				self.cookieTag = cookieTag
 			}
 
-			public static func forgeNoNIO(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result8, endpoint:Endpoint, m:Result16) throws -> Self {
-				let T:Result16
+			public static func forgeNoNIO(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result.Bytes8, endpoint:Endpoint, m:Result.Bytes16) throws -> Self {
+				let T:Result.Bytes16
 				switch endpoint {
 					case .v4(let v4ep):
 						T = try wgMACv2(key:r, data:v4ep)
@@ -44,11 +44,11 @@ extension Message {
 				}
 				let nonce = try generateSecureRandomBytes(as:Nonce.self)
 				let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad:m)
-				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg:Result16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
+				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg:Result.Bytes16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
 			}
 			
 			@available(*, deprecated, renamed: "forgeNoNIO")
-			public static func forge(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key , r:Result8, a:NIO.SocketAddress, m:Result16) throws -> Self {
+			public static func forge(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key , r:Result.Bytes8, a:NIO.SocketAddress, m:Result.Bytes16) throws -> Self {
 				var address:[UInt8]
 				switch a {
 					case .v4(let addr):
@@ -67,7 +67,7 @@ extension Message {
 				let T = try wgMACv2(key:r, data: address)
 				let nonce = try generateSecureRandomBytes(as:Nonce.self)
 				let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad:m)
-				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg:Result16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
+				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg:Result.Bytes16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
 			}
 		}
 	}

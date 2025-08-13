@@ -32,7 +32,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	// When will the cookies be ready? For the secretCookieR
 	internal let ovenTimer:TimeAmount = .seconds(120)
-	internal var secretCookieR:Result8 = try! generateSecureRandomBytes(as:Result8.self)
+	internal var secretCookieR:Result.Bytes8 = try! generateSecureRandomBytes(as:Result.Bytes8.self)
 	
 	// Rekey variables
 	private var rekeyAttemptTasks: [PeerIndex: RepeatedTask] = [:]
@@ -45,7 +45,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// Timers for checking incoming initation packets
 	internal var initiationTimers:[PeerIndex:TAI64N] = [:]
 	private var initiatorEphemeralPrivateKey:[PeerIndex:PrivateKey] = [:]
-	private var initiatorChainingData:[PeerIndex:(c:Result32, h:Result32)] = [:]
+	private var initiatorChainingData:[PeerIndex:(c:Result.Bytes32, h:Result.Bytes32)] = [:]
 	internal init(privateKey pkIn:consuming PrivateKey, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
@@ -53,7 +53,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		
 		// pre-computing HASH(LABEL-COOKIE || Spub)
 		(privateKey, precomputedCookieKey) = withUnsafePointer(to:pkIn) { privateKeyPtr in
-			var hasher = try! WGHasherV2<RAW_xchachapoly.Key>()
+			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
 			try! hasher.update(PublicKey(privateKey: privateKeyPtr))
 			return (privateKeyPtr.pointee, try! hasher.finish())
@@ -63,7 +63,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	private func generateNewCookieR(context: ChannelHandlerContext) {
 		context.eventLoop.scheduleRepeatedTask(initialDelay:ovenTimer, delay:ovenTimer) { [weak self] _ in
 			guard let self = self else { return }
-			self.secretCookieR = try! generateSecureRandomBytes(as:Result8.self)
+			self.secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
 		}
 	}
 	
@@ -146,7 +146,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
 						initiationTimers[payload.payload.initiatorPeerIndex] = val.timestamp
 						
-						let sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed())
+						let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 						let response = try Message.Response.Payload.forge(c:val.c, h:val.h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &val.initPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
 						let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&val.initPublicKey)
 						context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
@@ -175,7 +175,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						try withUnsafePointer(to:privateKey) { myPrivateKeyPointer in
 							try withUnsafePointer(to:initiatorEphiPrivateKey) { initiatorEphiPrivateKeyPtr in
 								// Validate handshake response
-								let val = try payload.validate(c:existingC, h:existingH, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()))
+								let val = try payload.validate(c:existingC, h:existingH, initiatorStaticPrivateKey:myPrivateKeyPointer, initiatorEphemeralPrivateKey:initiatorEphiPrivateKeyPtr, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
 								logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
 								
 								// Remove held initiation packet

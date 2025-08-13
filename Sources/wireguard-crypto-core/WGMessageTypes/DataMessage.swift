@@ -83,11 +83,11 @@ extension Message {
 				self.data = data
 			}
 
-			public borrowing func decrypt(transportKey:borrowing Result32) throws -> [UInt8] {
+			public borrowing func decrypt(transportKey:borrowing Result.Bytes32) throws -> [UInt8] {
 				return try aeadDecryptV2(as:[UInt8].self, key:transportKey, counter:header.counter.RAW_native(), cipherText:data, aad:[], tag:header.tag)
 			}
 
-			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result32, plainText:[UInt8]) throws -> Self {
+			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, plainText:[UInt8]) throws -> Self {
 				// step 1: P := P || 0... Zero Padding the Packet
 				let pLength:Int = plainText.count
 				let zeros = [UInt8](repeating: 0, count:16 * Int(ceil(Double(pLength)/16.0)) - pLength)
