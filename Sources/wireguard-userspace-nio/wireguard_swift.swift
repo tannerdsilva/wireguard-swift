@@ -48,12 +48,12 @@ public struct Peer:Sendable {
 	}
 }
 
-protocol WGIMPL {
-	associatedtype OutputType
-}
-
 /// primary wireguard interface. this is how connections will be made.
-public final actor WGInterface:Sendable, Service {
+public final actor WGInterface<TransactableDataType>:Sendable, Service where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
+	public enum State {
+		case initialized
+		case engaged(Channel)
+	}
 
 	public struct InvalidInterfaceStateError:Swift.Error {}
 
@@ -70,13 +70,12 @@ public final actor WGInterface:Sendable, Service {
 	/// Data handler channel
 	let dh:DataHandler
 	
-	/// Data channel
-	var channel:Channel? = nil
-	
+	private var state:State = .initialized
+
 	private let group:MultiThreadedEventLoopGroup
 
-	public let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
-	
+	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
+
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
 	public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
@@ -94,44 +93,45 @@ public final actor WGInterface:Sendable, Service {
 	
 	/// Starts the WireGuard interface
 	public func run() async throws {
-		let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
-		let bootstrap =  DatagramBootstrap(group: group)
-			.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-			.channelInitializer { channel in
-				channel.pipeline.addHandlers([
-				PacketHandler(logLevel:.trace),
-				hs,
-				self.dh
-			])
-		}
-
-		// Start Channel
-		do {
-			channel = try await bootstrap.bind(host:"0.0.0.0", port:36361).get()
-			try! bootstrappedFuture.setSuccess(())
-		} catch {
-			throw POSIXError(.ECONNREFUSED)
-		}
-		
-		logger.info("server started successfully on \(channel!.localAddress?.description ?? "unknown address")")
-
-		try await withGracefulShutdownHandler {
-			try await channel!.closeFuture.get()
-		} onGracefulShutdown: { [c = channel] in
-			_ = c!.close()
+		switch state {
+			case .initialized:
+				let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
+				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, channelEnabledFuture: bootstrappedFuture, logLevel:logger.logLevel)
+				let bootstrap =  DatagramBootstrap(group: group)
+					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
+						channel.pipeline.addHandlers([
+							PacketHandler(logLevel:.trace),
+							hs,
+							dh,
+							dhh
+						])
+					}
+				let channel = try await bootstrap.bind(host:"0.0.0.0", port:36361).get()
+				state = .engaged(channel)
+				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
+				try await withGracefulShutdownHandler {
+					try await channel.closeFuture.get()
+				} onGracefulShutdown: { [c = channel, l = logger] in
+					_ = c.close()
+					l.debug("invoking graceful shutdown of wireguard nio interface")
+				}
+			case .engaged(_):
+				throw InvalidInterfaceStateError()
 		}
 
 		logger.info("server closed successfully.")
 	}
-	
+
 	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
-		guard let channel = channel else {
-			logger.error("channel is not initialized. cannot write data.")
-			throw InvalidInterfaceStateError()
+		switch state {
+			case .engaged(let channel):
+				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
+				channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise:myWritePromise)
+				try await myWritePromise.futureResult.get()
+			default:
+				throw InvalidInterfaceStateError()
 		}
-		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-		channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise:myWritePromise)
-		try await myWritePromise.futureResult.get()
 	}
 	
 	public func addPeer(_ peer: Peer) {

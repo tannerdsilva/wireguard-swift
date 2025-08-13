@@ -185,13 +185,14 @@ extension Message.Initiation.Payload {
 				}
 			}
 		}
+		
 		@available(*, deprecated, renamed: "validateUnderLoadNoNIO")
 		public borrowing func validateUnderLoad(responderStaticPrivateKey:UnsafePointer<PrivateKey>, R:Result8, A:SocketAddress) throws {
 			try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key
 				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
 				
-				// Try validating msgMac1
+				// try validating msgMac1
 				var hasher = try WGHasherV2<Result32>()
 				try hasher.update([UInt8]("mac1----".utf8))
 				try hasher.update(responderStaticPublicKey)
@@ -200,7 +201,7 @@ extension Message.Initiation.Payload {
 					throw Error.mac1Invalid
 				}
 				
-				// Try validating msgMac2
+				// try validating msgMac2
 				var address:[UInt8]
 				switch A {
 					case .v4(let addr):
@@ -225,7 +226,7 @@ extension Message.Initiation.Payload {
 			}
 		}
 
-		public borrowing func validate(responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result32, h:Result32, initPublicKey:PublicKey, timestamp:TAI64N) {
+		public borrowing func validate(responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32, initPublicKey:PublicKey, timestamp:TAI64N) {
 			return try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key
 				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
@@ -303,11 +304,11 @@ extension Message.Initiation.Payload {
 	}
 }
 extension Message.Initiation.Payload {
-	@RAW_staticbuff(concat:Message.Initiation.Payload.self, Result16.self)
+	@RAW_staticbuff(concat:Message.Initiation.Payload.self, Result.Bytes16.self)
 	fileprivate struct MSGb:Sendable {
 		fileprivate let payload:Message.Initiation.Payload
-		fileprivate let msgMac1:Result16
-		fileprivate init(payload:Message.Initiation.Payload, msgMac1:Result16) {
+		fileprivate let msgMac1:Result.Bytes16
+		fileprivate init(payload:Message.Initiation.Payload, msgMac1:Result.Bytes16) {
 			self.payload = payload
 			self.msgMac1 = msgMac1
 		}
