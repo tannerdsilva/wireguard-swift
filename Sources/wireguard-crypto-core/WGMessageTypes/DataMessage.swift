@@ -29,7 +29,6 @@ extension Message.Data.Header {
 
 extension Message {
 	public struct Data {
-		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Counter.self, Tag.self)
 		public struct Header:Sendable {
 			/// message type (type and reserved)
 			public let typeHeader:TypeHeading
@@ -66,7 +65,7 @@ extension Message {
 			}
 			
 			public func RAW_encode(count: inout RAW.size_t) {
-				count = MemoryLayout<Message.Data.Header>.size + data.count
+				count = MemoryLayout<Header>.size + data.count
 			}
 			
 			public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
