@@ -49,7 +49,7 @@ import wireguard_crypto_core
     var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
     var initiatorEphemeralPrivateKey = try PrivateKey()
     var initiatorEphemeralPublicKey = PublicKey(privateKey:&initiatorEphemeralPrivateKey)
-    var sharedKey = Result32(RAW_staticbuff:Result32.RAW_staticbuff_zeroed()) // 0^32 shared key default
+    var sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()) // 0^32 shared key default
     var senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
     var constructedPacket = try Message.Response.Payload.forge(c: sharedKey, h: sharedKey, initiatorPeerIndex: senderIndex, initiatorStaticPublicKey: &initiatorPublicKey, initiatorEphemeralPublicKey: initiatorEphemeralPublicKey, preSharedKey: sharedKey)
     var authenticatedPacket = try constructedPacket.payload.finalize(initiatorStaticPublicKey: &initiatorPublicKey)
@@ -57,9 +57,9 @@ import wireguard_crypto_core
 }
 
 @Test func selfValidateDataPacket() throws {
-	try Result32(RAW_staticbuff: try generateRandomBytes(count: 32)).RAW_access_staticbuff { cPtr in
-		let (TIsend, _) = try wgKDFv2((Result32, Result32).self, key: cPtr, count:MemoryLayout<Result32>.size, data: [] as [UInt8], count:0)
-		let (TRrecv, _) = try wgKDFv2((Result32, Result32).self, key: cPtr, count:MemoryLayout<Result32>.size, data: [] as [UInt8], count:0)
+	try Result.Bytes32(RAW_staticbuff: try generateRandomBytes(count: 32)).RAW_access_staticbuff { cPtr in
+		let (TIsend, _) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key: cPtr, count:MemoryLayout<Result.Bytes32>.size, data: [] as [UInt8], count:0)
+		let (TRrecv, _) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key: cPtr, count:MemoryLayout<Result.Bytes32>.size, data: [] as [UInt8], count:0)
 
 		let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
 		
@@ -101,7 +101,7 @@ import wireguard_crypto_core
 	var constructedPacket = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
 	var authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey)
 	let endpoint = try SocketAddress(ipAddress: "192.0.2.1", port: 51820)
-	let secretCookieR = try! generateSecureRandomBytes(as:Result8.self)
+	let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
 	let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex: authenticatedPacketToSend.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, endpoint:Endpoint(endpoint), m: authenticatedPacketToSend.msgMac1)
 
 	authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey, cookie: cookie)

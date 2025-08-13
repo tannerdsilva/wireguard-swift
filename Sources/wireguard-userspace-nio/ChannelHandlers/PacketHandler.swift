@@ -26,7 +26,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias InboundOut = (Endpoint, Message)
 	
-	internal typealias OutboundIn = (SocketAddress, Message)
+	internal typealias OutboundIn = (Endpoint, Message)
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
 	private let logger:Logger
@@ -80,7 +80,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 	
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		// handles receiving Outbound Packets and sending out a UDP packet to the remote address
-		let destinationEndpoint:SocketAddress
+		let destinationEndpoint:Endpoint
 		let mode:Message
 		(destinationEndpoint, mode) = unwrapOutboundIn(data)
 		let sendBuffer: ByteBuffer
@@ -89,17 +89,17 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)
 				buffer.writeBytes(payload)
 				sendBuffer = buffer
-				logger.debug("sending handshake initiation packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
+				logger.debug("sending handshake initiation packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint)"])
 			case let .response(payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Response.Payload.Authenticated>.size)
 				buffer.writeBytes(payload)
 				sendBuffer = buffer
-				logger.debug("sending handshake response packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
+				logger.debug("sending handshake response packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint)"])
 			case let .cookie(payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<CookieReplyMessage.Payload>.size)
 				buffer.writeBytes(payload)
 				sendBuffer = buffer
-				logger.debug("sending cookie packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint.description)"])
+				logger.debug("sending cookie packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint)"])
             case .data(let payload):
                 logger.trace("sending transit packet outbound")
                 var size: RAW.size_t = 0
@@ -110,6 +110,6 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				}
                 sendBuffer = buffer
 		}
-		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:destinationEndpoint, data:sendBuffer)), promise:promise)
+		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:try! SocketAddress(destinationEndpoint), data:sendBuffer)), promise:promise)
 	}
 }
