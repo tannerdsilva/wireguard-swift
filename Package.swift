@@ -14,12 +14,13 @@ let package = Package(
 		.library(name:"wireguard-userspace-nio", targets:["wireguard-userspace-nio"]),
 	],
 	dependencies:[
-        .package(url:"https://github.com/tannerdsilva/rawdog.git", "19.0.1"..<"20.0.0"),
+        .package(url:"https://github.com/tannerdsilva/rawdog.git", "19.0.2"..<"20.0.0"),
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
-		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.1"..<"7.0.0"),
+		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"76009b9f299fb8e67736953b508df43985e21a7d"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
-        .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0")
+        .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
+		.package(url:"https://github.com/bwyma1/kcp-Swift", revision: "bf7f713ad832f7b49884587321a5ececd807c0c5")
 	],
 	targets: [
 		.executableTarget(
@@ -46,7 +47,6 @@ let package = Package(
 				.product(name:"RAW_blake2", package:"rawdog"),
 				.product(name:"RAW_hmac", package:"rawdog"),
 				.product(name:"bedrock_ip", package:"bedrock"),
-				.product(name:"NIO", package:"swift-nio")
 			]
 		),
 		.target(
@@ -64,6 +64,7 @@ let package = Package(
 				.product(name:"RAW_hmac", package:"rawdog"),
                 .product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 				.product(name:"bedrock_ip", package:"bedrock"),
+				.product(name:"kcp-swift", package: "kcp-Swift"),
 				"wireguard-crypto-core"
 			]
 		),

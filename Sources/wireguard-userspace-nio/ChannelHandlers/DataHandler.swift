@@ -24,10 +24,10 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     // Nsend increments by 1 for every outbound encrypted packet
     // Nrecv used with sliding window to check if packet is valid
     private var nonceCounters:[PeerIndex:(Nsend:Counter, Nrecv:SlidingWindow<Counter>)] = [:]
-    private var transmitKeys:[PeerIndex:(Tsend:Result32, Trecv:Result32)] = [:]
+    private var transmitKeys:[PeerIndex:(Tsend:Result.Bytes32, Trecv:Result.Bytes32)] = [:]
     
     // Wireguard peer configuration of peer `public key` to `Internet Endpoint`
-    private var configuration:[PublicKey: SocketAddress?] = [:]
+    private var configuration:[PublicKey: Endpoint?] = [:]
     
     // Active wireguard sessions
 	private var sessions:[PublicKey:(previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?)] = [:]
@@ -192,7 +192,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     }
     
 	// Helper function for decrypting (authenticating) an encrypted packet
-    private func decryptPacket(peerPublicKey: PublicKey, packet:borrowing Message.Data.Payload, transportKey: Result32) -> [UInt8]? {
+    private func decryptPacket(peerPublicKey: PublicKey, packet:borrowing Message.Data.Payload, transportKey: Result.Bytes32) -> [UInt8]? {
         // Check validity of the nonce
         if (nonceCounters[packet.header.receiverIndex]!.Nrecv.isPacketAllowed(packet.header.counter.RAW_native())) {
             // Authenticate (decrypt) packet
@@ -330,9 +330,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                         return
                     }
                     
-                    // Add plaintext packet to queue
+                    // Send plaintext packet to the kcp handler
                    	context.fireChannelRead(wrapInboundOut((publicKey, decryptedPacket)))
-                    logger.trace("Decrypted plaintext packet added to queue")
+                    logger.debug("Decrypted plaintext packet, sent packet to kcp handler")
                 
                 // Calculate transmit keys and set nonce counters to 0
                 case .keyExchange(let peerPublicKey, let endpoint, let peerIndex, let c, let isInitiator):
@@ -360,7 +360,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						nonceCounters[peerIndex] = (Nsend:0, Nrecv:SlidingWindow<Counter>(windowSize: 64))
 						
 						// Calculate transmit keys
-						let (lhs, rhs) = try wgKDFv2((Result32, Result32).self, key:cPtr, count:MemoryLayout<Result32>.size, data:[] as [UInt8], count:0)
+						let (lhs, rhs) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 						if(isInitiator){
 							transmitKeys[peerIndex] = (lhs, rhs)
 						} else {

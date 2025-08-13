@@ -1,10 +1,19 @@
 import RAW
 import bedrock_ip
 
-public enum Endpoint:RAW_encodable, RAW_decodable, Sendable {
+public enum Endpoint:RAW_encodable, RAW_decodable, CustomDebugStringConvertible, Hashable, Equatable, Sendable {
+
+	public var debugDescription: String {
+		switch self {
+			case .v4(let v4):
+				return "v4: \(String(v4.address))"
+			case .v6(let v6):
+				return "v6: \(String(v6.address))"
+		}
+	}
 
 	@RAW_staticbuff(concat:AddressV4.self, Port.self)
-	public struct V4:Sendable {
+	public struct V4:Sendable, Hashable, Equatable {
 		public let address:AddressV4
 		public let port:Port
 		public init(address:AddressV4, port:Port) {
@@ -14,7 +23,7 @@ public enum Endpoint:RAW_encodable, RAW_decodable, Sendable {
 	}
 
 	@RAW_staticbuff(concat:AddressV6.self, Port.self)
-	public struct V6:Sendable {
+	public struct V6:Sendable, Hashable, Equatable {
 		public let address:AddressV6
 		public let port:Port
 		public init(address:AddressV6, port:Port) {
@@ -62,6 +71,17 @@ public enum Endpoint:RAW_encodable, RAW_decodable, Sendable {
 				self = .v4(Endpoint.V4(address: addr, port: port))
 			case .v6(let addr):
 				self = .v6(Endpoint.V6(address: addr, port: port))
+		}
+	}
+
+	public static func == (lhs: Endpoint, rhs: Endpoint) -> Bool {
+		switch (lhs, rhs) {
+			case (.v4(let l), .v4(let r)):
+				return l.address == r.address && l.port == r.port
+			case (.v6(let l), .v6(let r)):
+				return l.address == r.address && l.port == r.port
+			default:
+				return false
 		}
 	}
 }

@@ -26,10 +26,21 @@ extension Endpoint {
 	}
 }
 
+extension SocketAddress {
+	public init(_ endpoint:Endpoint) throws {
+		switch endpoint {
+			case .v4(let v4ep):
+				self = try SocketAddress(bedrock_ip.sockaddr_in(v4ep.address, port: v4ep.port.RAW_native()))
+			case .v6(let v6ep):
+				self = try SocketAddress(bedrock_ip.sockaddr_in6(v6ep.address, port:v6ep.port.RAW_native()))
+		}
+	}
+}
+
 /// Represents a peer on the WireGuard interface. Each peer has a unique public key assosiated with it.
 public struct Peer:Sendable {
 	public let publicKey:PublicKey
-	let endpoint:SocketAddress?
+	let endpoint:Endpoint?
 	let internalKeepAlive:TimeAmount?
 	
 	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
@@ -38,7 +49,7 @@ public struct Peer:Sendable {
 		
 		if (ipAddress != nil && port != nil) {
 			do {
-				self.endpoint = try SocketAddress(ipAddress: ipAddress!, port: port!)
+				self.endpoint = try Endpoint(SocketAddress(ipAddress: ipAddress!, port: port!))
 			} catch {
 				self.endpoint = nil
 			}
@@ -104,6 +115,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 							PacketHandler(logLevel:.trace),
 							hs,
 							dh,
+							KcpHandler(logLevel: .trace),
+							SplicerHandler(logLevel: .trace),
 							dhh
 						])
 					}
@@ -127,7 +140,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .engaged(let channel):
 				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-				channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise:myWritePromise)
+				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
 				try await myWritePromise.futureResult.get()
 			default:
 				throw InvalidInterfaceStateError()
