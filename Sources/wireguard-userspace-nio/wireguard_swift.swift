@@ -101,7 +101,9 @@ public final actor WGInterface:Sendable, Service {
 				channel.pipeline.addHandlers([
 				PacketHandler(logLevel:.trace),
 				hs,
-				self.dh
+				self.dh,
+				KcpHandler(logLevel:.trace),
+				SplicerHandler(logLevel: .trace)
 			])
 		}
 
@@ -130,7 +132,7 @@ public final actor WGInterface:Sendable, Service {
 			throw InvalidInterfaceStateError()
 		}
 		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-		channel.pipeline.writeAndFlush(InterfaceInstruction.encryptAndTransmit(publicKey, data), promise:myWritePromise)
+		channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
 		try await myWritePromise.futureResult.get()
 	}
 	

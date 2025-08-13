@@ -330,9 +330,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                         return
                     }
                     
-                    // Add plaintext packet to queue
+                    // Send plaintext packet to the kcp handler
                    	context.fireChannelRead(wrapInboundOut((publicKey, decryptedPacket)))
-                    logger.debug("Decrypted plaintext packet added to queue")
+                    logger.debug("Decrypted plaintext packet, sent packet to kcp handler")
                 
                 // Calculate transmit keys and set nonce counters to 0
                 case .keyExchange(let peerPublicKey, let endpoint, let peerIndex, let c, let isInitiator):

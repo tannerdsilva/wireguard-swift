@@ -20,7 +20,7 @@ let package = Package(
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", "6.0.1"..<"7.0.0"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
         .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
-		.package(url:"https://github.com/bwyma1/kcp-Swift", revision: "6f6d004331a0edf9e2b5a3b2b1ef4825bc75e6d1")
+		.package(url:"https://github.com/bwyma1/kcp-Swift", revision: "bf7f713ad832f7b49884587321a5ececd807c0c5")
 	],
 	targets: [
 		.executableTarget(
