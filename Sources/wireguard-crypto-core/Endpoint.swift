@@ -2,7 +2,6 @@ import RAW
 import bedrock_ip
 
 public enum Endpoint:RAW_encodable, RAW_decodable, CustomDebugStringConvertible, Hashable, Equatable, Sendable {
-
 	public var debugDescription: String {
 		switch self {
 			case .v4(let v4):

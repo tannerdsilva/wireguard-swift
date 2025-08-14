@@ -27,21 +27,24 @@ extension Endpoint {
 }
 
 extension SocketAddress {
-	public init(_ endpoint:Endpoint) throws {
+	public init(_ endpoint:Endpoint) {
 		switch endpoint {
 			case .v4(let v4ep):
-				self = try SocketAddress(bedrock_ip.sockaddr_in(v4ep.address, port: v4ep.port.RAW_native()))
+				self = SocketAddress(bedrock_ip.sockaddr_in(v4ep.address, port: v4ep.port.RAW_native()))
 			case .v6(let v6ep):
-				self = try SocketAddress(bedrock_ip.sockaddr_in6(v6ep.address, port:v6ep.port.RAW_native()))
+				self = SocketAddress(bedrock_ip.sockaddr_in6(v6ep.address, port:v6ep.port.RAW_native()))
 		}
 	}
 }
 
+@available(*, deprecated, renamed: "PeerInfo")
+public typealias Peer = PeerInfo
+
 /// Represents a peer on the WireGuard interface. Each peer has a unique public key assosiated with it.
-public struct Peer:Sendable {
+public struct PeerInfo:Sendable {
 	public let publicKey:PublicKey
-	let endpoint:Endpoint?
-	let internalKeepAlive:TimeAmount?
+	public let endpoint:Endpoint?
+	public let internalKeepAlive:TimeAmount?
 	
 	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
 		self.publicKey = publicKey
@@ -63,28 +66,17 @@ public struct Peer:Sendable {
 public final actor WGInterface<TransactableDataType>:Sendable, Service where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
 	public enum State {
 		case initialized
+		case engaging
 		case engaged(Channel)
 	}
-
 	public struct InvalidInterfaceStateError:Swift.Error {}
 
-	let logger:Logger
-
+	private let logger:Logger
 	private let bootstrappedFuture:Future<Void, Swift.Error> = Future<Void, Swift.Error>()
-
-	/// The private key of the interface (owners private key)
-	let staticPrivateKey:PrivateKey
-	
-	/// The initial configuration for peers upon interface creation
-	let initialConfiguration:[Peer]
-	
-	/// Data handler channel
-	let dh:DataHandler
-	
+	private let staticPrivateKey:PrivateKey
+	private let dh:DataHandler
 	private var state:State = .initialized
-
 	private let group:MultiThreadedEventLoopGroup
-
 	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
@@ -93,9 +85,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
-		self.initialConfiguration = initialConfiguration
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-		self.dh = DataHandler(logLevel: .trace, initialConfiguration: initialConfiguration)
+		self.dh = DataHandler(logLevel:.trace, initialConfiguration: initialConfiguration)
 	}
 
 	public func waitForChannelInit() async throws {
@@ -106,10 +97,11 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	public func run() async throws {
 		switch state {
 			case .initialized:
+				state = .engaging
 				let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, channelEnabledFuture: bootstrappedFuture, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
-					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
 						channel.pipeline.addHandlers([
 							PacketHandler(logLevel:.trace),
@@ -130,6 +122,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					l.debug("invoking graceful shutdown of wireguard nio interface")
 				}
 			case .engaged(_):
+				fallthrough
+			case .engaging:
 				throw InvalidInterfaceStateError()
 		}
 
@@ -146,15 +140,35 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				throw InvalidInterfaceStateError()
 		}
 	}
-	
-	public func addPeer(_ peer: Peer) {
-		dh.addPeer(peer: peer)
-	}
-	
-	public func removePeer(_ peer: Peer) {
-		dh.removePeer(peer: peer)
-	}
-	
 }
 
 
+extension WGInterface:AsyncSequence {
+	public struct AsyncIterator:AsyncIteratorProtocol {
+		private let inboundDataOut:FIFO<(PublicKey, TransactableDataType), Swift.Error>.AsyncConsumerExplicit
+		
+		internal init(inboundData:FIFO<(PublicKey, TransactableDataType), Swift.Error>) {
+			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
+		}
+		
+		public func next() async throws -> (PublicKey, TransactableDataType)? {
+			switch await inboundDataOut.next() {
+			case .element(let element):
+				return element
+			case .capped(let result):
+				switch result {
+					case .success(_):
+						return nil
+					case .failure(let error):
+						throw error
+				}
+			case .wouldBlock:
+				fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
+			}
+		}
+	}
+	
+	nonisolated public func makeAsyncIterator() -> AsyncIterator {
+		return AsyncIterator(inboundData:inboundData)
+	}
+}

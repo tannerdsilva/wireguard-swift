@@ -87,11 +87,11 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Receiving data which needs to be sent
 	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
 		var (key, data) = unwrapOutboundIn(data)
-		if(kcp[key] == nil) {
-			makeIkcpCb(key: key, context: context)
+		if (kcp[key] == nil) {
+			makeIkcpCb(key:key, context:context)
 		}
 		
-		var _ = kcp[key]!.send(buffer: &data, _len: data.count)
+		var _ = kcp[key]!.send(buffer:&data, _len:data.count)
 		
 		kcp[key]!.update(current: 0)
 		

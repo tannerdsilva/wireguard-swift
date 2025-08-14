@@ -27,7 +27,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private var transmitKeys:[PeerIndex:(Tsend:Result.Bytes32, Trecv:Result.Bytes32)] = [:]
     
     // Wireguard peer configuration of peer `public key` to `Internet Endpoint`
-    private var configuration:[PublicKey: Endpoint?] = [:]
+    private var configuration:[PublicKey:Endpoint?] = [:]
     
     // Active wireguard sessions
 	private var sessions:[PublicKey:(previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?)] = [:]
@@ -209,7 +209,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
-    internal func addPeer(peer:Peer) {
+    private func addPeer(peer:Peer) {
         configuration[peer.publicKey] = peer.endpoint
         if(peer.internalKeepAlive != nil){
             keepaliveInterval[peer.publicKey] = peer.internalKeepAlive
@@ -218,7 +218,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
-    internal func removePeer(peer: Peer) {
+    private func removePeer(peer: Peer) {
         configuration[peer.publicKey] = nil
         keepaliveInterval[peer.publicKey] = nil
     }

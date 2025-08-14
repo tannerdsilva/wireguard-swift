@@ -1,8 +1,13 @@
 
 import NIO
+import RAW
 import RAW_dh25519
 import kcp_swift
 import Logging
+
+@RAW_staticbuff(bytes:4)
+@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
+fileprivate struct EncodedUInt32:Sendable {}
 
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
@@ -29,7 +34,9 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		
 		guard let len = storedLengths[key] else {
 			// Extract the UInt32 from the first 4 bytes
-			let value = data.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+			let value = data.RAW_access {
+				return EncodedUInt32(RAW_staticbuff:$0.baseAddress!).RAW_native()
+			}
 			
 			// Remove the first 4 bytes from the array
 			let payload = Array(data.dropFirst(4))
@@ -73,12 +80,14 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			let len = (data.count + 299_999) / 300_000
 			let header:UInt32 = UInt32(len)
 			
-			var headerBytes = withUnsafeBytes(of: header.bigEndian) { Array($0) }
+			let headerBytes = EncodedUInt32(RAW_native:UInt32(len))
 
 			for i in 0..<len {
 				var segment = Array(data[data.index(data.startIndex, offsetBy: i * 300_000)..<data.index(data.startIndex, offsetBy: (i + 1) * 300_000)])
 				if(i == 0) {
-					segment.insert(contentsOf: headerBytes, at: 0)
+					headerBytes.RAW_access {
+						segment.insert(contentsOf:$0, at: 0)
+					}
 				}
 				context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
 			}

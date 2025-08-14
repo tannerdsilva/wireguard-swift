@@ -25,7 +25,6 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 	
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias InboundOut = (Endpoint, Message)
-	
 	internal typealias OutboundIn = (Endpoint, Message)
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
@@ -96,7 +95,7 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				sendBuffer = buffer
 				logger.debug("sending handshake response packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint)"])
 			case let .cookie(payload):
-				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<CookieReplyMessage.Payload>.size)
+				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Cookie.Payload>.size)
 				buffer.writeBytes(payload)
 				sendBuffer = buffer
 				logger.debug("sending cookie packet of size \(sendBuffer.readableBytes)", metadata:["remote_address":"\(destinationEndpoint)"])
@@ -110,6 +109,6 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 				}
                 sendBuffer = buffer
 		}
-		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:try! SocketAddress(destinationEndpoint), data:sendBuffer)), promise:promise)
+		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:SocketAddress(destinationEndpoint), data:sendBuffer)), promise:promise)
 	}
 }
