@@ -41,6 +41,8 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 	}
 
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) where TransactableDataType == [UInt8] {
+		var logger = log
+		logger.trace("handing off data to FIFO")
 		handoff.yield(unwrapInboundIn(data))
 	}
 }

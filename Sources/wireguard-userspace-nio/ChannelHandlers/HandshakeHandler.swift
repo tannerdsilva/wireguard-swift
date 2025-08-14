@@ -14,7 +14,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias OutboundIn = PacketType
 	internal typealias OutboundOut = (Endpoint, Message)
 	
-	private let logger:Logger
+	private var logger:Logger
 	internal let privateKey:PrivateKey
 	
 	// Storing public keys for validating responses after we send initiation
@@ -58,6 +58,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 			try! hasher.update(PublicKey(privateKey: privateKeyPtr))
 			return (privateKeyPtr.pointee, try! hasher.finish())
 		}
+	}
+
+	internal func handlerAdded(context: ChannelHandlerContext) {
+		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
+		logger.trace("handler added to pipeline.")
 	}
 	
 	private func generateNewCookieR(context: ChannelHandlerContext) {

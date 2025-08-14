@@ -53,7 +53,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private let checkEvery:TimeAmount = .seconds(5)
     private let rekeyTimeout:TimeAmount = .seconds(5)
     
-    private let logger:Logger
+    private var logger:Logger
 
     internal init(logLevel:Logger.Level, initialConfiguration:[Peer]? = nil) {
         var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -66,7 +66,12 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             }
         }
     }
-	
+
+	internal func handlerAdded(context: ChannelHandlerContext) {
+		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
+		logger.trace("handler added to pipeline.")
+	}
+
 	// MARK: - Keep Alive Task
     private func startKeepalive(for peerIndex:PeerIndex, context:ChannelHandlerContext, peerPublicKey:PublicKey) {
 		#if DEBUG

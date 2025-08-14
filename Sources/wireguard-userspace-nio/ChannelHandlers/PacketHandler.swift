@@ -14,7 +14,7 @@ internal enum PacketType {
 }
 
 
-internal final class PacketHandler:ChannelDuplexHandler, Sendable {
+internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
 		/// specifies that the packet length does not match the expected length for the given packet type
@@ -28,12 +28,17 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 	internal typealias OutboundIn = (Endpoint, Message)
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
-	private let logger:Logger
+	private var logger:Logger
 
 	internal init(logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
+	}
+
+	internal func handlerAdded(context: ChannelHandlerContext) {
+		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
+		logger.trace("handler added to pipeline.")
 	}
 	
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
@@ -70,9 +75,9 @@ internal final class PacketHandler:ChannelDuplexHandler, Sendable {
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.cookie(Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Cookie.Payload>.size)!))))
 				case 0x4:
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...", metadata:["remote_address":"\(envelope.remoteAddress.description)"])
-                    context.fireChannelRead(wrapInboundOut((endpoint, Message.data(Message.Data.Payload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!))))
+					context.fireChannelRead(wrapInboundOut((endpoint, Message.data(Message.Data.Payload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!))))
 				default:
-                    logger.debug("Invalid Packet type \(byteBuffer[0])")
+					logger.debug("Invalid Packet type \(byteBuffer[0])")
 			}
 		}
 	}

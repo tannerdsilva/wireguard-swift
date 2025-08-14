@@ -12,7 +12,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	private var kcp:[PublicKey: ikcp_cb] = [:]
 	
-	private let logger:Logger
+	private var logger:Logger
 	
 	// Task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
@@ -28,7 +28,12 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 	}
-	
+
+	internal func handlerAdded(context: ChannelHandlerContext) {
+		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
+		logger.trace("handler added to pipeline.")
+	}
+
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb(conv: 0, output: { buffer in
 			// Pass outbound kcp segment buffers to data handler

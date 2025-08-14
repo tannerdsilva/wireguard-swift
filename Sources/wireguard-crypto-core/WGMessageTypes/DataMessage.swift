@@ -54,7 +54,7 @@ extension Message {
 
 			public init?(RAW_decode inputPtr:consuming UnsafeRawPointer, count:size_t) {
 				guard count >= MemoryLayout<Header>.size else { return nil }
-				 (header, data) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
+				(header, data) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
 					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
 					let receiverIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
 					let counter = Counter(RAW_staticbuff_seeking:RAW_decode)

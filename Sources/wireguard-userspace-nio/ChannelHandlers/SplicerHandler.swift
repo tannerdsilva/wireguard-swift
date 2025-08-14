@@ -17,7 +17,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
 	internal typealias OutboundOut = (PublicKey, [UInt8]) // Send spliced data to kcp handler
 	
-	private let logger:Logger
+	private var logger:Logger
 	
 	private var storedLengths:[PublicKey:Int] = [:]
 	private var storedPayload:[PublicKey:[UInt8]] = [:]
@@ -27,7 +27,12 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 	}
-	
+
+	internal func handlerAdded(context: ChannelHandlerContext) {
+		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
+		logger.trace("handler added to pipeline.")
+	}
+
 	// Received kcp segment. Need to stitch together and send to handoff handler
 	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		let (key, data) = unwrapInboundIn(data)
@@ -78,8 +83,6 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		// Data needs to be spliced and place a len header on first segment
 		else {
 			let len = (data.count + 299_999) / 300_000
-			let header:UInt32 = UInt32(len)
-			
 			let headerBytes = EncodedUInt32(RAW_native:UInt32(len))
 
 			for i in 0..<len {
