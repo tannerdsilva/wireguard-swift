@@ -34,7 +34,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     private var sessionsInv:[PeerIndex:PublicKey] = [:]
     
     // Pending incoming and outgoing packets
-    private var pendingWriteFutures:[PublicKey:[(data:[UInt8], promise:EventLoopPromise<Void>)]] = [:]
+    private var pendingWriteFutures:[PublicKey:[(data:[UInt8], promise:EventLoopPromise<Void>?)]] = [:]
     
     // KeepAlive variables
     private var keepaliveTasks:[PeerIndex:RepeatedTask] = [:]
@@ -387,7 +387,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						}
 						for packet in packets {
 							if let peer = sessions[peerPublicKey]!.current {
-								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Trecv, plainText: packet.data)
+								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Tsend, plainText: packet.data)
 								context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:packet.promise)
 								lastOutbound[peerIndex] = .now()
 							}
@@ -420,16 +420,14 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 // Encrypt packet and send it out to peer
                 do {
                     if let peerIndex = sessions[publicKey] {
-						let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peerIndex.current!, nonce: &nonceCounters[peerIndex.current!]!.Nsend, transportKey: transmitKeys[peerIndex.current!]!.Trecv, plainText: bytes)
+						let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peerIndex.current!, nonce: &nonceCounters[peerIndex.current!]!.Nsend, transportKey: transmitKeys[peerIndex.current!]!.Tsend, plainText: bytes)
                         context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:promise)
 						lastOutbound[peerIndex.current!] = .now()
                     } else {
                         // Send handshake since there is no active session
-                        logger.debug("initiation invoker send down to the handshake handler")
                         context.writeAndFlush(wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise:nil)
                         
                         // Add packet to be encrypted after handshake
-                        let promise = context.eventLoop.makePromise(of: Void.self)
                         pendingWriteFutures[publicKey, default: []].append((bytes, promise))
                     }
                 } catch {

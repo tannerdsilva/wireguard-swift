@@ -1,10 +1,13 @@
 import Testing
+import Foundation
 @testable import wireguard_userspace_nio
 import RAW_dh25519
 import RAW_base64
 import RAW_xchachapoly
 import RAW
 import NIO
+import Logging
+import ServiceLifecycle
 import wireguard_crypto_core
 
 @Test func testCreateInitilizationMessage() throws {
@@ -108,3 +111,152 @@ import wireguard_crypto_core
 
 	try authenticatedPacketToSend.validateUnderLoadNoNIO(responderStaticPrivateKey: &responderStaticPrivateKey, R: secretCookieR, endpoint:Endpoint(endpoint))
 }
+
+@Test func sendString() async throws {
+	let stringToSend = "Hello, world!"
+	let messageBytes: [UInt8] = Array(stringToSend.utf8)
+	
+	var cliLogger = Logger(label: "wg-test-tool.initiator")
+	
+	let (myPublicKey, myPrivateKey) = try dhGenerate()
+	let (peerPublicKey, peerPrivateKey) = try dhGenerate()
+	
+	_ = try await withThrowingTaskGroup(body: { foo in
+		let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+		let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
+		
+		let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+		let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.trace, listeningPort: 36000)
+
+		foo.addTask {
+			try await myInterface.run()
+		}
+		foo.addTask {
+			try await peerInterface.run()
+		}
+		
+		cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+		try await myInterface.waitForChannelInit()
+		
+		cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+		try await peerInterface.waitForChannelInit()
+		
+		cliLogger.info("Channel initialized. Sending handshake initiation message...")
+		try await myInterface.write(publicKey: peerPublicKey, data: messageBytes)
+		
+		cliLogger.info("Channel initialized. Reading data...")
+		for try await (key, incomingData) in peerInterface {
+			#expect(key == myPublicKey)
+			#expect(incomingData == messageBytes)
+			foo.cancelAll()
+		}
+	})
+}
+
+@Test func sendMultipleMessages() async throws {
+	let payloadSize: Int = 10
+	
+	var payload = [UInt8](repeating: 0, count: payloadSize)
+	for i in 0..<payloadSize {
+		payload[i] = UInt8(i%256)
+	}
+	var payload2 = [UInt8](repeating: 0, count: payloadSize)
+	for i in 0..<payloadSize {
+		payload2[i] = UInt8(i%256)
+	}
+	
+	let cliLogger = Logger(label: "wg-test-tool.initiator")
+	
+	let (myPublicKey, myPrivateKey) = try dhGenerate()
+	let (peerPublicKey, peerPrivateKey) = try dhGenerate()
+	
+	_ = try await withThrowingTaskGroup(body: { foo in
+		let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+		let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
+		
+		let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+		let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.trace, listeningPort: 36000)
+
+		foo.addTask {
+			try await myInterface.run()
+		}
+		foo.addTask {
+			try await peerInterface.run()
+		}
+		
+		cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+		try await myInterface.waitForChannelInit()
+		
+		cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+		try await peerInterface.waitForChannelInit()
+		
+		cliLogger.info("Channel initialized. Sending handshake initiation message...")
+		try await myInterface.write(publicKey: peerPublicKey, data: payload)
+		
+		cliLogger.info("Sending second data packet...")
+		try await myInterface.write(publicKey: peerPublicKey, data: payload2)
+		
+		cliLogger.info("Channel initialized. Reading data...")
+		var count = 0
+		for try await (key, incomingData) in peerInterface {
+			if(count == 0) {
+				print("Received data that is \(incomingData.count) bytes long")
+				#expect(key == myPublicKey)
+				#expect(incomingData == payload)
+				count += 1
+			} else {
+				print("Received data that is \(incomingData.count) bytes long")
+				#expect(key == myPublicKey)
+				#expect(incomingData == payload2)
+				foo.cancelAll()
+			}
+		}
+	})
+}
+
+@Test func sendManyBytes() async throws {
+	let payloadSize: Int = 30_000
+	
+	var payload = [UInt8](repeating: 0, count: payloadSize)
+	for i in 0..<payloadSize {
+		payload[i] = UInt8(i%256)
+	}
+	
+	let cliLogger = Logger(label: "wg-test-tool.initiator")
+	
+	let (myPublicKey, myPrivateKey) = try dhGenerate()
+	let (peerPublicKey, peerPrivateKey) = try dhGenerate()
+	
+	_ = try await withThrowingTaskGroup(body: { foo in
+		let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+		let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
+		
+		let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+		let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.trace, listeningPort: 36000)
+
+		foo.addTask {
+			try await myInterface.run()
+		}
+		foo.addTask {
+			try await peerInterface.run()
+		}
+		
+		cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+		try await myInterface.waitForChannelInit()
+		
+		cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+		try await peerInterface.waitForChannelInit()
+		
+		cliLogger.info("Channel initialized. Sending handshake initiation message...")
+		try await myInterface.write(publicKey: peerPublicKey, data: payload)
+		
+		cliLogger.info("Channel initialized. Reading data...")
+		for try await (key, incomingData) in peerInterface {
+			print("Received data that is \(incomingData.count) bytes long")
+			#expect(key == myPublicKey)
+			#expect(incomingData == payload)
+			foo.cancelAll()
+		}
+	})
+}
+

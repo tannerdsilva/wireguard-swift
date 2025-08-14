@@ -78,15 +78,17 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
 	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
+	private let listeningPort:Int
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level) throws {
+	public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		self.dh = DataHandler(logLevel:.trace, initialConfiguration: initialConfiguration)
+		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 	}
 
 	public func waitForChannelInit() async throws {
@@ -99,7 +101,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 			case .initialized:
 				state = .engaging
 				let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
-				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, channelEnabledFuture: bootstrappedFuture, logLevel:logger.logLevel)
+				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
@@ -107,25 +109,32 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 							PacketHandler(logLevel:.trace),
 							hs,
 							dh,
-							KcpHandler(logLevel:.trace),
-							SplicerHandler(logLevel:.trace),
+							KcpHandler(logLevel: .trace),
+							SplicerHandler(logLevel: .trace, spliceByteLength: 5000),
 							dhh
 						])
 					}
-				let channel = try await bootstrap.bind(host:"0.0.0.0", port:36361).get()
+				let channel = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort).get()
+				try bootstrappedFuture.setSuccess(())
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
-				try await withTaskCancellationHandler {
-					try await withGracefulShutdownHandler {
-						try await channel.closeFuture.get()
-					} onGracefulShutdown: { [c = channel, l = logger] in
+				do {
+					try await withTaskCancellationHandler {
+						try await withGracefulShutdownHandler {
+							try await channel.closeFuture.get()
+						} onGracefulShutdown: { [c = channel, l = logger] in
+							_ = c.close()
+							l.debug("invoking graceful shutdown of wireguard nio interface")
+						}
+					} onCancel: { [c = channel, l = logger] in
 						_ = c.close()
-						l.debug("invoking graceful shutdown of wireguard nio interface")
+						l.debug("invoking cancellation of wireguard nio interface")
 					}
-				} onCancel: { [c = channel, l = logger] in
-					_ = c.close()
-					l.debug("invoking cancellation of wireguard nio interface")
+				} catch let error {
+					inboundData.finish(throwing: error)
+					throw error
 				}
+				inboundData.finish()
 
 			case .engaged(_):
 				fallthrough

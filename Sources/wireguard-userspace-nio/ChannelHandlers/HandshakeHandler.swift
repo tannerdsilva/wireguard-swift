@@ -37,6 +37,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// Rekey variables
 	private var rekeyAttemptTasks: [PeerIndex: RepeatedTask] = [:]
 	private var rekeyAttemptsStartTime: [PeerIndex: NIODeadline] = [:]
+	private var isRekeying: [PublicKey: Bool] = [:]
 	
 	// Rekey timers
 	private let rekeyTimeout: TimeAmount = .seconds(5)
@@ -195,6 +196,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								rekeyAttemptTasks[payload.payload.initiatorIndex]?.cancel()
 								rekeyAttemptTasks[payload.payload.initiatorIndex] = nil
 								rekeyAttemptsStartTime[payload.payload.initiatorIndex] = nil
+								isRekeying[peerPublicKey] = nil
 							}
 						}
 						
@@ -248,6 +250,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		
 		switch invoke {
 			case let .initiationInvoker(peerPublicKey, endpoint):
+				guard isRekeying[peerPublicKey] == nil else {
+					return
+				}
 				do {
 					peersAddressBook[endpoint] = peerPublicKey
 					try withUnsafePointer(to:privateKey) { privateKey in
@@ -269,6 +274,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							
 							// Start rekey timer
 							startRekeyAttempts(for: payload.initiatorPeerIndex, context: context, peerPublicKey: peerPublicKey, endpoint: endpoint)
+							isRekeying[peerPublicKey] = true
 						}
 					}
 				} catch let error {

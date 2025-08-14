@@ -17,10 +17,10 @@ let package = Package(
         .package(url:"https://github.com/tannerdsilva/rawdog.git", "19.0.2"..<"20.0.0"),
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
-		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"76009b9f299fb8e67736953b508df43985e21a7d"),
+		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"d6f8cd9d3d89d34c7ec4cd19d840d0dbc41967f8"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
         .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
-		.package(url:"https://github.com/bwyma1/kcp-Swift", revision: "bf7f713ad832f7b49884587321a5ececd807c0c5")
+		.package(url:"https://github.com/bwyma1/kcp-Swift", revision: "467bdfc979b3932d7b9b2be7fd55079f923b56c9")
 	],
 	targets: [
 		.executableTarget(

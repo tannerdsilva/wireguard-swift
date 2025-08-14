@@ -5,6 +5,26 @@ import RAW_dh25519
 import kcp_swift
 import Logging
 
+extension Array {
+	func split(intoChunksOf chunkSize: Int) -> [[Element]] {
+		guard chunkSize > 0 else { return [self] }   // safety guard
+
+		var chunks: [[Element]] = []
+		var startIndex = 0
+
+		while startIndex < self.count {
+			
+			let endIndex = Swift.min(startIndex + chunkSize, self.count)
+			
+			let chunk = Array(self[startIndex..<endIndex])
+			chunks.append(chunk)
+			
+			startIndex += chunkSize
+		}
+		return chunks
+	}
+}
+
 @RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
 fileprivate struct EncodedUInt32:Sendable {}
@@ -21,11 +41,14 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	private var storedLengths:[PublicKey:Int] = [:]
 	private var storedPayload:[PublicKey:[UInt8]] = [:]
+	
+	private let spliceByteLength:Int
 
-	internal init(logLevel:Logger.Level) {
+	internal init(logLevel:Logger.Level, spliceByteLength:Int) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
+		self.spliceByteLength = spliceByteLength
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
@@ -47,12 +70,14 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			let payload = Array(data.dropFirst(4))
 			
 			// Only this one segment
-			if(value != 0) {
-				storedLengths[key] = Int(value) - 1
+			if(value == 0) {
+				logger.debug("Sending single message to DHH")
 				context.fireChannelRead(wrapInboundOut((key, payload)))
+				return
 			}
 			
 			// Add to stored segments cause there are more coming!
+			storedLengths[key] = Int(value) - 1
 			storedPayload[key] = payload
 			
 			return
@@ -64,7 +89,9 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		// If it's the last segment, then send the whole thing to handoff handler
 		if(storedLengths[key]! == 0) {
 			storedLengths[key] = nil
+			logger.debug("Sending reforged message to DHH")
 			context.fireChannelRead(wrapInboundOut((key, storedPayload[key]!)))
+			storedPayload[key] = nil
 		}
 	}
 	
@@ -72,8 +99,10 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
 		var (key, data) = unwrapOutboundIn(data)
 		
+		logger.debug("Splicing \(data.count) bytes")
+		
 		// Data doesn't need to be spliced, add a header signifying 0 length
-		if(data.count <= 300_000) {
+		if(data.count <= spliceByteLength) {
 			let headerBytes = [UInt8](repeating: 0, count: 4)
 			
 			data.insert(contentsOf: headerBytes, at: 0)
@@ -82,17 +111,20 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 		// Data needs to be spliced and place a len header on first segment
 		else {
-			let len = (data.count + 299_999) / 300_000
-			let headerBytes = EncodedUInt32(RAW_native:UInt32(len))
-
-			for i in 0..<len {
-				var segment = Array(data[data.index(data.startIndex, offsetBy: i * 300_000)..<data.index(data.startIndex, offsetBy: (i + 1) * 300_000)])
+			let splices = data.split(intoChunksOf: spliceByteLength)
+			let headerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
+			for i in 0..<splices.count {
+				var segment = Array(splices[i])
 				if(i == 0) {
 					headerBytes.RAW_access {
 						segment.insert(contentsOf:$0, at: 0)
 					}
 				}
-				context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
+				if(i == splices.count-1) {
+					context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
+				} else {
+					context.writeAndFlush(wrapOutboundOut((key, segment)), promise: nil)
+				}
 			}
 		}
 	}

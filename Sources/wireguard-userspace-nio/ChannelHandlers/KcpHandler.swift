@@ -35,10 +35,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
-		kcp[key] = ikcp_cb(conv: 0, output: { buffer in
-			// Pass outbound kcp segment buffers to data handler
-			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
-		}, user: nil, synchronous: true)
+		kcp[key] = ikcp_cb(conv: 0, user: nil, synchronous: true)
 	}
 	
 	private func kcpCheckAck(for key:PublicKey, context:ChannelHandlerContext) {
@@ -46,12 +43,17 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		kcpStartTimers[key] = 0
 		
 		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
-			[weak self] _ in
+			[weak self, c = ContextContainer(context: context)] _ in
 			guard let self = self else { return }
 			
 			if(!kcp[key]!.ackUpToDate()) {
 				kcpStartTimers[key]! += 10_000
-				kcp[key]!.update(current: kcpStartTimers[key]!)
+				kcp[key]!.update(current: kcpStartTimers[key]!, output: { buffer in
+					// Pass outbound kcp segment buffers to data handler
+					c.accessContext { contextPointer in
+						contextPointer.pointee.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
+					}
+				})
 			} else {
 				kcpUpdateTasks[key] = nil
 			}
@@ -82,11 +84,17 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		
 		var _ = kcp[key]!.input(data: data)
 		
-		while let receivedData = try! kcp[key]!.receive() {
-			context.fireChannelRead(wrapInboundOut((key, receivedData)))
-		}
+		do {
+			while let receivedData = try kcp[key]!.receive() {
+				logger.debug("Sending kcp segments to splicer")
+				context.fireChannelRead(wrapInboundOut((key, receivedData)))
+			}
+		} catch { }
 		
-		kcp[key]!.update(current: 0)
+		kcp[key]!.update(current: 0, output: { buffer in
+			// Pass outbound kcp segment buffers to data handler
+			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
+		})
 	}
 	
 	// Receiving data which needs to be sent
@@ -98,7 +106,10 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		
 		var _ = kcp[key]!.send(buffer:&data, _len:data.count)
 		
-		kcp[key]!.update(current: 0)
+		kcp[key]!.update(current: 0, output: { buffer in
+			// Pass outbound kcp segment buffers to data handler
+			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: promise)
+		})
 		
 		kcpCheckAck(for: key, context: context)
 		logger.debug("Sending outbound kcp segment to data handler")
