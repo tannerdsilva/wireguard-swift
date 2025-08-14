@@ -1,33 +1,39 @@
 import RAW
 import bedrock_ip
 
-public enum Endpoint:RAW_encodable, RAW_decodable, CustomDebugStringConvertible, Hashable, Equatable, Sendable {
+public enum Endpoint:RAW_encodable, RAW_decodable, Hashable, Equatable, Sendable, CustomDebugStringConvertible {
 	public var debugDescription: String {
 		switch self {
 			case .v4(let v4):
-				return "v4: \(String(v4.address))"
+				return "\(v4)"
 			case .v6(let v6):
-				return "v6: \(String(v6.address))"
+				return "\(v6)"
 		}
 	}
 
 	@RAW_staticbuff(concat:AddressV4.self, Port.self)
-	public struct V4:Sendable, Hashable, Equatable {
+	public struct V4:Sendable, Hashable, Equatable, CustomDebugStringConvertible {
 		public let address:AddressV4
 		public let port:Port
 		public init(address:AddressV4, port:Port) {
 			self.address = address
 			self.port = port
 		}
+		public var debugDescription: String {
+			return "\(String(address)):\(port)"
+		}
 	}
 
 	@RAW_staticbuff(concat:AddressV6.self, Port.self)
-	public struct V6:Sendable, Hashable, Equatable {
+	public struct V6:Sendable, Hashable, Equatable, CustomDebugStringConvertible {
 		public let address:AddressV6
 		public let port:Port
 		public init(address:AddressV6, port:Port) {
 			self.address = address
 			self.port = port
+		}
+		public var debugDescription: String {
+			return "[\(String(address))]:\(port)"
 		}
 	}
 	

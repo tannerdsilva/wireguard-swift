@@ -9,9 +9,9 @@ import wireguard_crypto_core
 // - NOTE: this handler is marked as `@unchecked Sendable` because it trusts NIO event loops to manage its internal state correctly
 internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = (Endpoint, Message)
-	internal typealias InboundOut = PacketType
+	internal typealias InboundOut = PacketTypeInbound
 
-	internal typealias OutboundIn = PacketType
+	internal typealias OutboundIn = PacketTypeOutbound
 	internal typealias OutboundOut = (Endpoint, Message)
 	
 	private var logger:Logger
@@ -41,6 +41,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// Rekey timers
 	private let rekeyTimeout: TimeAmount = .seconds(5)
 	private let rekeyAttemptTime: TimeAmount = .seconds(90)
+
+	private var _peerSessions:[PeerIndex:PublicKey] = [:]
 	
 	// Timers for checking incoming initation packets
 	internal var initiationTimers:[PeerIndex:TAI64N] = [:]
@@ -114,11 +116,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		// handles handshake packets, else passes them down
 		do {
 			try withUnsafePointer(to:privateKey) { responderPrivateKey in
-				let (endpoint, payload) = unwrapInboundIn(data)
+				let (pubKey, payload) = unwrapInboundIn(data)
 				switch payload {
 					// Validate initiation packet and send response upon successfull validation
 					case .initiation(let payload):
-						logger.debug("received handshake initiation packet", metadata:["remote_address":"\(endpoint)"])
+						logger.debug("received handshake initiation packet")
 
 						// Check if we are under heavy load
 						if underLoad {
@@ -159,7 +161,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
 						
 						// Pass data for creating transit keys
-						let keyPacket: PacketType = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
+						let keyPacket:PacketTypeInbound = .keyExchange(val.initPublicKey, endpoint, response.payload.responderIndex, response.c, false)
+						_peerSessions[payload.payload.initiatorPeerIndex] = val.initPublicKey
 						logger.debug("sending key exhange packet to data handler")
 						context.fireChannelRead(wrapInboundOut(keyPacket))
 						
@@ -187,7 +190,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								initiationPackets[payload.payload.initiatorIndex] = nil
 								
 								// Pass data for creating transit keys
-								let packet: PacketType = .keyExchange(peerPublicKey, endpoint, payload.payload.responderIndex, val.c, true)
+								let packet:PacketTypeInbound = .keyExchange(peerPublicKey, endpoint, payload.payload.responderIndex, val.c, true)
+								_peerSessions[payload.payload.initiatorIndex] = peerPublicKey
 								logger.debug("Sending key exhange packet to data handler")
 								context.fireChannelRead(wrapInboundOut(packet))
 								
@@ -229,6 +233,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						}
 
 					case .data(let payload):
+						guard let peerPublicKey = _peerSessions[payload.header.receiverIndex] else {
+							logger.error("no peer public key for \(payload.header.receiverIndex)")
+							return
+						}
 						logger.debug("Data transit packet sent to data handler")
 						context.fireChannelRead(wrapInboundOut(PacketType.encryptedTransit(endpoint, payload)))
 				}
@@ -247,7 +255,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		let invoke = unwrapOutboundIn(data)
 		
 		switch invoke {
-			case let .initiationInvoker(peerPublicKey, endpoint):
+			case let .initiationInvoker(peerPublicKey):
+				guard let endpoint = peersAddressBook[peerPublicKey] else {
+					logger.error("no endpoint for peer public key: \(peerPublicKey)")
+					return
+				}
 				do {
 					peersAddressBook[endpoint] = peerPublicKey
 					try withUnsafePointer(to:privateKey) { privateKey in
@@ -275,9 +287,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					context.fireErrorCaught(error)
 					promise?.fail(error)
 				}
-			case .encryptedTransit(let endpoint, let payload):
+			case .encryptedTransit(let pubKey, let payload):
 				logger.debug("Sending transit packet down to packet handler")
-				context.writeAndFlush(wrapOutboundOut((endpoint, .data(payload))), promise:promise)
+				context.writeAndFlush(wrapOutboundOut(PacketTypeInbound.encryptedTransit(pubKey, payload)), promise:promise)
 			default:
 				return
 		}

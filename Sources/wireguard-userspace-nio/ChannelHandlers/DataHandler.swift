@@ -15,7 +15,7 @@ internal enum InterfaceInstruction {
 
 // Handles the data packet encryption and decryption
 internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
-    internal typealias InboundIn = PacketType
+    internal typealias InboundIn = PacketTypeInbound
     internal typealias InboundOut = (PublicKey, [UInt8])
     
     internal typealias OutboundIn = InterfaceInstruction
@@ -312,12 +312,12 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                         return
                     }
                     // Update endpoint and kill sessions at that endpoint to prevent roaming
-                    configuration[publicKey] = endpoint
-                    for (key, value) in configuration {
-                        if value == endpoint && publicKey != key {
-                            killAllSessions(peerPublicKey: key)
-                        }
-                    }
+                    // configuration[publicKey] = endpoint
+                    // for (key, value) in configuration {
+                    //     if value == endpoint && publicKey != key {
+                    //         killAllSessions(peerPublicKey: key)
+                    //     }
+                    // }
 					
 					// Rotate sessions if the packet was from the `next` session
 					if let next = sessions[publicKey]!.next {

@@ -4,10 +4,11 @@ import RAW_dh25519
 import bedrock_fifo
 import bedrock_future
 import Logging
+import wireguard_crypto_core
 
 /// this is a handler that sits at the end of the pipeline that hands off the Inbound data to a FIFO that the end-user can use to consume the data asynchronously.
 internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHandler, Sendable where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
-	internal typealias InboundIn = (PublicKey, [UInt8])
+	internal typealias InboundIn = (PublicKey, TransactableDataType)
 	internal typealias InboundOut = Never
 
 	/// the FIFO that will be used to hand off data to the end-user
@@ -26,6 +27,8 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		var logger = log
 		logger[metadataKey:"_func"] = "\(#function)"
+		logger[metadataKey:"listening_socket_ep"] = "\(Endpoint(context.channel.localAddress!))"
+		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
 		logger.trace("handler added to NIO pipeline.")
 		do {
 			try channelEnabledFuture.setSuccess(())
@@ -40,7 +43,7 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 		logger.trace("handler removed from NIO pipeline.")
 	}
 
-	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) where TransactableDataType == [UInt8] {
+	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		var logger = log
 		logger.trace("handing off data to FIFO")
 		handoff.yield(unwrapInboundIn(data))

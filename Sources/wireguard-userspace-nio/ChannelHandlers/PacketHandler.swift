@@ -13,6 +13,15 @@ internal enum PacketType {
     case initiationInvoker(PublicKey, Endpoint)
 }
 
+internal enum PacketTypeInbound {
+	case encryptedTransit(PublicKey, Message.Data.Payload)
+	case keyExchange(PublicKey, Endpoint, PeerIndex, Result.Bytes32, Bool)
+}
+
+internal enum PacketTypeOutbound {
+	case encryptedTransit(PublicKey, Message.Data.Payload)
+	case initiationInvoker(PublicKey)
+}
 
 internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// errors that may be fired by the PacketHandler
@@ -43,14 +52,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let envelope = unwrapInboundIn(data)
-		let endpoint:Endpoint
-		do {
-			endpoint = try Endpoint(envelope.remoteAddress)
-		} catch let error {
-			logger.error("failed to parse remote address: \(envelope.remoteAddress.description)", metadata:["error":"\(error)"])
-			context.fireErrorCaught(error)
-			return
-		}
+		let endpoint:Endpoint = Endpoint(envelope.remoteAddress)
 		envelope.data.withUnsafeReadableBytes { byteBuffer in
 			// proceed based on the first byte of the buffer
 			switch byteBuffer[0] {
@@ -87,7 +89,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		let destinationEndpoint:Endpoint
 		let mode:Message
 		(destinationEndpoint, mode) = unwrapOutboundIn(data)
-		let sendBuffer: ByteBuffer
+		let sendBuffer:ByteBuffer
 		switch mode {
 			case let .initiation(payload):
 				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)

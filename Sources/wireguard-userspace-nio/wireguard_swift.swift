@@ -14,14 +14,14 @@ import bedrock_ip
 import wireguard_crypto_core
 
 extension Endpoint {
-	public init(_ socketAddress:SocketAddress) throws {
+	public init(_ socketAddress:SocketAddress) {
 		switch socketAddress {
 			case .v4(_):
 				self = .v4(V4(address:AddressV4(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
 			case .v6(_):
 				self = .v6(V6(address:AddressV6(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
 			default:
-				throw POSIXError(.ENOTSUP)
+				fatalError("unsupported socket address type: \(socketAddress)")
 		}
 	}
 }
@@ -115,17 +115,23 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				let channel = try await bootstrap.bind(host:"0.0.0.0", port:36361).get()
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
-				try await withTaskCancellationHandler {
-					try await withGracefulShutdownHandler {
-						try await channel.closeFuture.get()
-					} onGracefulShutdown: { [c = channel, l = logger] in
+				do {
+					try await withTaskCancellationHandler {
+						try await withGracefulShutdownHandler {
+							try await channel.closeFuture.get()
+						} onGracefulShutdown: { [c = channel, l = logger] in
+							_ = c.close()
+							l.debug("invoking graceful shutdown of wireguard nio interface")
+						}
+					} onCancel: { [c = channel, l = logger] in
 						_ = c.close()
-						l.debug("invoking graceful shutdown of wireguard nio interface")
+						l.debug("invoking cancellation of wireguard nio interface")
 					}
-				} onCancel: { [c = channel, l = logger] in
-					_ = c.close()
-					l.debug("invoking cancellation of wireguard nio interface")
+				} catch let error {
+					inboundData.finish(throwing:error)
+					throw error
 				}
+				inboundData.finish()
 
 			case .engaged(_):
 				fallthrough
