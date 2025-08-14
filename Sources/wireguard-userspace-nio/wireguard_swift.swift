@@ -107,20 +107,26 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 							PacketHandler(logLevel:.trace),
 							hs,
 							dh,
-							KcpHandler(logLevel: .trace),
-							SplicerHandler(logLevel: .trace),
+							KcpHandler(logLevel:.trace),
+							SplicerHandler(logLevel:.trace),
 							dhh
 						])
 					}
 				let channel = try await bootstrap.bind(host:"0.0.0.0", port:36361).get()
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
-				try await withGracefulShutdownHandler {
-					try await channel.closeFuture.get()
-				} onGracefulShutdown: { [c = channel, l = logger] in
+				try await withTaskCancellationHandler {
+					try await withGracefulShutdownHandler {
+						try await channel.closeFuture.get()
+					} onGracefulShutdown: { [c = channel, l = logger] in
+						_ = c.close()
+						l.debug("invoking graceful shutdown of wireguard nio interface")
+					}
+				} onCancel: { [c = channel, l = logger] in
 					_ = c.close()
-					l.debug("invoking graceful shutdown of wireguard nio interface")
+					l.debug("invoking cancellation of wireguard nio interface")
 				}
+
 			case .engaged(_):
 				fallthrough
 			case .engaging:
@@ -153,17 +159,17 @@ extension WGInterface:AsyncSequence {
 		
 		public func next() async throws -> (PublicKey, TransactableDataType)? {
 			switch await inboundDataOut.next() {
-			case .element(let element):
-				return element
-			case .capped(let result):
-				switch result {
-					case .success(_):
-						return nil
-					case .failure(let error):
-						throw error
-				}
-			case .wouldBlock:
-				fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
+				case .element(let element):
+					return element
+				case .capped(let result):
+					switch result {
+						case .success(_):
+							return nil
+						case .failure(let error):
+							throw error
+					}
+				case .wouldBlock:
+					fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
 			}
 		}
 	}
