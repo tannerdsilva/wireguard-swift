@@ -15,11 +15,11 @@ internal enum InterfaceInstruction {
 
 // Handles the data packet encryption and decryption
 internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
-    internal typealias InboundIn = PacketType
+    internal typealias InboundIn = PacketTypeInbound
     internal typealias InboundOut = (PublicKey, [UInt8])
     
     internal typealias OutboundIn = InterfaceInstruction
-    internal typealias OutboundOut = PacketType
+    internal typealias OutboundOut = PacketTypeOutbound
     
     // Nsend increments by 1 for every outbound encrypted packet
     // Nrecv used with sliding window to check if packet is valid
@@ -68,7 +68,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     }
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
-		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
 		logger.trace("handler added to pipeline.")
 	}
 
@@ -110,7 +109,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     return
                 }
                 c.accessContext { contextPointer in
-					contextPointer.pointee.writeAndFlush(wrapOutboundOut(.encryptedTransit(ep, keepalive)), promise: nil)
+					contextPointer.pointee.writeAndFlush(wrapOutboundOut(.encryptedTransit(peerPublicKey, keepalive)), promise: nil)
 				}
 
                 // Update last outbound for this peer
@@ -165,7 +164,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             }
             logger.debug("Rehandshake trigger for peer \(peerIndex)")
             c.accessContext { contextPointer in
-				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.initiationInvoker(peerPublicKey, ep!)), promise:nil)
+				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.handshakeInitiate(peerPublicKey, ep!)), promise:nil)
 			}
         }
         rehandshakeTasks[peerIndex] = task
@@ -298,25 +297,16 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     
     internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         do {
+			var logger = logger
             switch unwrapInboundIn(data) {
                 // Decrypt the payload or send initiation message if unable to decrypt
-                case .encryptedTransit(let endpoint, let payload):
+                case .encryptedTransit(let publicKey, let payload):
+					logger[metadataKey:"peer_public_key"] = "\(publicKey)"
                     let peerIndex = payload.header.receiverIndex
-                    // Find associated peer session, else drop packet
-                    guard let publicKey = sessionsInv[peerIndex] else {
-                        logger.debug("received packet from unknown source")
-                        return
-                    }
+
                     // Authenticate packet, else drop packet
                     guard let decryptedPacket = decryptPacket(peerPublicKey: publicKey, packet: payload, transportKey: transmitKeys[peerIndex]!.Trecv) else {
                         return
-                    }
-                    // Update endpoint and kill sessions at that endpoint to prevent roaming
-                    configuration[publicKey] = endpoint
-                    for (key, value) in configuration {
-                        if value == endpoint && publicKey != key {
-                            killAllSessions(peerPublicKey: key)
-                        }
                     }
 					
 					// Rotate sessions if the packet was from the `next` session
@@ -331,17 +321,16 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     
                     // Make sure the packet is not a keep alive packet
                     guard (decryptedPacket.isEmpty == false) else {
-                        logger.debug("Received keep alive from \(String(describing: endpoint))")
+                        logger.debug("received keepalive packet")
                         return
                     }
                     
                     // Send plaintext packet to the kcp handler
                    	context.fireChannelRead(wrapInboundOut((publicKey, decryptedPacket)))
-                    logger.debug("Decrypted plaintext packet, sent packet to kcp handler")
                 
                 // Calculate transmit keys and set nonce counters to 0
-                case .keyExchange(let peerPublicKey, let endpoint, let peerIndex, let c, let isInitiator):
-                    logger.debug("received key exchange packet")
+                case .keyExchange(let peerPublicKey, let peerIndex, let c, let isInitiator):
+                    logger.debug("received key exchange info")
                     try withUnsafePointer(to:c) { cPtr in
 							
 						// Store session information
@@ -388,7 +377,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						for packet in packets {
 							if let peer = sessions[peerPublicKey]!.current {
 								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Tsend, plainText: packet.data)
-								context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:packet.promise)
+								context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(peerPublicKey, encryptedPacket)), promise:packet.promise)
 								lastOutbound[peerIndex] = .now()
 							}
 						}
@@ -412,21 +401,20 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
             case .removePeer(let peer):
                 removePeer(peer: peer)
 			case .encryptAndTransmit(let publicKey, let bytes):
-                // Check for available endpoint, else drop packet and send
-                // Inform user by ICMP message. Return -EHOSTUNRECH to user space
-                guard let endpoint = configuration[publicKey]! else {
-                    return
-                }
+				guard let ep = configuration[publicKey] else {
+					logger.error("no endpoint found for public key \(publicKey)")
+					return
+				}
                 // Encrypt packet and send it out to peer
                 do {
                     if let peerIndex = sessions[publicKey] {
 						let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peerIndex.current!, nonce: &nonceCounters[peerIndex.current!]!.Nsend, transportKey: transmitKeys[peerIndex.current!]!.Tsend, plainText: bytes)
-                        context.writeAndFlush(wrapOutboundOut(PacketType.encryptedTransit(endpoint, encryptedPacket)), promise:promise)
+                        context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(publicKey, encryptedPacket)), promise:promise)
 						lastOutbound[peerIndex.current!] = .now()
                     } else {
                         // Send handshake since there is no active session
-                        context.writeAndFlush(wrapOutboundOut(PacketType.initiationInvoker(publicKey, endpoint)), promise:nil)
-                        
+                        context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.handshakeInitiate(publicKey, ep)), promise:nil)
+
                         // Add packet to be encrypted after handshake
                         pendingWriteFutures[publicKey, default: []].append((bytes, promise))
                     }

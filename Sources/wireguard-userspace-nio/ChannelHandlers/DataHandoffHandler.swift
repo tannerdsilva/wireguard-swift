@@ -23,13 +23,11 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 	}
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		var logger = log
-		logger[metadataKey:"_func"] = "\(#function)"
 		logger.trace("handler added to NIO pipeline.")
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		var logger = log
-		logger[metadataKey:"_func"] = "\(#function)"
 		logger.trace("handler removed from NIO pipeline.")
 	}
 

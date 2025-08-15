@@ -30,7 +30,6 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
-		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
 		logger.trace("handler added to pipeline.")
 	}
 

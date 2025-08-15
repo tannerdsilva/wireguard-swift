@@ -92,7 +92,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	}
 
 	public func waitForChannelInit() async throws {
-		_ = await bootstrappedFuture.result()
+		_ = try await bootstrappedFuture.result()!.get()
 	}
 	
 	/// Starts the WireGuard interface
@@ -106,7 +106,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
 						channel.pipeline.addHandlers([
-							PacketHandler(logLevel:.trace),
+							PacketHandler(logLevel:.info),
 							hs,
 							dh,
 							KcpHandler(logLevel: .trace),

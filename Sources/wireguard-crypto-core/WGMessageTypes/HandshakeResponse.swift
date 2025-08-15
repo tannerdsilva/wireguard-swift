@@ -121,7 +121,7 @@ extension Message.Response.Payload {
 						var responderEphemeralPublicKey = selfPtr.pointer(to:\.payload.ephemeral)!.pointee
 
 						// step 1: c := KDF(c, responderEpub)
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try! wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:responderEphemeralPublicKey)
+						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:responderEphemeralPublicKey)
 						
 						// step 4: h := HASH(h || msg.ephemeral)
 						var hasher = try WGHasher<Result.Bytes32>()
@@ -130,15 +130,15 @@ extension Message.Response.Payload {
 						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 						
 						// step 5: c := KDF(c, DH(initiatorEpriv, responderEpub))
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try! wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey: &responderEphemeralPublicKey))
+						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey: &responderEphemeralPublicKey))
 						
 						// step 6: c := KDF(c, DH(initiatorStaticPrivateKey, responderEpub))
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try! wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey: &responderEphemeralPublicKey))
+						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey: &responderEphemeralPublicKey))
 						
 						// step 7: (c, T, k) := KDF^3(c, Q)
 						var k:Result.Bytes32
 						var T:Result.Bytes32
-						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, T, k) = try! wgKDFv2((Result.Bytes32, Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data: preSharedKey)
+						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, T, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data: preSharedKey)
 						
 						// step 8: h := HASH(H || T)
 						hasher = try WGHasher<Result.Bytes32>()
@@ -148,7 +148,7 @@ extension Message.Response.Payload {
 						
 						// step 9: msg.empty := AEAD(k, 0, e, h)
 						var e:[UInt8] = []
-						var msgEmpty = try! aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self), tag:selfPtr.pointer(to:\.payload.emptyTag)!.pointee)
+						var msgEmpty = try aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self), tag:selfPtr.pointer(to:\.payload.emptyTag)!.pointee)
 
 						// step 10: h := HASH(h || msg.empty)
 						hasher = try WGHasher<Result.Bytes32>()
@@ -160,7 +160,7 @@ extension Message.Response.Payload {
 						hasher = try WGHasher<Result.Bytes32>()
 						try hasher.update([UInt8]("mac1----".utf8))
 						try hasher.update(initiatorStaticPublicKey)
-						let mac1 = try! wgMac(key:try hasher.finish(), data: selfPtr.pointer(to: \.payload)!.pointee)
+						let mac1 = try wgMACv2(key:try hasher.finish(), data: selfPtr.pointer(to: \.payload)!.pointee)
 						guard mac1 == selfPtr.pointer(to:\.msgMac1)!.pointee else {
 							throw Error.mac1Invalid
 						}
