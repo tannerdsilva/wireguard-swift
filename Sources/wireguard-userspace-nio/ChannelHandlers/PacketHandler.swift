@@ -4,15 +4,6 @@ import RAW
 import RAW_dh25519
 import wireguard_crypto_core
 
-internal enum PacketType {
-	/// represents an inbound transit packet, which is used to carry data between peers after the handshake is complete
-    case encryptedTransit(Endpoint, Message.Data.Payload)
-    /// represents key creation information for post handshake validation
-    case keyExchange(PublicKey, Endpoint, PeerIndex, Result.Bytes32, Bool)
-    /// represents a handshake invoker
-    case initiationInvoker(PublicKey, Endpoint)
-}
-
 internal enum PacketTypeInbound {
 	case encryptedTransit(PublicKey, Message.Data.Payload)
 	case keyExchange(PublicKey, PeerIndex, Result.Bytes32, Bool)

@@ -71,10 +71,9 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 	// Sends the cookie after REKEY-TIMEOUT time
 	private func sendCookieInitiation(context:ChannelHandlerContext, endpoint:Endpoint, cookie:Message) {
-		context.eventLoop.scheduleTask(in:.seconds(5)) { [weak self, c = ContextContainer(context:context)] in
-			guard let self = self else { return }
+		context.eventLoop.scheduleTask(in:.seconds(5)) { [c = ContextContainer(context:context)] in
 			c.accessContext { contextPointer in
-				contextPointer.pointee.writeAndFlush(wrapOutboundOut((endpoint, cookie)), promise:nil)
+				contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, cookie)), promise:nil)
 			}
 		}
 	}
@@ -128,19 +127,19 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							} catch let error {
 								// Create and send cookie
 								let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
-								// let packet: PacketType = .cookie(endpoint, cookie)
 								context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
-									logger.debug("cookie reply message sent to endpoint", metadata:["endpoint":"\(e)"])
+									logger.debug("cookie reply message sent to endpoint")
 								}
 								return
 							}
 						}
 
 						var (c, h, initiatorStaticPublicKey, timestamp) = try payload.validate(responderStaticPrivateKey: responderPrivateKey)
-						
+						logger.debug("successfully validated handshake initiation packet", metadata:["peer_index":"\(payload.payload.initiatorPeerIndex)", "peer_public_key":"\(initiatorStaticPublicKey)"])
+
 						// Check handshake packet time
 						if let initiationTime = initiationTimers[payload.payload.initiatorPeerIndex] {
-							if(timestamp <= initiationTime) {
+							if (timestamp <= initiationTime) {
 								return
 							}
 						}
@@ -266,14 +265,17 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								peersAddressBook[endpoint!] = peerPublicKey
 								peerEndpoints[payload.initiatorPeerIndex] = endpoint!
 							}
-
+							guard peerEndpoints[payload.initiatorPeerIndex] != nil else {
+								logger.critical("no peer endpoint for \(payload.initiatorPeerIndex)")
+								return
+							}
 
 							// Store keys and c/h for response
 							initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
 							initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
 							
 							// Send initiation packet to packet handler
-							logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(endpoint)", "peer_public_key":"\(peerPublicKey.debugDescription)"])
+							logger.debug("successfully forged handshake initiation message", metadata:["peer_endpoint":"\(peerEndpoints[payload.initiatorPeerIndex]!)", "peer_public_key":"\(peerPublicKey)"])
 							let authPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
 							context.writeAndFlush(wrapOutboundOut((peerEndpoints[payload.initiatorPeerIndex]!, .initiation(authPayload))), promise:promise)
 
@@ -281,7 +283,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							initiationPackets[payload.initiatorPeerIndex] = authPayload
 							
 							// Start rekey timer
-							startRekeyAttempts(for: payload.initiatorPeerIndex, context: context, peerPublicKey: peerPublicKey, endpoint:peerEndpoints[payload.initiatorPeerIndex]!)
+							startRekeyAttempts(for:payload.initiatorPeerIndex, context:context, peerPublicKey:peerPublicKey, endpoint:peerEndpoints[payload.initiatorPeerIndex]!)
 							isRekeying[peerPublicKey] = true
 						}
 					}
@@ -294,8 +296,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					logger.critical("no peer endpoint for \(payload.header.receiverIndex)")
 					return
 				}
-				guard let hasPeer = peers[payload.header.receiverIndex] else {
-					logger.critical("no peer public key for \(payload.header.receiverIndex)")
+				guard peers[payload.header.receiverIndex] == publicKey else {
+					logger.critical("peer public key mismatch")
 					return
 				}
 				context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)

@@ -81,16 +81,21 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			makeIkcpCb(key: key, context: context)
 		}
 		
-		var _ = kcp[key]!.input(data: data)
-		
-		do {
-			while let receivedData = try kcp[key]!.receive() {
-				logger.debug("Sending kcp segments to splicer")
-				context.fireChannelRead(wrapInboundOut((key, receivedData)))
+		_ = kcp[key]!.input(data: data)
+		var i = 0
+		var len = 0
+		while let receivedData = try? kcp[key]!.receive() {
+			defer {
+				i += 1
+				len += receivedData.count
 			}
-		} catch { }
+			context.fireChannelRead(wrapInboundOut((key, receivedData)))
+		}
+		if i > 0 {
+			logger.trace("fired kcp segments down pipeline", metadata:["segment_count":"\(i)", "total_bytes":"\(len)"])
+		}
 		
-		kcp[key]!.update(current: 0, output: { buffer in
+		kcp[key]!.update(current:0, output: { buffer in
 			// Pass outbound kcp segment buffers to data handler
 			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
 		})
@@ -105,12 +110,11 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		
 		var _ = kcp[key]!.send(buffer:&data, _len:data.count)
 		
-		kcp[key]!.update(current: 0, output: { buffer in
+		kcp[key]!.update(current:0, output: { buffer in
 			// Pass outbound kcp segment buffers to data handler
-			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: promise)
+			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise:promise)
 		})
 		
 		kcpCheckAck(for: key, context: context)
-		logger.debug("Sending outbound kcp segment to data handler")
 	}
 }
