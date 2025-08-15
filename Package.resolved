@@ -1,5 +1,5 @@
 {
-  "originHash" : "6fb60b27a7ffb9ce9fce7f1509a891547132e11d37ee6fa3592fd2980b1d274c",
+  "originHash" : "9dca79dce7426a955d1035bdaa90967c169b326b9ae3f19cb1250e92da2dd098",
   "pins" : [
     {
       "identity" : "bedrock",
@@ -14,7 +14,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/bwyma1/kcp-Swift",
       "state" : {
-        "revision" : "467bdfc979b3932d7b9b2be7fd55079f923b56c9"
+        "revision" : "0d37f1e9daed30c61cff97b471d7bad27b7160d3"
       }
     },
     {

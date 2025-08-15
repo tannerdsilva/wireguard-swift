@@ -89,16 +89,15 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 				i += 1
 				len += receivedData.count
 			}
+			kcp[key]!.update(current:0, output: { buffer in
+				// Sending Acks
+				context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
+			})
 			context.fireChannelRead(wrapInboundOut((key, receivedData)))
 		}
 		if i > 0 {
 			logger.trace("fired kcp segments down pipeline", metadata:["segment_count":"\(i)", "total_bytes":"\(len)"])
 		}
-		
-		kcp[key]!.update(current:0, output: { buffer in
-			// Pass outbound kcp segment buffers to data handler
-			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
-		})
 	}
 	
 	// Receiving data which needs to be sent

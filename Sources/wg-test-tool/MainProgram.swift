@@ -15,7 +15,8 @@ struct CLI:AsyncParsableCommand {
 			GenerateKeys.self,
 			ComputeSharedKey.self,
             Initiator.self,
-            Responder.self
+            Responder.self,
+			TestPerformance.self
 		]
 	)
 
@@ -100,6 +101,55 @@ struct CLI:AsyncParsableCommand {
             }
         }
     }
+	
+	struct TestPerformance:AsyncParsableCommand {
+		static let configuration = CommandConfiguration(
+			abstract: "Test performance of the WireGuard client."
+		)
+		
+		func run() async throws {
+			let cliLogger = Logger(label: "wg-test-tool.initiator")
+
+			let (myPublicKey, myPrivateKey) = try dhGenerate()
+			let (peerPublicKey, peerPrivateKey) = try dhGenerate()
+			let payloadSize: Int = 2_000_000
+			
+			var payload = [UInt8](repeating: 0, count: payloadSize)
+			for i in 0..<payloadSize {
+				payload[i] = UInt8(i%256)
+			}
+			
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
+				
+				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.trace, listeningPort: 36000)
+
+				foo.addTask {
+					try await myInterface.run()
+				}
+				foo.addTask {
+					try await peerInterface.run()
+				}
+				
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await myInterface.waitForChannelInit()
+				
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await peerInterface.waitForChannelInit()
+				
+				cliLogger.info("Channel initialized. Sending handshake initiation message...")
+				try await myInterface.write(publicKey: peerPublicKey, data: payload)
+				
+				cliLogger.info("Channel initialized. Reading data...")
+				for try await (key, incomingData) in peerInterface {
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					foo.cancelAll()
+				}
+			})
+		}
+	}
 }
 
 // Create client and server struct with subcommands

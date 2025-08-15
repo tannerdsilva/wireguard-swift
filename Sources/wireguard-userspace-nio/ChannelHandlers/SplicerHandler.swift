@@ -60,7 +60,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		let (key, data) = unwrapInboundIn(data)
 		
-		guard let len = storedLengths[key] else {
+		guard storedLengths[key] != nil else {
 			// Extract the UInt32 from the first 4 bytes
 			let value = data.RAW_access {
 				return EncodedUInt32(RAW_staticbuff:$0.baseAddress!).RAW_native()
