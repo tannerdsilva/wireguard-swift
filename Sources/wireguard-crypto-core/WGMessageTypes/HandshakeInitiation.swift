@@ -34,7 +34,7 @@ extension Message {
 				self.timestampTag = timestampTag
 			}
 
-			public static func forge(initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, index:PeerIndex? = nil) throws -> (c:Result.Bytes32, h:Result.Bytes32, ephiPrivateKey:PrivateKey, payload:Payload) {
+			public static func forge(initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, index:PeerIndex? = nil) throws -> (c:Result.Bytes32, h:Result.Bytes32, ephiPrivateKey:MemoryGuarded<PrivateKey>, payload:Payload) {
 				// setup: get initiator public key
 				var initiatorStaticPublicKey = PublicKey(privateKey:initiatorStaticPrivateKey)
 
@@ -56,8 +56,8 @@ extension Message {
 						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 
 						// step 4: generate ephemeral keys
-						var ephiPrivate = try PrivateKey()
-						return try PublicKey(privateKey:&ephiPrivate).RAW_access_staticbuff { ephiPublicPtr in
+						var ephiPrivate = try MemoryGuarded<PrivateKey>.new()
+						return try PublicKey(privateKey:ephiPrivate).RAW_access_staticbuff { ephiPublicPtr in
 
 							// step 5: c = KDF^1(c, e.Public)
 							cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:ephiPublicPtr, count:MemoryLayout<PublicKey>.size)
@@ -72,7 +72,7 @@ extension Message {
 
 							// step 8: (c, k) = KDF^2(c, dh(eiPriv, srPublic))
 							var k:Result.Bytes32
-							(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:&ephiPrivate, publicKey:responderStaticPublicKey))
+							(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey:responderStaticPublicKey.pointee))
 
 							// step 9: msg.static = AEAD(k, 0, siPublic, h)
 							let (msgStatic, msgTag) = try aeadEncrypt(key:&k, counter:0, text:&initiatorStaticPublicKey, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self))
@@ -85,7 +85,7 @@ extension Message {
 							try hasher.finish(into:hPtr)
 
 							// step 11: c, k) = kdf^2(c, dh(sipriv, srpub))
-							(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey))
+							(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:initiatorStaticPrivateKey, publicKey:responderStaticPublicKey.pointee))
 
 							// step 12: msg.timestamp = AEAD(k, 0, timestamp(), h)
 							return try withUnsafePointer(to:TAI64N()) { taiPointer in
@@ -157,7 +157,7 @@ extension Message.Initiation.Payload {
 			self.msgMac2 = msgMac2
 		}
 
-		public borrowing func validateUnderLoadNoNIO(responderStaticPrivateKey:UnsafePointer<PrivateKey>, R:Result.Bytes8, endpoint:Endpoint) throws {
+		public borrowing func validateUnderLoadNoNIO(responderStaticPrivateKey:MemoryGuarded<PrivateKey>, R:Result.Bytes8, endpoint:Endpoint) throws {
 			try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key
 				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
@@ -185,7 +185,7 @@ extension Message.Initiation.Payload {
 			}
 		}
 		
-		public borrowing func validate(responderStaticPrivateKey:UnsafePointer<PrivateKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32, initPublicKey:PublicKey, timestamp:TAI64N) {
+		public borrowing func validate(responderStaticPrivateKey:MemoryGuarded<PrivateKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32, initPublicKey:PublicKey, timestamp:TAI64N) {
 			return try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key
 				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
@@ -219,7 +219,7 @@ extension Message.Initiation.Payload {
 
 						// step 7: (c, k) = KDF^2(c, dh(responderStaticPrivateKey, initiatorEphemeralPublicKey))
 						var k:Result.Bytes32
-						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initiatorEphemeralPublicKey))
+						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:initiatorEphemeralPublicKey))
 
 						// step 8: decrypt the msg.static to determine the initStaticPublicKey
 						var initStaticPublicKey = try aeadDecryptV2(as:PublicKey.self, key:k, counter:0, cipherText:selfPtr.pointer(to:\.payload.staticRegion)!.pointee, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, tag:selfPtr.pointer(to:\.payload.staticTag)!.pointee)
@@ -232,7 +232,7 @@ extension Message.Initiation.Payload {
 						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 
 						// step 10: (c, k) = KDF^2(c, dh(msg.static [initiatorStaticPublicKey], responderStaticPrivateKey))
-						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:&initStaticPublicKey))
+						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:initStaticPublicKey))
 
 						// step 11: descrypt the msg.timestamp to find the intial timestamp
 						let sentTimestamp = try aeadDecryptV2(as:TAI64N.self, key:k, counter:0, cipherText:selfPtr.pointer(to:\.payload.timestamp)!.pointee, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, tag:selfPtr.pointer(to:\.payload.timestampTag)!.pointee)

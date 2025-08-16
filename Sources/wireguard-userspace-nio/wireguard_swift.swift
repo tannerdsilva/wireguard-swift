@@ -73,7 +73,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 
 	private let logger:Logger
 	private let bootstrappedFuture:Future<Void, Swift.Error> = Future<Void, Swift.Error>()
-	private let staticPrivateKey:PrivateKey
+	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private let dh:DataHandler
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
@@ -81,7 +81,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let listeningPort:Int
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey: consuming PrivateKey, initialConfiguration:[Peer] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[Peer] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -100,7 +100,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .initialized:
 				state = .engaging
-				let hs = HandshakeHandler(privateKey:self.staticPrivateKey, logLevel:.trace)
+				let hs = HandshakeHandler(privateKey:staticPrivateKey, logLevel:.trace)
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)

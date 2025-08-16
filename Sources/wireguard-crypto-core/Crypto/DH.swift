@@ -1,12 +1,11 @@
 import RAW
 import RAW_dh25519
 
-public func dhGenerate() throws -> (PublicKey, PrivateKey) {
-	return withUnsafePointer(to:try PrivateKey()) { privateKeyPointer in
-		return (PublicKey(privateKey:privateKeyPointer), privateKeyPointer.pointee)
-	}
+public func dhGenerate() throws -> (PublicKey, MemoryGuarded<PrivateKey>) {
+	let pk = try MemoryGuarded<PrivateKey>.new()
+	return (PublicKey(privateKey:pk), pk)
 }
 
-public func dhKeyExchange(privateKey:UnsafePointer<PrivateKey>, publicKey:UnsafePointer<PublicKey>) throws -> SharedKey {
-	return SharedKey.compute(privateKey: privateKey, publicKey: publicKey)
+public func dhKeyExchange(privateKey:MemoryGuarded<PrivateKey>, publicKey:PublicKey) throws -> MemoryGuarded<SharedKey> {
+	return try .compute(privateKey:privateKey, publicKey: publicKey)
 }

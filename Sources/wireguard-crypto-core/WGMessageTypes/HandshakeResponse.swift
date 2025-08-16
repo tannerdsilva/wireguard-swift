@@ -44,8 +44,8 @@ extension Message {
 				return try cIn.RAW_access_staticbuff_mutating { cPtr in
 					return try hIn.RAW_access_staticbuff_mutating { hPtr in
 						// step 1: (Epriv, Epub) := DH-GENERATE()
-						var ephiPrivate = try PrivateKey()
-						return try PublicKey(privateKey:&ephiPrivate).RAW_access_staticbuff { ephiPublic in
+						var ephiPrivate = try MemoryGuarded<PrivateKey>.new()
+						return try PublicKey(privateKey:ephiPrivate).RAW_access_staticbuff { ephiPublic in
 
 							// step 2: c := KDF(c, Epub)
 							cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:ephiPublic, count:MemoryLayout<Result.Bytes32>.size)
@@ -58,11 +58,11 @@ extension Message {
 
 							// step 5: c := KDF(c, DH(Epriv, initiatorEpub))
 							try withUnsafePointer(to:initiatorEphemeralPublicKey) { ephiKeyPublic in
-								cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: &ephiPrivate, publicKey: ephiKeyPublic))
+								cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey: ephiKeyPublic.pointee))
 							}
 							
 							// step 6: c := KDF(c, DH(Epriv, initiatorStaticPub))
-							cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: &ephiPrivate, publicKey: initiatorStaticPublicKey))
+							cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey: initiatorStaticPublicKey.pointee))
 
 							// step 7: (c, T, k) := KDF^3(c, Q)
 							var k:Result.Bytes32
@@ -110,7 +110,7 @@ extension Message.Response.Payload {
 			self.msgMac2 = msgMac2
 		}
 
-		public borrowing func validate(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorStaticPrivateKey:UnsafePointer<PrivateKey>, initiatorEphemeralPrivateKey:UnsafePointer<PrivateKey>, preSharedKey:Result.Bytes32) throws -> (c:Result.Bytes32, h:Result.Bytes32) {
+		public borrowing func validate(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, preSharedKey:Result.Bytes32) throws -> (c:Result.Bytes32, h:Result.Bytes32) {
 			return try withUnsafePointer(to:self) { selfPtr in
 				try cIn.RAW_access_staticbuff_mutating { cPtr in
 					try hIn.RAW_access_staticbuff_mutating { hPtr in
@@ -130,10 +130,10 @@ extension Message.Response.Payload {
 						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 						
 						// step 5: c := KDF(c, DH(initiatorEpriv, responderEpub))
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey: &responderEphemeralPublicKey))
+						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey:responderEphemeralPublicKey))
 						
 						// step 6: c := KDF(c, DH(initiatorStaticPrivateKey, responderEpub))
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey: &responderEphemeralPublicKey))
+						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey:responderEphemeralPublicKey))
 						
 						// step 7: (c, T, k) := KDF^3(c, Q)
 						var k:Result.Bytes32

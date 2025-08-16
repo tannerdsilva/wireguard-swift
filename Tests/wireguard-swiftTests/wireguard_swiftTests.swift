@@ -22,12 +22,10 @@ extension WireguardSwiftTests {
 			let staticPublicKey = try dhGenerate()
 			let peerPublicKey = try dhGenerate().0
 			
-			let (_, _, _, payload) = try withUnsafePointer(to: staticPublicKey.1) { p in
-				try withUnsafePointer(to: peerPublicKey) { q in
-					return try Message.Initiation.Payload.forge(initiatorStaticPrivateKey: p, responderStaticPublicKey: q)
-				}
+			let (_, _, _, payload) = try withUnsafePointer(to: peerPublicKey) { q in
+				return try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:staticPublicKey.1, responderStaticPublicKey: q)
 			}
-			
+
 			let _ = try withUnsafePointer(to: staticPublicKey) { p in
 				try withUnsafePointer(to: peerPublicKey) { q in
 					return try payload.finalize(responderStaticPublicKey: q)
@@ -46,25 +44,25 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func selfValidateInitiation() throws {
-			var initiatorPrivateKey = try PrivateKey()
-			var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
-			var responderStaticPrivateKey = try PrivateKey()
-			var responderStaticPublicKey = PublicKey(privateKey:&responderStaticPrivateKey)
-			var constructedPacket = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
+			var initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var initiatorPublicKey = PublicKey(privateKey:initiatorPrivateKey)
+			var responderStaticPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
+			var constructedPacket = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
 			var authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey)
-			let responderValidationStep = try authenticatedPacketToSend.validate(responderStaticPrivateKey: &responderStaticPrivateKey)
+			let responderValidationStep = try authenticatedPacketToSend.validate(responderStaticPrivateKey:responderStaticPrivateKey)
 		}
 
 		@Test func selfValidateResponse() throws {
-			var initiatorPrivateKey = try PrivateKey()
-			var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
-			var initiatorEphemeralPrivateKey = try PrivateKey()
-			var initiatorEphemeralPublicKey = PublicKey(privateKey:&initiatorEphemeralPrivateKey)
+			var initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var initiatorPublicKey = PublicKey(privateKey:initiatorPrivateKey)
+			var initiatorEphemeralPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var initiatorEphemeralPublicKey = PublicKey(privateKey:initiatorEphemeralPrivateKey)
 			var sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()) // 0^32 shared key default
 			var senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
 			var constructedPacket = try Message.Response.Payload.forge(c: sharedKey, h: sharedKey, initiatorPeerIndex: senderIndex, initiatorStaticPublicKey: &initiatorPublicKey, initiatorEphemeralPublicKey: initiatorEphemeralPublicKey, preSharedKey: sharedKey)
 			var authenticatedPacket = try constructedPacket.payload.finalize(initiatorStaticPublicKey: &initiatorPublicKey)
-			let responseValidationStep = try authenticatedPacket.validate(c:sharedKey, h:sharedKey, initiatorStaticPrivateKey: &initiatorPrivateKey, initiatorEphemeralPrivateKey: &initiatorEphemeralPrivateKey, preSharedKey: sharedKey)
+			let responseValidationStep = try authenticatedPacket.validate(c:sharedKey, h:sharedKey, initiatorStaticPrivateKey:initiatorPrivateKey, initiatorEphemeralPrivateKey:initiatorEphemeralPrivateKey, preSharedKey: sharedKey)
 		}
 
 		@Test func selfValidateDataPacket() throws {
@@ -95,13 +93,13 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func selfValidateCookiePacket() throws {
-			var initiatorPrivateKey = try PrivateKey()
+			var initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
 			
-			var initiatorPublicKey = PublicKey(privateKey:&initiatorPrivateKey)
+			var initiatorPublicKey = PublicKey(privateKey:initiatorPrivateKey)
 			
-			var responderStaticPrivateKey = try PrivateKey()
+			var responderStaticPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
 			
-			var responderStaticPublicKey = PublicKey(privateKey:&responderStaticPrivateKey)
+			var responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
 			
 			// Pre-computing HASH(LABEL-COOKIE || Spub)
 			var hasher = try! WGHasherV2<RAW_xchachapoly.Key>()
@@ -109,7 +107,7 @@ extension WireguardSwiftTests {
 			try! hasher.update(responderStaticPublicKey)
 			let precomputedCookieKey = try! hasher.finish()
 			
-			var constructedPacket = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey: &initiatorPrivateKey, responderStaticPublicKey: &responderStaticPublicKey)
+			var constructedPacket = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderStaticPublicKey)
 			var authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey)
 			let endpoint = try SocketAddress(ipAddress: "192.0.2.1", port: 51820)
 			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
@@ -117,7 +115,7 @@ extension WireguardSwiftTests {
 
 			authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey, cookie: cookie)
 
-			try authenticatedPacketToSend.validateUnderLoadNoNIO(responderStaticPrivateKey: &responderStaticPrivateKey, R: secretCookieR, endpoint:Endpoint(endpoint))
+			try authenticatedPacketToSend.validateUnderLoadNoNIO(responderStaticPrivateKey:responderStaticPrivateKey, R: secretCookieR, endpoint:Endpoint(endpoint))
 		}
 	}
 }
@@ -129,11 +127,11 @@ extension WireguardSwiftTests {
 	struct LiveSocketTests {
 		
 		let myPublicKey: PublicKey
-		let myPrivateKey: PrivateKey
+		let myPrivateKey: MemoryGuarded<PrivateKey>
 		
 		let peerPublicKey: PublicKey
-		let peerPrivateKey: PrivateKey
-		
+		let peerPrivateKey: MemoryGuarded<PrivateKey>
+
 		let cliLogger = Logger(label: "wg-test-tool.initiator")
 		
 		init() throws {
@@ -288,7 +286,7 @@ extension WireguardSwiftTests {
 				payload2[i] = UInt8((i+5)%256)
 			}
 			
-			_ = try await withThrowingTaskGroup(body: { foo in
+			_ = try await withThrowingTaskGroup(of:Void.self, returning:Void.self) { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
 				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
 				
@@ -329,7 +327,7 @@ extension WireguardSwiftTests {
 						foo.cancelAll()
 					}
 				}
-			})
+			}
 		}
 	}
 	}

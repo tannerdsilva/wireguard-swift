@@ -39,14 +39,14 @@ struct CLI:AsyncParsableCommand {
 		)
 
 		@Argument(help: "The private key to use for the computation.")
-		var privateKey:PrivateKey
+		var privateKey:MemoryGuarded<RAW_dh25519.PrivateKey>
 		@Argument(help: "The public key to use for the computation.")
 		var publicKey:PublicKey
 
 		func run() throws {
 			var privKeyCopy = privateKey
 			var pubKeyCopy = publicKey
-			let sharedKey = SharedKey.compute(privateKey: &privKeyCopy, publicKey: &pubKeyCopy)
+			let sharedKey = try MemoryGuarded<SharedKey>.compute(privateKey:privKeyCopy, publicKey:pubKeyCopy)
 			print("shared secret: \(String(RAW_base64.encode(sharedKey)))")
 		}
 	}
@@ -61,7 +61,7 @@ struct CLI:AsyncParsableCommand {
 		@Argument(help: "The port number that the responder is listening on.")
 		var port:Int
 		@Argument(help:"The private key that the initiator will use to forge an initial handshake.")
-		var myPrivateKey:PrivateKey
+		var myPrivateKey:MemoryGuarded<RAW_dh25519.PrivateKey>
 		@Argument(help:"The public key that the responder is expected to be operating with.")
 		var respondersPublicKey:PublicKey
 
