@@ -10,19 +10,19 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias OutboundIn = (PublicKey, [UInt8])
 	internal typealias OutboundOut = InterfaceInstruction
 	
-	private var kcp:[PublicKey: ikcp_cb] = [:]
+	private var kcp:[PublicKey: ikcp_cb<EventLoopPromise<Void>>] = [:]
 	
 	private var logger:Logger
 	
 	// Task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .seconds(5)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(50)
 	
 	// Tasks for killing ikcp when inactive
 	private var kcpKillTasks: [PublicKey: Scheduled<Void>] = [:]
 	private let kcpKillTime: TimeAmount = .seconds(300)
-
+	
 	internal init(logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
@@ -34,28 +34,32 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
-		kcp[key] = ikcp_cb(conv: 0, user: nil, synchronous: true)
+		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0, output: { [weak self] buffer, promise in
+			guard let self = self else { return }
+			// Pass outbound kcp segment buffers to data handler
+			let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
+			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)) , promise: promise)
+		 })
 	}
 	
-	private func kcpCheckAck(for key:PublicKey, context:ChannelHandlerContext) {
+	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
 		guard kcpUpdateTasks[key] == nil else { return }
 		kcpStartTimers[key] = 0
 		
 		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
-			[weak self, c = ContextContainer(context: context)] _ in
+			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			
-			if(!kcp[key]!.ackUpToDate()) {
-				kcpStartTimers[key]! += 10_000
-				kcp[key]!.update(current: kcpStartTimers[key]!, output: { buffer in
-					// Pass outbound kcp segment buffers to data handler
-					c.accessContext { contextPointer in
-						contextPointer.pointee.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
-					}
-				})
-			} else {
-				kcpUpdateTasks[key] = nil
-			}
+			self.kcp[key]!.update(current: kcpStartTimers[key]!)
+
+			do {
+				let receivedData = try self.kcp[key]!.receive()
+				c.accessContext { contextPointer in
+					contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
+				}
+			} catch { } // received no data or it failed
+
+			kcpStartTimers[key]! += 50
 		}
 		
 		kcpUpdateTasks[key] = task
@@ -79,24 +83,13 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		let (key, data) = unwrapInboundIn(data)
 		if(kcp[key] == nil) {
 			makeIkcpCb(key: key, context: context)
+			kcpUpdates(for: key, context: context)
 		}
 		
-		_ = kcp[key]!.input(data: data)
-		var i = 0
-		var len = 0
-		while let receivedData = try? kcp[key]!.receive() {
-			defer {
-				i += 1
-				len += receivedData.count
-			}
-			kcp[key]!.update(current:0, output: { buffer in
-				// Sending Acks
-				context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
-			})
-			context.fireChannelRead(wrapInboundOut((key, receivedData)))
-		}
-		if i > 0 {
-			logger.trace("fired kcp segments down pipeline", metadata:["segment_count":"\(i)", "total_bytes":"\(len)"])
+		do {
+			_ = try kcp[key]!.input(data, count: data.count)
+		} catch let error {
+			logger.error("Error parsing kcp data: \(error)")
 		}
 	}
 	
@@ -105,15 +98,13 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		var (key, data) = unwrapOutboundIn(data)
 		if (kcp[key] == nil) {
 			makeIkcpCb(key:key, context:context)
+			kcpUpdates(for: key, context: context)
 		}
 		
-		var _ = kcp[key]!.send(buffer:&data, _len:data.count)
-		
-		kcp[key]!.update(current:0, output: { buffer in
-			// Pass outbound kcp segment buffers to data handler
-			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise:promise)
-		})
-		
-		kcpCheckAck(for: key, context: context)
+		do {
+			_ = try kcp[key]!.send(&data, count:data.count, assosiatedData: promise)
+		} catch let error {
+			logger.error("Error sending kcp data: \(error)")
+		}
 	}
 }

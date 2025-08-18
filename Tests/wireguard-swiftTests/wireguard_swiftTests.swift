@@ -178,7 +178,7 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func sendMultipleSmallMessages() async throws {
-			let payloadSize: Int = 10
+			let payloadSize: Int = 10_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {

@@ -14,13 +14,13 @@ let package = Package(
 		.library(name:"wireguard-userspace-nio", targets:["wireguard-userspace-nio"]),
 	],
 	dependencies:[
-        .package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"62f36e06ca389121f84d83f039a211a6a3ed3820"),
+		.package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"62f36e06ca389121f84d83f039a211a6a3ed3820"),
 		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"d6f8cd9d3d89d34c7ec4cd19d840d0dbc41967f8"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
-        .package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
-		.package(url:"https://github.com/bwyma1/kcp-Swift", revision: "0d37f1e9daed30c61cff97b471d7bad27b7160d3")
+		.package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
+		.package(url:"https://github.com/tannerdsilva/kcp-swift-core", revision: "92683bbd721b7351da06dd5cb1f1b76d49aa6b60")
 	],
 	targets: [
 		.executableTarget(
@@ -41,7 +41,7 @@ let package = Package(
 				.product(name:"RAW_dh25519", package:"rawdog"),
 				.product(name:"RAW_chachapoly", package:"rawdog"),
 				.product(name:"bedrock", package:"bedrock"),
-                .product(name:"bedrock_fifo", package:"bedrock"),
+				.product(name:"bedrock_fifo", package:"bedrock"),
 				.product(name:"bedrock_future", package:"bedrock"),
 				.product(name:"RAW_xchachapoly", package:"rawdog"),
 				.product(name:"RAW_blake2", package:"rawdog"),
@@ -57,14 +57,14 @@ let package = Package(
 				.product(name:"RAW_chachapoly", package:"rawdog"),
 				.product(name:"NIO", package:"swift-nio"),
 				.product(name:"bedrock", package:"bedrock"),
-                .product(name:"bedrock_fifo", package:"bedrock"),
+				.product(name:"bedrock_fifo", package:"bedrock"),
 				.product(name:"bedrock_future", package:"bedrock"),
 				.product(name:"RAW_xchachapoly", package:"rawdog"),
 				.product(name:"RAW_blake2", package:"rawdog"),
 				.product(name:"RAW_hmac", package:"rawdog"),
-                .product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
+				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 				.product(name:"bedrock_ip", package:"bedrock"),
-				.product(name:"kcp-swift", package: "kcp-Swift"),
+				.product(name:"kcp-swift", package: "kcp-swift-core"),
 				"wireguard-crypto-core"
 			]
 		),
