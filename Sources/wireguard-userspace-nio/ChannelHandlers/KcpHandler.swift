@@ -17,7 +17,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .milliseconds(50)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(10)
 	
 	// Tasks for killing ikcp when inactive
 	private var kcpKillTasks: [PublicKey: Scheduled<Void>] = [:]
@@ -40,6 +40,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
 			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)) , promise: promise)
 		 })
+        kcp[key]!.setNoDelay(1,interval: 10,resend: 2,nc: 1)
 	}
 	
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
@@ -59,7 +60,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 			} catch { } // received no data or it failed
 
-			kcpStartTimers[key]! += 50
+			kcpStartTimers[key]! += 10
 		}
 		
 		kcpUpdateTasks[key] = task

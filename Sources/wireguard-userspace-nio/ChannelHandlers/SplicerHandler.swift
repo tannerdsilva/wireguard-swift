@@ -63,11 +63,11 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		guard storedLengths[key] != nil else {
 			// Extract the UInt32 from the first 4 bytes
 			let value = data.RAW_access {
-				return EncodedUInt32(RAW_staticbuff:$0.baseAddress!).RAW_native()
+                return EncodedUInt32(RAW_staticbuff:$0.baseAddress!.advanced(by: data.count-4)).RAW_native()
 			}
 			
 			// Remove the first 4 bytes from the array
-			let payload = Array(data.dropFirst(4))
+			let payload = Array(data.dropLast(4))
 			
 			// Only this one segment
 			if(value == 0) {
@@ -103,27 +103,26 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		
 		// Data doesn't need to be spliced, add a header signifying 0 length
 		if(data.count <= spliceByteLength) {
-			let headerBytes = [UInt8](repeating: 0, count: 4)
+            let footerBytes = [UInt8](repeating: 0, count: 4)
+            data.append(contentsOf: footerBytes)
 			
-			data.insert(contentsOf: headerBytes, at: 0)
-			
-			context.writeAndFlush(wrapOutboundOut((key, data)), promise: promise)
+            context.writeAndFlush(wrapOutboundOut((key, data)), promise: promise)
 		}
 		// Data needs to be spliced and place a len header on first segment
 		else {
 			let splices = data.split(intoChunksOf: spliceByteLength)
-			let headerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
+			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
 			for i in 0..<splices.count {
 				var segment = Array(splices[i])
 				if(i == 0) {
-					headerBytes.RAW_access {
-						segment.insert(contentsOf:$0, at: 0)
+					footerBytes.RAW_access {
+                        segment.append(contentsOf: $0)
 					}
 				}
 				if(i == splices.count-1) {
-					context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
+                    context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
 				} else {
-					context.writeAndFlush(wrapOutboundOut((key, segment)), promise: nil)
+                    context.writeAndFlush(wrapOutboundOut((key, segment)), promise: nil)
 				}
 			}
 		}
