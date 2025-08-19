@@ -1,5 +1,5 @@
 {
-  "originHash" : "a6640a32c3a2751fe1847701193f2c023237a9c318f81ef4ae56c60f5d8be4f4",
+  "originHash" : "0fb5823878c069d7fe7ee95589bbe606ffaf7e70b16b7d819baf81f83f7f94ab",
   "pins" : [
     {
       "identity" : "bedrock",
@@ -14,7 +14,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/kcp-swift-core",
       "state" : {
-        "revision" : "92683bbd721b7351da06dd5cb1f1b76d49aa6b60"
+        "revision" : "323cfad619b5af8ccb8d49827f2304972942769b"
       }
     },
     {

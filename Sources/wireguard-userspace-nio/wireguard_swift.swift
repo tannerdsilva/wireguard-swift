@@ -1,7 +1,4 @@
-// The Swift Programming Language
-// https://docs.swift.org/swift-book
-
-import Foundation
+import struct Foundation.POSIXError
 import RAW
 import NIO
 import RAW_dh25519
@@ -37,10 +34,9 @@ extension SocketAddress {
 	}
 }
 
-@available(*, deprecated, renamed: "PeerInfo")
+@available(*, deprecated, renamed:"PeerInfo")
 public typealias Peer = PeerInfo
 
-/// Represents a peer on the WireGuard interface. Each peer has a unique public key assosiated with it.
 public struct PeerInfo:Sendable {
 	public let publicKey:PublicKey
 	public let endpoint:Endpoint?

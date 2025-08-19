@@ -69,7 +69,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 						return
 					}
 					logger.debug("received handshake initiation packet. sending downstream in pipeline...")
-					context.fireChannelRead(wrapInboundOut((endpoint, Message.initiation(Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!))))
+					context.fireChannelRead(wrapInboundOut((endpoint, Message.initiation(Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!))))
 				case 0x2:
 					guard byteBuffer.count == MemoryLayout<Message.Response.Payload.Authenticated>.size else {
 						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)"])
@@ -77,13 +77,13 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 						return
 					}
 					logger.debug("received handshake response packet. sending downstream in pipeline...")
-					context.fireChannelRead(wrapInboundOut((endpoint, Message.response(Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Response.Payload.Authenticated>.size)!))))
+					context.fireChannelRead(wrapInboundOut((endpoint, Message.response(Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Response.Payload.Authenticated>.size)!))))
 				case 0x3:
 					logger.debug("received cookie response packet. sending downstream in pipeline...")
-					context.fireChannelRead(wrapInboundOut((endpoint, Message.cookie(Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count: MemoryLayout<Message.Cookie.Payload>.size)!))))
+					context.fireChannelRead(wrapInboundOut((endpoint, Message.cookie(Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!))))
 				case 0x4:
 					logger.debug("received transit data packet of size \(byteBuffer.count), sending downstream in pipeline...")
-					context.fireChannelRead(wrapInboundOut((endpoint, Message.data(Message.Data.Payload(RAW_decode:byteBuffer.baseAddress!, count: byteBuffer.count)!))))
+					context.fireChannelRead(wrapInboundOut((endpoint, Message.data(Message.Data.Payload(RAW_decode:byteBuffer.baseAddress!, count:byteBuffer.count)!))))
 				default:
 					logger.error("unrecognized packet type received: \(byteBuffer[0])")
 					context.fireErrorCaught(Error.packetTypeUnrecognized(type:byteBuffer[0]))
@@ -143,10 +143,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					return ob.baseAddress!.distance(to:p.RAW_encode(dest:ob.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 				}
                 sendBuffer = buffer
-				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
+				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint, s = size] r in
 					switch r {
 					case .success:
-						l.debug("data packet sent successfully")
+						l.debug("data packet sent successfully", metadata:["packet_length":"\(s)"])
 					case .failure(let error):
 						l.error("failed to send data packet: \(error)")
 					}
