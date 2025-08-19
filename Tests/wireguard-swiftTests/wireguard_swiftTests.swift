@@ -288,9 +288,6 @@ extension WireguardSwiftTests {
 			let payloadSize: Int = 2_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
-			for i in 0..<payloadSize {
-				payload[i] = UInt8(i%256)
-			}
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]

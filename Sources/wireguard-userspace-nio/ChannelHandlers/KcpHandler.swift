@@ -17,7 +17,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .milliseconds(10)
+    private let kcpUpdateTime: TimeAmount = .milliseconds(1)
 	
 	// Tasks for killing ikcp when inactive
 	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
@@ -35,9 +35,9 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(1, interval:5, resend:2, nc:1)
+		kcp[key]!.setNoDelay(0, interval:10, resend:0, nc:1)
 	}
-	
+
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
 		guard kcpUpdateTasks[key] == nil else { return }
 		kcpStartTimers[key] = 0
@@ -45,8 +45,8 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
 			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
-			
-			self.kcp[key]!.update(current:iclock()) { buffer, promise in
+            
+			self.kcp[key]!.update(current:kcpStartTimers[key]!) { buffer, promise in
 				let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
 				c.accessContext { contextPointer in
 					contextPointer.pointee.write(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)), promise:promise)
@@ -59,6 +59,8 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
 				}
 			} catch { } // received no data or it failed
+            
+            kcpStartTimers[key]! += 1_000
 		}
 		kcpUpdateTasks[key] = task
 	}
@@ -75,11 +77,10 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			}
 		}
 	}
-	
+    
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let (key, data) = unwrapInboundIn(data)
-		logger.trace("kcp segment inbound", metadata:["peer_public_key":"\(key)"])
 		if (kcp[key] == nil) {
 			makeIkcpCb(key: key, context: context)
 			kcpUpdates(for: key, context: context)
@@ -95,7 +96,6 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var (key, data) = unwrapOutboundIn(data)
-		logger.trace("kcp segment outbound", metadata:["peer_public_key":"\(key)"])
 		if (kcp[key] == nil) {
 			makeIkcpCb(key:key, context:context)
 			kcpUpdates(for: key, context: context)
