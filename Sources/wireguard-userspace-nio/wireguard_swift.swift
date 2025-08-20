@@ -141,12 +141,24 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		logger.info("server closed successfully.")
 	}
 
-	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
+	public func asyncWrite(publicKey: PublicKey, data:[UInt8]) async throws {
 		switch state {
 			case .engaged(let channel):
 				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
 				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
 				try await myWritePromise.futureResult.get()
+			default:
+				throw InvalidInterfaceStateError()
+		}
+	}
+	
+	@discardableResult 
+	public func write(publicKey: PublicKey, data:[UInt8]) throws -> EventLoopFuture<Void>{
+		switch state {
+			case .engaged(let channel):
+				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
+				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
+				return myWritePromise.futureResult
 			default:
 				throw InvalidInterfaceStateError()
 		}
