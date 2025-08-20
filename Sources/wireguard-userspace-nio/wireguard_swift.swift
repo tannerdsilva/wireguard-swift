@@ -105,7 +105,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 							PacketHandler(logLevel:.info),
 							hs,
 							dh,
-							KcpHandler(logLevel: .trace),
+							KcpHandler(logLevel: .info),
 							SplicerHandler(logLevel: .trace, spliceByteLength: 300_000),
 							dhh
 						])

@@ -424,7 +424,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 }
         }
     }
-    
+        
     // Finish the queue when channel shuts down
     internal func channelInactive(context: ChannelHandlerContext) {
 		// there used to be some code here but it has since been removed and now this function does nothing.
