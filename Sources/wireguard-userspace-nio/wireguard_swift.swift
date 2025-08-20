@@ -102,7 +102,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
 						channel.pipeline.addHandlers([
-							PacketHandler(logLevel:.info),
+							PacketHandler(logLevel:.trace),
 							hs,
 							dh,
 							KcpHandler(logLevel: .info),
@@ -152,13 +152,10 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		}
 	}
 	
-	@discardableResult 
-	public func write(publicKey: PublicKey, data:[UInt8]) throws -> EventLoopFuture<Void>{
+	public func write(publicKey: PublicKey, data:[UInt8]) throws {
 		switch state {
 			case .engaged(let channel):
-				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
-				return myWritePromise.futureResult
+				channel.pipeline.writeAndFlush((publicKey, data), promise:nil)
 			default:
 				throw InvalidInterfaceStateError()
 		}
