@@ -2,6 +2,7 @@ import RAW
 import RAW_dh25519
 import RAW_base64
 import ArgumentParser
+import bedrock_ip
 
 extension RAW_dh25519.PublicKey:@retroactive ExpressibleByArgument {
 	public init?(argument: String) {
@@ -22,4 +23,6 @@ extension MemoryGuarded<RAW_dh25519.PrivateKey>:@retroactive ExpressibleByArgume
 		self.init(RAW_decode:bytes, count:32)
 	}
 }
+
+extension Address:@retroactive ExpressibleByArgument {}
 
