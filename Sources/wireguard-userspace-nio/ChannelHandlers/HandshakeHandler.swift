@@ -14,8 +14,24 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias OutboundOut = (Endpoint, Message)
 	
 	private enum HandshakeGeometry<HandshakeSessionType>:Hashable, Equatable where HandshakeSessionType:Hashable, HandshakeSessionType:Equatable {
-		case selfInitiated(mp:HandshakeSessionType)
-		case peerInitiated(m:HandshakeSessionType)
+		case selfInitiated(m:HandshakeSessionType, mp:HandshakeSessionType)
+		case peerInitiated(m:HandshakeSessionType, mp:HandshakeSessionType)
+		var peerIndex:HandshakeSessionType {
+			switch self {
+				case .selfInitiated(m:let m, mp:let mp):
+				return m
+				case .peerInitiated(m:let m, mp:let mp):
+				return mp
+			}
+		}
+		var selfIndex:HandshakeSessionType {
+			switch self {
+				case .selfInitiated(m:let m, mp:let mp):
+				return m
+				case .peerInitiated(m:let m, mp:let mp):
+				return mp
+			}
+		}
 	}
 
 	private var log:Logger
@@ -299,6 +315,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							peersAddressBook[endpoint!] = peerPublicKey
 							peerEndpoints[payload.initiatorPeerIndex] = endpoint!
 							peerMEndpoint[payload.initiatorPeerIndex] = endpoint!
+							pubEndpoints[peerPublicKey] = endpoint!
 						}
 						guard peerMEndpoint[payload.initiatorPeerIndex] != nil else {
 							logger.critical("no peer endpoint for \(payload.initiatorPeerIndex)")
