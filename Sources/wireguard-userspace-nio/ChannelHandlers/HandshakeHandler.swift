@@ -25,11 +25,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var peersMP:[PeerIndex:PublicKey] = [:]
 	internal var peerEndpointsMP:[PeerIndex:Endpoint] = [:]
 	internal var endpointToPeersMP:[Endpoint:PeerIndex] = [:]
-
-	internal var peersAddressBook:[Endpoint:PublicKey] = [:]
-	
 	// stores a mapping of an initiatiors peer index and the corresponding authenticated payload that was generated
 	internal var initiatorPackets:[PeerIndex:Message.Initiation.Payload.Authenticated] = [:]
+
+
+
+	internal var peersAddressBook:[Endpoint:PublicKey] = [:]
 	
 	// Precomputed key for the cookie
 	internal let precomputedCookieKey:RAW_xchachapoly.Key
