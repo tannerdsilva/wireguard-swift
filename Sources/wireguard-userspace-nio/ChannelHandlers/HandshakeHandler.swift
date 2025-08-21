@@ -10,21 +10,24 @@ import wireguard_crypto_core
 internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = (Endpoint, Message)
 	internal typealias InboundOut = PacketTypeInbound
-
 	internal typealias OutboundIn = PacketTypeOutbound
 	internal typealias OutboundOut = (Endpoint, Message)
 	
+	private enum HandshakeGeometry<HandshakeSessionType>:Hashable, Equatable where HandshakeSessionType:Hashable, HandshakeSessionType:Equatable {
+		case selfInitiated(mp:HandshakeSessionType)
+		case peerInitiated(m:HandshakeSessionType)
+	}
+
 	private var log:Logger
 	internal let privateKey:MemoryGuarded<PrivateKey>
 	
 	// Storing public keys for validating responses after we send initiation
 	internal var peers:[PeerIndex:PublicKey] = [:]
 	internal var peerEndpoints:[PeerIndex:Endpoint] = [:]
-	
+	internal var pubEndpoints:[PublicKey:Endpoint] = [:]
 	// m peers
 	internal var peerMPublicKey:[PeerIndex:PublicKey] = [:]
 	internal var peerMEndpoint:[PeerIndex:Endpoint] = [:]
-	internal var endpointPeerM:[Endpoint:PeerIndex] = [:]
 	
 	// stores a mapping of an initiatiors peer index and the corresponding authenticated payload that was generated
 	internal var initiatorPackets:[PeerIndex:Message.Initiation.Payload.Authenticated] = [:]
@@ -163,12 +166,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					
 					peers[authResponse.payload.responderIndex] = initiatorStaticPublicKey
 					peerEndpoints[authResponse.payload.responderIndex] = endpoint
+					pubEndpoints[initiatorStaticPublicKey] = endpoint
 										
 					initiatorPackets.removeValue(forKey:payload.payload.initiatorPeerIndex) 
 					
 					peerMPublicKey[payload.payload.initiatorPeerIndex] = initiatorStaticPublicKey
 					peerMEndpoint[payload.payload.initiatorPeerIndex] = endpoint
-					endpointPeerM[endpoint] = payload.payload.initiatorPeerIndex
 					
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
@@ -204,10 +207,10 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					
 					peers[payload.payload.responderIndex] = peerPublicKey
 					peerEndpoints[payload.payload.responderIndex] = endpoint
+					pubEndpoints[peerPublicKey] = endpoint
 										
 					peerMPublicKey[payload.payload.initiatorIndex] = peerPublicKey
 					peerMEndpoint[payload.payload.initiatorIndex] = endpoint
-					endpointPeerM[endpoint] = payload.payload.initiatorIndex
 
 					guard initiatorPackets.removeValue(forKey:payload.payload.initiatorIndex) != nil else {
 						logger.critical("inconsistent peer endpoint data found within handler. this is an internal error")
@@ -296,8 +299,6 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							peersAddressBook[endpoint!] = peerPublicKey
 							peerEndpoints[payload.initiatorPeerIndex] = endpoint!
 							peerMEndpoint[payload.initiatorPeerIndex] = endpoint!
-							
-							endpointPeerM[endpoint!] = payload.initiatorPeerIndex
 						}
 						guard peerMEndpoint[payload.initiatorPeerIndex] != nil else {
 							logger.critical("no peer endpoint for \(payload.initiatorPeerIndex)")
