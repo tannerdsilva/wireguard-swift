@@ -100,7 +100,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
+					.channelInitializer { [hs = hs, dh = dh, dhh = dhh] channel in
 						channel.pipeline.addHandlers([
 							PacketHandler(logLevel:.trace),
 							hs,

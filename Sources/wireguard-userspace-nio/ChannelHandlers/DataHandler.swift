@@ -5,18 +5,27 @@ import bedrock_fifo
 import wireguard_crypto_core
 
 internal enum InterfaceInstruction {
-    // Add peer to pipeline configuration
-    case addPeer(Peer)
-    // Remove peer from pipeline configuration
-    case removePeer(Peer)
+    /// Add peer to pipeline configuration
+    case addPeer(PeerInfo)
+    /// Remove peer from pipeline configuration
+    case removePeer(PeerInfo)
 	/// indicates a series of bytes that are to be encrypted and sent to the peer
-	case encryptAndTransmit(PublicKey, [UInt8])
+	case encryptAndTransmit(PublicKey, PeerIndex?, [UInt8])
+}
+
+internal enum PipelineEvent {
+	/// Indicates that a new peer index session started with unique transmit keys
+	case reKeyEvent(PeerIndex, (previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?), PublicKey)
+	/// Indicates that a peer has finally been killed
+	case peerKilled(PeerIndex, (previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?), PublicKey)
+	/// Indicates an update in the current active sessions
+	case sessionsUpdated((previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?), PublicKey)
 }
 
 // Handles the data packet encryption and decryption
 internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     internal typealias InboundIn = PacketTypeInbound
-    internal typealias InboundOut = (PublicKey, [UInt8])
+    internal typealias InboundOut = (PeerIndex, [UInt8])
     
     internal typealias OutboundIn = InterfaceInstruction
     internal typealias OutboundOut = PacketTypeOutbound
@@ -32,9 +41,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     // Active wireguard sessions
 	private var sessions:[PublicKey:(previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?)] = [:]
     private var sessionsInv:[PeerIndex:PublicKey] = [:]
-    
-    // Pending incoming and outgoing packets
-    private var pendingWriteFutures:[PublicKey:[(data:[UInt8], promise:EventLoopPromise<Void>?)]] = [:]
     
     // KeepAlive variables
     private var keepaliveTasks:[PeerIndex:RepeatedTask] = [:]
@@ -55,7 +61,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
     
     private var logger:Logger
 
-    internal init(logLevel:Logger.Level, initialConfiguration:[Peer]? = nil) {
+    internal init(logLevel:Logger.Level, initialConfiguration:[PeerInfo]? = nil) {
         var buildLogger = Logger(label:"\(String(describing:Self.self))")
         buildLogger.logLevel = logLevel
         logger = buildLogger
@@ -182,7 +188,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private func startDeathSentence(for peerIndex: PeerIndex, context: ChannelHandlerContext, delay: TimeAmount = .seconds(10)) {
 		context.eventLoop.scheduleTask(in:delay) { [weak self] in
 			guard let self = self else { return }
-			self.killSession(peerIndex: peerIndex)
+			self.killSession(peerIndex: peerIndex, context: context)
 			self.logger.debug("Session for peerIndex \(peerIndex) killed after delay")
 		}
 	}
@@ -213,7 +219,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
-    private func addPeer(peer:Peer) {
+    private func addPeer(peer:PeerInfo) {
         configuration[peer.publicKey] = peer.endpoint
         if(peer.internalKeepAlive != nil){
             keepaliveInterval[peer.publicKey] = peer.internalKeepAlive
@@ -222,23 +228,23 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
         }
     }
     
-    private func removePeer(peer: Peer) {
+    private func removePeer(peer: PeerInfo) {
         configuration[peer.publicKey] = nil
         keepaliveInterval[peer.publicKey] = nil
     }
 	
 	// Specifically kills and removes the `previous` session
-	private func removePreviousSession(peerPublicKey: PublicKey) {
+	private func removePreviousSession(peerPublicKey: PublicKey, context: ChannelHandlerContext) {
 		guard let peerSessions = sessions[peerPublicKey] else { return }
 		guard let previous = peerSessions.previous else { return }
 		
-		killSession(peerIndex: previous)
+		killSession(peerIndex: previous, context: context)
 		sessions[peerPublicKey]!.previous = nil
 	}
 	
 	// Rotates sessions to the left (nil <- previous <- current <- next)
 	private func rotateSessions(peerPublicKey: PublicKey, context: ChannelHandlerContext) {
-		removePreviousSession(peerPublicKey: peerPublicKey)
+		removePreviousSession(peerPublicKey: peerPublicKey, context: context)
 		guard let peerSessions = sessions[peerPublicKey] else { return }
 		sessions[peerPublicKey]!.previous = peerSessions.current
 		sessions[peerPublicKey]!.current = peerSessions.next
@@ -250,8 +256,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 	}
     
-	// Kills a single session
-	private func killSession(peerIndex: PeerIndex) {
+	// Kills a single session. Called anytime a session for a peer index is removed.
+	private func killSession(peerIndex: PeerIndex, context: ChannelHandlerContext) {
 		// Set the session to nil in the sessions for the peer
 		if let publicKey = sessionsInv[peerIndex],
 		   var session = sessions[publicKey] {
@@ -265,6 +271,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 				session.next = nil
 			}
 			sessions[publicKey] = session
+			// Fire Event to let kcp know that a session is being killed
+			context.fireUserInboundEventTriggered(PipelineEvent.peerKilled(peerIndex, sessions[publicKey]!, publicKey))
 		}
 		
 		// Remove everything related to the session
@@ -279,17 +287,17 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	// Kills all active sessions for a peer (previous, current, next)
-    private func killAllSessions(peerPublicKey: PublicKey) {
+    private func killAllSessions(peerPublicKey: PublicKey, context: ChannelHandlerContext) {
 		guard let peerSessions = sessions[peerPublicKey] else { return }
         configuration[peerPublicKey] = nil
 		if peerSessions.0 != nil {
-			killSession(peerIndex: peerSessions.0!)
+			killSession(peerIndex: peerSessions.0!, context: context)
 		}
 		if peerSessions.1 != nil {
-			killSession(peerIndex: peerSessions.1!)
+			killSession(peerIndex: peerSessions.1!, context: context)
 		}
 		if peerSessions.2 != nil {
-			killSession(peerIndex: peerSessions.2!)
+			killSession(peerIndex: peerSessions.2!, context: context)
 		}
 		sessions.removeValue(forKey: peerPublicKey)
         logger.debug("killed all sessions for \(peerPublicKey)")
@@ -316,6 +324,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 							lastHandshake[peerIndex] = .now()
 							startKeepalive(for: peerIndex, context: context, peerPublicKey: publicKey)
 							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: publicKey)
+							context.fireUserInboundEventTriggered(PipelineEvent.sessionsUpdated(sessions[publicKey]!, publicKey))
 						}
 					}
                     
@@ -326,7 +335,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                     }
                     
                     // Send plaintext packet to the kcp handler
-                   	context.fireChannelRead(wrapInboundOut((publicKey, decryptedPacket)))
+                   	context.fireChannelRead(wrapInboundOut((peerIndex, decryptedPacket)))
                 
                 // Calculate transmit keys and set nonce counters to 0
                 case .keyExchange(let peerPublicKey, let peerIndex, let c, let isInitiator):
@@ -343,7 +352,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 							if(sessions[peerPublicKey] == nil) { sessions[peerPublicKey] = (nil, nil, peerIndex) }
 							else {
 								if(sessions[peerPublicKey]!.next == nil) { sessions[peerPublicKey]!.next = peerIndex }
-								else { killSession(peerIndex: sessions[peerPublicKey]!.next!)
+								else { killSession(peerIndex: sessions[peerPublicKey]!.next!, context: context)
 									sessions[peerPublicKey]!.next = peerIndex}
 							}
 						}
@@ -370,21 +379,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: peerPublicKey)
 						}
 						
-						// Handle encrypting packets waiting on handshake completion
-						guard let packets = pendingWriteFutures[peerPublicKey] else {
-							return
-						}
-						for packet in packets {
-							if let peer = sessions[peerPublicKey]!.current {
-								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peer, nonce: &nonceCounters[peer]!.Nsend, transportKey: transmitKeys[peer]!.Tsend, plainText: packet.data)
-								context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(peerPublicKey, encryptedPacket)), promise:packet.promise)
-								lastOutbound[peerIndex] = .now()
-							}
-						}
-						pendingWriteFutures[peerPublicKey] = nil
+						// Fire Event to let kcp know that a new handshake occured
+						context.fireUserInboundEventTriggered(PipelineEvent.reKeyEvent(peerIndex, sessions[peerPublicKey]!, peerPublicKey))
 					}
-                default:
-                    return
             }
         } catch {
             logger.error("error processing data packet: \(error)")
@@ -400,23 +397,20 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
                 addPeer(peer: peer)
             case .removePeer(let peer):
                 removePeer(peer: peer)
-			case .encryptAndTransmit(let publicKey, let bytes):
+			case .encryptAndTransmit(let publicKey, let peerIndex, let bytes):
 				guard let ep = configuration[publicKey] else {
 					logger.error("no endpoint found for public key \(publicKey)")
 					return
 				}
                 // Encrypt packet and send it out to peer
                 do {
-                    if let peerIndex = sessions[publicKey] {
-						let encryptedPacket = try Message.Data.Payload.forge(receiverIndex: peerIndex.current!, nonce: &nonceCounters[peerIndex.current!]!.Nsend, transportKey: transmitKeys[peerIndex.current!]!.Tsend, plainText: bytes)
+                    if let peerIndex = peerIndex {
+						let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:peerIndex, nonce: &nonceCounters[peerIndex]!.Nsend, transportKey: transmitKeys[peerIndex]!.Tsend, plainText: bytes)
                         context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(publicKey, encryptedPacket)), promise:promise)
-						lastOutbound[peerIndex.current!] = .now()
+						lastOutbound[peerIndex] = .now()
                     } else {
                         // Send handshake since there is no active session
                         context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.handshakeInitiate(publicKey, ep)), promise:nil)
-
-                        // Add packet to be encrypted after handshake
-                        pendingWriteFutures[publicKey, default: []].append((bytes, promise))
                     }
                 } catch {
                     logger.debug("unable to encrypt incoming data into a transit packet")
