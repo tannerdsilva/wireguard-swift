@@ -60,10 +60,14 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update(PublicKey(privateKey: privateKey))
 		precomputedCookieKey = try! hasher.finish()
 	}
-
-	internal func handlerAdded(context: ChannelHandlerContext) {
+	internal func handlerAdded(context:ChannelHandlerContext) {
 		var logger = log
-		logger.trace("handler added to pipeline.")
+		logger.trace("handler added to NIO pipeline.")
+	}
+	
+	internal func handlerRemoved(context:ChannelHandlerContext) {
+		var logger = log
+		logger.trace("handler removed from NIO pipeline.")
 	}
 
 	// Sends the cookie after REKEY-TIMEOUT time
@@ -112,7 +116,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 			switch payload {
 				// Validate initiation packet and send response upon successfull validation
 				case .initiation(let payload):
-					// Check if we are under heavy load
+					/*
+					peers role: initiator
+					our role: responder
+					
+					Im' = initiator peer index
+					*/
 					if underLoad == true {
 						do {
 							try payload.validateUnderLoadNoNIO(responderStaticPrivateKey:privateKey, R: secretCookieR, endpoint:endpoint)
@@ -124,39 +133,42 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 							// Create and send cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
 							context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
-								logger.debug("cookie reply message sent to endpoint")
+								logger.trace("cookie reply message sent to endpoint")
 							}
 							return
 						}
 					}
-
+					let responderPeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)
 					var (c, h, initiatorStaticPublicKey, timestamp) = try payload.validate(responderStaticPrivateKey: privateKey)
-					logger.debug("successfully validated handshake initiation packet", metadata:["peer_index":"\(payload.payload.initiatorPeerIndex)", "peer_public_key":"\(initiatorStaticPublicKey)"])
+					logger.debug("successfully validated handshake initiation packet", metadata:["initiator_peer_index":"\(payload.payload.initiatorPeerIndex)", "responder_peer_index":"\(responderPeerIndex)", "peer_public_key":"\(initiatorStaticPublicKey)"])
 
-					// Check handshake packet time
+					// check handshake packet time
 					if let initiationTime = initiationTimers[payload.payload.initiatorPeerIndex] {
 						if (timestamp <= initiationTime) {
 							return
 						}
 					}
 					initiationTimers[payload.payload.initiatorPeerIndex] = timestamp
-
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
-					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey)
+					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
-						logger.debug("handshake response sent")
+						logger.trace("handshake response sent successfully")
 					}
 					peers[authResponse.payload.responderIndex] = initiatorStaticPublicKey
 					peerEndpoints[authResponse.payload.responderIndex] = endpoint
 
 					// Pass data for creating transit keys
 					let keyPacket:PacketTypeInbound = .keyExchange(initiatorStaticPublicKey, response.payload.responderIndex, response.c, false)
-					logger.debug("sending key exhange packet to data handler")
 					context.fireChannelRead(wrapInboundOut(keyPacket))
 					
 				case .response(let payload):
-					logger.debug("received handshake response packet", metadata:["remote_address":"\(endpoint)"])
+					/*
+					peers role: responder
+					our role: initiator
+					
+					Im' = responder peer index
+					*/
 					guard let initiatorEphiPrivateKey = initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
@@ -170,7 +182,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						return
 					}
 					let val = try payload.validate(c:existingC, h:existingH, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:initiatorEphiPrivateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
-					logger.info("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.initiatorIndex)"])
+					logger.debug("successfully validated handshake response", metadata:["peer_index":"\(payload.payload.responderIndex)"])
 
 					peers[payload.payload.responderIndex] = peerPublicKey
 					peerEndpoints[payload.payload.responderIndex] = endpoint
@@ -206,7 +218,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 								phantomCookie = try initiationPacket.payload.finalize(responderStaticPublicKey: expectedPeerPublicKey, cookie: cookiePayload)
 								initiationPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
 							} catch {
-								logger.debug("failed to validate cookie and create msgMac2")
+								logger.error("failed to validate cookie and create msgMac2")
 								return
 							}
 							logger.debug("cookie sent to shipping container... (packet handler)")
@@ -223,7 +235,8 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						logger.critical("no peer public key for \(payload.payload.receiverIndex)")
 						return
 					}
-					context.fireChannelRead(wrapInboundOut(PacketTypeInbound.encryptedTransit(pk, payload)))
+					logger.trace("received data", metadata:["peer_index":"\(payload.header.receiverIndex)"])
+					context.fireChannelRead(wrapInboundOut(PacketTypeInbound.encryptedTransit(pk, payload.header.receiverIndex, payload)))
 			}
 		} catch let error {
 			logger.error("error processing handshake packet: \(error)")
@@ -242,6 +255,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		
 		switch invoke {
 			case let .handshakeInitiate(peerPublicKey, endpoint):
+					/*
+					peers role: responder
+					our role: initiator
+					
+					Im' = responder peer index
+					*/
 				guard isRekeying[peerPublicKey] == nil else {
 					return
 				}

@@ -5,7 +5,7 @@ import RAW_dh25519
 import wireguard_crypto_core
 
 internal enum PacketTypeInbound {
-	case encryptedTransit(PublicKey, Message.Data.Payload)
+	case encryptedTransit(PublicKey, PeerIndex, Message.Data.Payload)
 	case keyExchange(PublicKey, PeerIndex, Result.Bytes32, Bool)
 }
 
@@ -13,7 +13,6 @@ internal enum PacketTypeOutbound {
 	case encryptedTransit(PublicKey, Message.Data.Payload)
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
-
 
 internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// errors that may be fired by the PacketHandler
@@ -40,9 +39,14 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		log = buildLogger
 	}
 
-	internal func handlerAdded(context: ChannelHandlerContext) {
-		log.trace("handler added to pipeline.")
+	internal func handlerAdded(context:ChannelHandlerContext) {
+		log.trace("handler added to NIO pipeline.")
 	}
+	
+	internal func handlerRemoved(context:ChannelHandlerContext) {
+		log.trace("handler removed from NIO pipeline.")
+	}
+
 	
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		var logger = log

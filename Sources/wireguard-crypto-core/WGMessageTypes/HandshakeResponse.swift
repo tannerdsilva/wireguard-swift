@@ -40,7 +40,7 @@ extension Message {
 				}
 			}
 
-			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result.Bytes32) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
+			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result.Bytes32, responderPeerIndex:PeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
 				return try cIn.RAW_access_staticbuff_mutating { cPtr in
 					return try hIn.RAW_access_staticbuff_mutating { hPtr in
 						// step 1: (Epriv, Epub) := DH-GENERATE()
@@ -85,7 +85,7 @@ extension Message {
 							try hasher.update(emptyTag)
 							hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 
-							return (cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, Payload(responderIndex:try generateSecureRandomBytes(as:PeerIndex.self), initiatorIndex:initiatorPeerIndex, ephemeral:ephiPublic.assumingMemoryBound(to:PublicKey.self).pointee, emptyTag:emptyTag))
+							return (cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, Payload(responderIndex:responderPeerIndex, initiatorIndex:initiatorPeerIndex, ephemeral:ephiPublic.assumingMemoryBound(to:PublicKey.self).pointee, emptyTag:emptyTag))
 						}
 					}
 				}

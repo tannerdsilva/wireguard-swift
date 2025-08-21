@@ -83,7 +83,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-		self.dh = DataHandler(logLevel:.trace, initialConfiguration: initialConfiguration)
+		self.dh = DataHandler(logLevel:logLevel, initialConfiguration: initialConfiguration)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 	}
 
@@ -96,17 +96,17 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .initialized:
 				state = .engaging
-				let hs = HandshakeHandler(privateKey:staticPrivateKey, logLevel:.trace)
+				let hs = HandshakeHandler(privateKey:staticPrivateKey, logLevel:.debug)
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelInitializer { [hs = hs, dh = dh, dhh = dhh]channel in
+					.channelInitializer { [hs = hs, dh = dh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
-							PacketHandler(logLevel:.trace),
+							PacketHandler(logLevel:l.logLevel),
 							hs,
 							dh,
-							KcpHandler(logLevel: .info),
-							SplicerHandler(logLevel: .trace, spliceByteLength: 300_000),
+							KcpHandler(logLevel: .trace),
+							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
 							dhh
 						])
 					}

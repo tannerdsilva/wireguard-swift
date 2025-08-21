@@ -2,9 +2,22 @@ import NIO
 import RAW_dh25519
 import kcp_swift
 import Logging
+import wireguard_crypto_core
+
+internal struct Rotating<Element> {
+	internal var previous:Element? = nil
+	internal var current:Element? = nil
+	internal var next:Element? = nil
+	
+	internal init(previous pIn:Element?, current cIn:Element?, next nIn:Element?) {
+		previous = pIn
+		current = cIn
+		next = nIn
+	}
+}
 
 internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = (PublicKey, [UInt8])
+	internal typealias InboundIn = WireguardEvent
 	public typealias InboundOut = (PublicKey, [UInt8])
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8])
@@ -12,14 +25,16 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	private var kcp:[PublicKey:ikcp_cb<EventLoopPromise<Void>>] = [:]
 	
-	private var logger:Logger
+	private var kcp_peers = [PeerIndex:Void]()
 	
-	// Task for updating for acks
+	private let logger:Logger
+	
+	// task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
 	private let kcpUpdateTime: TimeAmount = .milliseconds(10)
-	
-	// Tasks for killing ikcp when inactive
+
+	// task for killing ikcp when inactive
 	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
 	private let kcpKillTime:TimeAmount = .seconds(300)
 	
@@ -29,13 +44,17 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		logger = buildLogger
 	}
 
-	internal func handlerAdded(context: ChannelHandlerContext) {
-		logger.trace("handler added to pipeline.")
+	internal func handlerAdded(context:ChannelHandlerContext) {
+		logger.trace("handler added to NIO pipeline.")
+	}
+	
+	internal func handlerRemoved(context:ChannelHandlerContext) {
+		logger.trace("handler removed from NIO pipeline.")
 	}
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(0, interval:10, resend:0, nc:1)
+		kcp[key]!.setNoDelay(1, interval:10, resend:1, nc:1)
 	}
 
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
@@ -80,16 +99,20 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-		let (key, data) = unwrapInboundIn(data)
-		if (kcp[key] == nil) {
-			makeIkcpCb(key: key, context: context)
-			kcpUpdates(for: key, context: context)
-		}
-		
-		do {
-			_ = try kcp[key]!.input(data, count: data.count)
-		} catch let error {
-			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
+		switch unwrapInboundIn(data) {
+			case .transitData(let key, let peerIndex, let data):
+				if (kcp[key] == nil) {
+					makeIkcpCb(key:key, context:context)
+					kcpUpdates(for:key, context:context)
+				}
+				do {
+					_ = try kcp[key]!.input(data, count: data.count)
+				} catch let error {
+					logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
+				}
+			case .handshakeCompleted(let pubkey, let peerIndex):
+				logger.notice("configuring for handshake", metadata:["peer_index":"\(peerIndex)", "peer_public_key":"\(pubkey)"])
+				kcp_peers[peerIndex] = ()
 		}
 	}
 	
