@@ -4,18 +4,6 @@ import kcp_swift
 import Logging
 import wireguard_crypto_core
 
-internal struct Rotating<Element> {
-	internal var previous:Element? = nil
-	internal var current:Element? = nil
-	internal var next:Element? = nil
-	
-	internal init(previous pIn:Element?, current cIn:Element?, next nIn:Element?) {
-		previous = pIn
-		current = cIn
-		next = nIn
-	}
-}
-
 internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = WireguardEvent
 	public typealias InboundOut = (PublicKey, [UInt8])
