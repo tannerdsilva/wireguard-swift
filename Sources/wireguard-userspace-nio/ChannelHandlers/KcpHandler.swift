@@ -37,7 +37,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .milliseconds(10)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(30)
 
 	// task for killing ikcp when inactive
 	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
@@ -60,7 +60,9 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
 		kcp[key]!.setNoDelay(1, interval:10, resend:1, nc:1)
-		kcp[key]!.rx_maxrto = 500
+//		kcp[key]!.rcv_wnd = 60000
+		kcp[key]!.rx_minrto = 60000
+		kcp[key]!.rx_maxrto = 60000
 	}
 
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
@@ -81,15 +83,19 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			// Sending data until snd_buf is full
 			if(pendingPackets[key] != nil) {
 				while true {
+					// Next packet to be sent
 					let nextPacketIterator = packetIterators[key]!.nextIterator()!
-					if(kcp[key]!.snd_buf.count >= kcp[key]!.snd_wnd) {
+					// Check if the next is the head. If so, then we are at the end.
+					guard let node = nextPacketIterator.current() else {
+						break
+					}
+					
+					let chunks = (node.1.count + Int(kcp[key]!.mss - 1)) / Int(kcp[key]!.mss)
+					// Check if there is room in the send buffer, if not, break
+					if((kcp[key]!.snd_buf.count + UInt32(chunks)) >= kcp[key]!.snd_wnd) {
 						break
 					}
 					do {
-						// Check if the next is the head. If so, then we are at the end.
-						guard let node = nextPacketIterator.current() else {
-							break
-						}
 						var data = node.1
 						// Successfully send a packet and then move iterator to next
 						_ = try kcp[key]!.send(&data, count:data.count, assosiatedData: nil)
@@ -200,41 +206,21 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 				switch evt {
 					case let .reKeyEvent(key):
 						// Resetting everything
-						ackCounter = 0
-						kcp[key] = nil
 						if(kcpKillTasks[key] != nil) {
 							kcpUpdateTasks[key]!.cancel()
 						}
+						ackCounter = 0
+						kcp[key] = nil
+						
 						
 						// Starting up processes again
 						makeIkcpCb(key:key, context:context)
 						
 						// Sending data until snd_buf is full
-						if(pendingPackets[key] != nil) {
-							// Start iterator fresh since it's a new kcp_cb
-							packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
-							while true {
-								let nextPacketIterator = packetIterators[key]!.nextIterator()!
-								// Check if the next is the head. If so, then we are at the end.
-								if(nextPacketIterator.current() != nil) {
-									break
-								}
-								if(kcp[key]!.snd_buf.count >= kcp[key]!.snd_wnd) {
-									break
-								}
-								do {
-									var data = nextPacketIterator.current()!.1
-									
-									// Successfully send a packet and then move iterator to next
-									_ = try kcp[key]!.send(&data, count:data.count, assosiatedData: nil)
-									self.kcp[key]!.updateSend()
-									packetIterators[key]! = nextPacketIterator
-									
-								} catch let error {
-									logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
-								}
-							}
+						if(pendingPackets[key] == nil) {
+							pendingPackets[key] = LinkedList<[UInt8]>()
 						}
+						packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
 						
 						kcpUpdates(for: key, context: context)
 				}
