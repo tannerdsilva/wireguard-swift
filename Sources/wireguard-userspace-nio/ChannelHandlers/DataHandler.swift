@@ -14,7 +14,7 @@ internal enum InterfaceInstruction {
 }
 
 internal enum WireguardEvent {
-	case handshakeCompleted(PublicKey, PeerIndex)
+	case handshakeCompleted(PublicKey, PeerIndex, HandshakeGeometry<PeerIndex>)
 	case transitData(PublicKey, PeerIndex, [UInt8])
 }
 
@@ -62,7 +62,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private let checkEvery:TimeAmount = .seconds(5)
 	private let rekeyTimeout:TimeAmount = .seconds(5)
 	
-	private var logger:Logger
+	private let logger:Logger
 
 	internal init(logLevel:Logger.Level, initialConfiguration:[Peer]? = nil) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -163,7 +163,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 				return
 			}
 			nextAllowedReinit[peerIndex] = now + rekeyTimeout
-			logger.debug("Rehandshake trigger for peer \(peerIndex)")
+			logger.debug("rehandshake trigger for peer \(peerIndex)")
 			c.accessContext { contextPointer in
 				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.handshakeInitiate(peerPublicKey, nil)), promise:nil)
 			}
@@ -174,7 +174,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private func stopRehandshake(for endpoint: PeerIndex) {
 		if let task = rehandshakeTasks.removeValue(forKey: endpoint) {
 			task.cancel()
-			logger.debug("Stopped rehandshake task for peer \(endpoint)")
+			logger.debug("stopped rehandshake task for peer \(endpoint)")
 		}
 		nextAllowedReinit.removeValue(forKey: endpoint)
 	}
@@ -184,7 +184,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 		context.eventLoop.scheduleTask(in:delay) { [weak self] in
 			guard let self = self else { return }
 			self.killSession(peerIndex: peerIndex)
-			self.logger.debug("Session for peerIndex \(peerIndex) killed after delay")
+			self.logger.debug("session for peerIndex \(peerIndex) killed after delay")
 		}
 	}
 
@@ -206,11 +206,11 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 				let decryptedPacket = try packet.decrypt(transportKey:transportKey)
 				return decryptedPacket
 			} catch {
-				logger.debug("Authentication tag failed verification")
+				logger.debug("authentication tag failed verification")
 				return nil
 			}
 		} else {
-			logger.debug("Packet with nonce not allowed")
+			logger.debug("packet with nonce not allowed")
 			return nil
 		}
 	}
@@ -230,6 +230,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	// Specifically kills and removes the `previous` session
+	@available(*, deprecated)
 	private func removePreviousSession(peerPublicKey: PublicKey) {
 		guard let peerSessions = sessions[peerPublicKey] else { return }
 		guard let previous = peerSessions.previous else { return }
@@ -239,6 +240,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	// Rotates sessions to the left (nil <- previous <- current <- next)
+	@available(*, deprecated)
 	private func rotateSessions(peerPublicKey: PublicKey, context: ChannelHandlerContext) {
 		removePreviousSession(peerPublicKey: peerPublicKey)
 		guard let peerSessions = sessions[peerPublicKey] else { return }
@@ -270,11 +272,11 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 		
 		// Remove everything related to the session
-		sessionsInv.removeValue(forKey: peerIndex)
-		nonceCounters.removeValue(forKey: peerIndex)
-		transmitKeys.removeValue(forKey: peerIndex)
-		lastOutbound.removeValue(forKey: peerIndex)
-		lastHandshake.removeValue(forKey: peerIndex)
+		sessionsInv.removeValue(forKey:peerIndex)
+		nonceCounters.removeValue(forKey:peerIndex)
+		transmitKeys.removeValue(forKey:peerIndex)
+		lastOutbound.removeValue(forKey:peerIndex)
+		lastHandshake.removeValue(forKey:peerIndex)
 		
 		stopKeepalive(for: peerIndex)
 		stopRehandshake(for: peerIndex)
@@ -301,8 +303,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 			var logger = logger
 			switch unwrapInboundIn(data) {
 				// Decrypt the payload or send initiation message if unable to decrypt
-				case .encryptedTransit(let publicKey, let peerIndex, let payload):
-					logger[metadataKey:"peer_public_key"] = "\(publicKey)"
+				case .encryptedTransit(let publicKey, let peerIndex, let geometry, let payload):
+					logger[metadataKey:"public-key_peer"] = "\(publicKey)"
 
 					// Authenticate packet, else drop packet
 					guard let decryptedPacket = decryptPacket(peerPublicKey: publicKey, packet: payload, transportKey: transmitKeys[peerIndex]!.Trecv) else {
@@ -314,10 +316,19 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						if (next == peerIndex) {
 							rotateSessions(peerPublicKey: publicKey, context: context)
 							lastHandshake[peerIndex] = .now()
-							context.fireChannelRead(wrapInboundOut(.handshakeCompleted(publicKey, peerIndex)))
+							context.fireChannelRead(wrapInboundOut(.handshakeCompleted(publicKey, peerIndex, sessionStatus.activeSessions[publicKey]!.next!)))
 							startKeepalive(for: peerIndex, context: context, peerPublicKey: publicKey)
 							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: publicKey)
 						}
+					}
+					
+					switch sessionStatus.activeSessions[publicKey] {
+						case .some(var statusVal):
+							guard statusVal.next == geometry.mp else {
+								break
+							}
+							statusVal.rotate()
+						case .none:
 					}
 					
 					// Make sure the packet is not a keep alive packet
@@ -331,38 +342,64 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 				
 				// Calculate transmit keys and set nonce counters to 0
 				case .keyExchange(let peerPublicKey, let peerIndex, let c, let isInitiator, let geometry):
-					context.fireChannelRead(wrapInboundOut(.handshakeCompleted(peerPublicKey, peerIndex)))
+					context.fireChannelRead(wrapInboundOut(.handshakeCompleted(peerPublicKey, peerIndex, geometry)))
 					
 					logger.debug("received key exchange info")
 					
 					try withUnsafePointer(to:c) { cPtr in
+						switch geometry {
+							case .selfInitiated(m:let m, mp:let mp):
+								switch sessionStatus.activeSessions[peerPublicKey] {
+									case .some(var session):
+										session.rotate(replacingNext:geometry)
+										sessionStatus.activeSessions[peerPublicKey] = session
+									case .none:
+										sessionStatus.activeSessions[peerPublicKey] = Rotating(current:geometry)
+								}
+ 							case .peerInitiated(m:let m, mp:let mp):
+ 								// switch that checks if there is already a session value in the dictionary
+ 								switch sessionStatus.activeSessions[peerPublicKey] {
+ 									case .some(var session):
+ 									
+ 										// switch that checks if there is a next session occupying the stored session
+ 										switch session.next {
+ 											case .some(var nextSession):
+ 												// kill any session based on the currently stored next value
+ 												killSession(peerIndex:nextSession.peerValue)
+ 												// replace the next position of the session rotation with the new geometry
+ 												_ = session.apply(next:geometry)
+ 												
+ 											case .none:
+												_ = session.apply(next:geometry)
+ 										}
+ 										
+										// assign the modified session value back into the dictionary
+										sessionStatus.activeSessions[peerPublicKey] = session
+
+ 									case .none:
+ 										// assign the new session value into the dictionary
+										sessionStatus.activeSessions[peerPublicKey] = Rotating(next:geometry)
+ 										break
+ 								}
+						}
+						
 						// Store session information
 						if (isInitiator) {
 							if (sessions[peerPublicKey] == nil) {
 								sessions[peerPublicKey] = (nil, peerIndex, nil)
-								
-								sessionStatus.activeSessions[peerPublicKey] = Rotating(current:geometry) // replaces sessions
 							} else {
 								rotateSessions(peerPublicKey:peerPublicKey, context:context)
 								sessions[peerPublicKey]!.current = peerIndex
-								
-								sessionStatus.activeSessions[peerPublicKey]!.rotate(replacingNext:geometry)	// replaces sessions
 							}
 						} else {
 							if (sessions[peerPublicKey] == nil) {
 								sessions[peerPublicKey] = (nil, nil, peerIndex)
-								
-								sessionStatus.activeSessions[peerPublicKey] = Rotating(next:geometry)
 							} else {
 								if (sessions[peerPublicKey]!.next == nil) {
 									sessions[peerPublicKey]!.next = peerIndex
-									
-									sessionStatus.activeSessions[peerPublicKey] = Rotating(next:geometry) // replaces sessions
 								} else { 
 									killSession(peerIndex:sessions[peerPublicKey]!.next!)
 									sessions[peerPublicKey]!.next = peerIndex
-									
-									let droppedPeerIndex = sessionStatus.activeSessions[peerPublicKey]!.apply(next:geometry)	// replaces sessions
 								}
 							}
 						}

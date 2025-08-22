@@ -322,6 +322,50 @@ extension WireguardSwiftTests {
 			})
 		}
 		
+		@Test func sendSingleSplitLargeMessage() async throws {
+			let payloadSize: Int = 100_000_000
+			
+			var payload = [UInt8](repeating: 0, count: payloadSize)
+			
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress:"127.0.0.1", port:36000, internalKeepAlive:.seconds(30))]
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				
+				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+
+				let splitMark = payloadSize.count / 2
+				let firstLoad = payloadSize[0..<splitMark]
+				let secondLoad = payloadSize[splitMark..<payloadSize.count]
+
+				foo.addTask {
+					try await myInterface.run()
+				}
+				foo.addTask {
+					try await peerInterface.run()
+				}
+				
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await myInterface.waitForChannelInit()
+				
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await peerInterface.waitForChannelInit()
+				
+				
+				
+				cliLogger.info("Channel initialized. Sending handshake initiation message...")
+				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload)
+				
+				cliLogger.info("Channel initialized. Reading data...")
+				for try await (key, incomingData) in peerInterface {
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(key == myPublicKey)
+					#expect(incomingData == payload)
+					foo.cancelAll()
+				}
+			})
+		}
+				
 		@Test func sendMultipleLargeMessages() async throws {
 			let payloadSize: Int = 2_000_000
 			

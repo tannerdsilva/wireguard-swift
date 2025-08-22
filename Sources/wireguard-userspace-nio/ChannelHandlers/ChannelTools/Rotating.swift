@@ -23,8 +23,9 @@ internal struct Rotating<Element> {
 		next = nIn
 	}
 	
-	/// apply next element
-	@discardableResult internal mutating func apply(next nextElement:Element?) -> Element? {
+	/// apply next element without applying a rotational transformation.
+	/// - returns: the previous (outgoing) instance that was replaced with the current value.
+	internal mutating func apply(next nextElement:Element?) -> Element? {
 		defer {
 			next = nextElement
 		}
@@ -34,7 +35,7 @@ internal struct Rotating<Element> {
 	
 	/// rotates the trio of stored instances. previous is assigned the current value. current is assigned the next value. next value is assigned nil.
 	/// - returns: the previous (outgoing) instance that was replaced with the current value.
-	@discardableResult internal mutating func rotate() -> Element? {
+	internal mutating func rotate() -> Element? {
 		defer {
 			previous = current
 			current = next
@@ -47,12 +48,12 @@ internal struct Rotating<Element> {
 	/// - parameters:
 	/// 	- replacingNext: the element to assign to the `next` position prior to the rotation transformation is applied.
 	/// - returns: the previous (outgoing) instance that was replaced with the current value.
-	@discardableResult internal mutating func rotate(replacingNext nextCurrent:Element) -> Element? {
+	internal mutating func rotate(replacingNext nextCurrent:Element) -> (previous:Element?, next:Element?) {
 		defer {
 			previous = current
 			current = nextCurrent
 			next = nil
 		}
-		return previous
+		return (previous, next)
 	}
 }

@@ -5,7 +5,7 @@ import RAW_dh25519
 import wireguard_crypto_core
 
 internal enum PacketTypeInbound {
-	case encryptedTransit(PublicKey, PeerIndex, Message.Data.Payload)
+	case encryptedTransit(PublicKey, PeerIndex, HandshakeGeometry<PeerIndex>, Message.Data.Payload)
 	case keyExchange(PublicKey, PeerIndex, Result.Bytes32, Bool, HandshakeGeometry<PeerIndex>)
 }
 

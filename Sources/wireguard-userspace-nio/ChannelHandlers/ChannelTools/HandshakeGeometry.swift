@@ -31,6 +31,26 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 			return mp
 		}
 	}
+	
+	/// access the value of self, also known as `m`
+	internal var selfValue:AugmentedType {
+		switch self {
+			case .selfInitiated(m:let m, mp:let mp):
+			return m
+			case .peerInitiated(m:let m, mp:let mp):
+			return m
+		}
+	}
+	
+	/// access the value of the remote peer, also known as `mp`
+	internal var peerValue:AugmentedType {
+		switch self {
+			case .selfInitiated(m:let m, mp:let mp):
+			return mp
+			case .peerInitiated(m:let m, mp:let mp):
+			return mp
+		}
+	}
 }
 
 extension HandshakeGeometry:CustomDebugStringConvertible where AugmentedType:CustomDebugStringConvertible {

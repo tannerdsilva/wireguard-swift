@@ -267,11 +267,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 				case .data(let payload):
 					guard let pk = peers[payload.header.receiverIndex] else {
-						logger.critical("no peer public key for \(payload.payload.receiverIndex)")
+						logger.critical("no peer public key for \(payload.header.receiverIndex)")
 						return
 					}
 					logger.trace("received data", metadata:["peer_index":"\(payload.header.receiverIndex)"])
-					context.fireChannelRead(wrapInboundOut(PacketTypeInbound.encryptedTransit(pk, payload.header.receiverIndex, payload)))
+					context.fireChannelRead(wrapInboundOut(PacketTypeInbound.encryptedTransit(pk, payload.header.receiverIndex, peerGeometry[pk]!, payload)))
 			}
 		} catch let error {
 			logger.error("error processing handshake packet: \(error)")
