@@ -13,6 +13,10 @@ internal enum InterfaceInstruction {
 	case encryptAndTransmit(PublicKey, [UInt8])
 }
 
+internal enum PipelineEvent {
+	case reKeyEvent(PublicKey)
+}
+
 internal enum WireguardEvent {
 	case handshakeCompleted(PublicKey, PeerIndex)
 	case transitData(PublicKey, PeerIndex, [UInt8])
@@ -37,9 +41,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Active wireguard sessions
 	private var sessions:[PublicKey:(previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?)] = [:]
 	private var sessionsInv:[PeerIndex:PublicKey] = [:]
-	
-	// Pending incoming and outgoing packets
-	private var pendingWriteFutures:[PublicKey:[(data:[UInt8], promise:EventLoopPromise<Void>?)]] = [:]
 	
 	// KeepAlive variables
 	private var keepaliveTasks:[PeerIndex:RepeatedTask] = [:]
@@ -383,19 +384,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: peerPublicKey)
 						}
 						
-						// Handle encrypting packets waiting on handshake completion
-						guard let packets = pendingWriteFutures[peerPublicKey] else {
-							return
-						}
-						for packet in packets {
-							if let peer = sessions[peerPublicKey]!.current {
-								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:peer, nonce:&nonceCounters[peer]!.Nsend, transportKey:transmitKeys[peer]!.Tsend, plainText:packet.data)
-								context.write(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(peerPublicKey, encryptedPacket)), promise:packet.promise)
-								lastOutbound[peerIndex] = .now()
-							}
-						}
-						context.flush()
-						pendingWriteFutures[peerPublicKey] = nil
+						// Fire Event to let kcp know that a new handshake occured
+						context.fireUserInboundEventTriggered(PipelineEvent.reKeyEvent(peerPublicKey))
 					}
 				default:
 					return
@@ -426,9 +416,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(publicKey, encryptedPacket)), promise:promise)
 						lastOutbound[peerIndex.current!] = .now()
 					} else {
-						// Add packet to be encrypted after handshake
-						pendingWriteFutures[publicKey, default: []].append((bytes, promise))
-
 						// Send handshake since there is no active session
 						context.writeAndFlush(wrapOutboundOut(PacketTypeOutbound.handshakeInitiate(publicKey, ep)), promise:nil)
 					}
