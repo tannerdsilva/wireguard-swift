@@ -26,13 +26,17 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias OutboundIn = InterfaceInstruction
 	internal typealias OutboundOut = PacketTypeOutbound
 	
+	private var sessionStatus = SessionStatus()
+	
+	private struct SessionStatus {
+		internal var activePeerList:[PublicKey:PeerInfo] = [:]
+		internal var activeSessions:[PublicKey:Rotating<HandshakeGeometry<PeerIndex>>] = [:]
+	}
+		
 	// Nsend increments by 1 for every outbound encrypted packet
 	// Nrecv used with sliding window to check if packet is valid
 	private var nonceCounters:[PeerIndex:(Nsend:Counter, Nrecv:SlidingWindow<Counter>)] = [:]
 	private var transmitKeys:[PeerIndex:(Tsend:Result.Bytes32, Trecv:Result.Bytes32)] = [:]
-	
-	// Wireguard peer configuration of peer `public key` to `Internet Endpoint`
-	private var configuration:[PublicKey:Endpoint?] = [:]
 	
 	// Active wireguard sessions
 	private var sessions:[PublicKey:(previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?)] = [:]
@@ -109,10 +113,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 			do {
 				let keepalive = try Message.Data.Payload.forge(receiverIndex:peerIndex, nonce:&nonceCounterState!.Nsend, transportKey:tansportKeysState!.Tsend, plainText:[])
 				nonceCounters[peerIndex] = nonceCounterState
-				// Emit as a transit packet to the specific endpoint
-				guard let ep = configuration[peerPublicKey]! else {
-					return
-				}
 				c.accessContext { contextPointer in
 					contextPointer.pointee.writeAndFlush(wrapOutboundOut(.encryptedTransit(peerPublicKey, keepalive)), promise: nil)
 				}
@@ -163,13 +163,9 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 				return
 			}
 			nextAllowedReinit[peerIndex] = now + rekeyTimeout
-			let ep = configuration[peerPublicKey]!
-			guard ep != nil else {
-				return
-			}
 			logger.debug("Rehandshake trigger for peer \(peerIndex)")
 			c.accessContext { contextPointer in
-				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.handshakeInitiate(peerPublicKey, ep!)), promise:nil)
+				contextPointer.pointee.writeAndFlush(wrapOutboundOut(.handshakeInitiate(peerPublicKey, nil)), promise:nil)
 			}
 		}
 		rehandshakeTasks[peerIndex] = task
@@ -220,17 +216,17 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	private func addPeer(peer:PeerInfo) {
-		configuration[peer.publicKey] = peer.endpoint
-		if(peer.internalKeepAlive != nil){
+		if (peer.internalKeepAlive != nil) {
 			keepaliveInterval[peer.publicKey] = peer.internalKeepAlive
 		} else {
 			keepaliveInterval[peer.publicKey] = .seconds(25)
 		}
+		sessionStatus.activePeerList[peer.publicKey] = peer
 	}
 	
 	private func removePeer(peer: PeerInfo) {
-		configuration[peer.publicKey] = nil
 		keepaliveInterval[peer.publicKey] = nil
+		sessionStatus.activePeerList.removeValue(forKey:peer.publicKey)
 	}
 	
 	// Specifically kills and removes the `previous` session
@@ -287,7 +283,6 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Kills all active sessions for a peer (previous, current, next)
 	private func killAllSessions(peerPublicKey: PublicKey) {
 		guard let peerSessions = sessions[peerPublicKey] else { return }
-		configuration[peerPublicKey] = nil
 		if peerSessions.0 != nil {
 			killSession(peerIndex: peerSessions.0!)
 		}
@@ -335,7 +330,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 					context.fireChannelRead(wrapInboundOut(.transitData(publicKey, peerIndex, decryptedPacket)))
 				
 				// Calculate transmit keys and set nonce counters to 0
-				case .keyExchange(let peerPublicKey, let peerIndex, let c, let isInitiator):
+				case .keyExchange(let peerPublicKey, let peerIndex, let c, let isInitiator, let geometry):
 					context.fireChannelRead(wrapInboundOut(.handshakeCompleted(peerPublicKey, peerIndex)))
 					
 					logger.debug("received key exchange info")
@@ -345,18 +340,29 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						if (isInitiator) {
 							if (sessions[peerPublicKey] == nil) {
 								sessions[peerPublicKey] = (nil, peerIndex, nil)
-							} else { rotateSessions(peerPublicKey:peerPublicKey, context:context)
+								
+								sessionStatus.activeSessions[peerPublicKey] = Rotating(current:geometry) // replaces sessions
+							} else {
+								rotateSessions(peerPublicKey:peerPublicKey, context:context)
 								sessions[peerPublicKey]!.current = peerIndex
+								
+								sessionStatus.activeSessions[peerPublicKey]!.rotate(replacingNext:geometry)	// replaces sessions
 							}
 						} else {
 							if (sessions[peerPublicKey] == nil) {
 								sessions[peerPublicKey] = (nil, nil, peerIndex)
+								
+								sessionStatus.activeSessions[peerPublicKey] = Rotating(next:geometry)
 							} else {
 								if (sessions[peerPublicKey]!.next == nil) {
 									sessions[peerPublicKey]!.next = peerIndex
+									
+									sessionStatus.activeSessions[peerPublicKey] = Rotating(next:geometry) // replaces sessions
 								} else { 
 									killSession(peerIndex:sessions[peerPublicKey]!.next!)
 									sessions[peerPublicKey]!.next = peerIndex
+									
+									let droppedPeerIndex = sessionStatus.activeSessions[peerPublicKey]!.apply(next:geometry)	// replaces sessions
 								}
 							}
 						}
@@ -415,8 +421,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 			case .removePeer(let peer):
 				removePeer(peer: peer)
 			case .encryptAndTransmit(let publicKey, let bytes):
-				guard let ep = configuration[publicKey] else {
-					logger.error("no endpoint found for public key \(publicKey)")
+				guard let ep = sessionStatus.activePeerList[publicKey]?.endpoint else {
+					logger.error("no endpoint found for peer", metadata:["public-key_peer":"\(publicKey)"])
 					return
 				}
 				// Encrypt packet and send it out to peer
