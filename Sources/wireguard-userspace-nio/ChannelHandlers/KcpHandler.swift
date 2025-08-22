@@ -99,7 +99,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 				}
 			case .handshakeCompleted(let pubkey, let peerIndex):
-				logger.notice("configuring for handshake", metadata:["peer_index":"\(peerIndex)", "peer_public_key":"\(pubkey)"])
+				logger.debug("configuring for handshake", metadata:["peer_index":"\(peerIndex)", "peer_public_key":"\(pubkey)"])
 				kcp_peers[peerIndex] = ()
 		}
 	}

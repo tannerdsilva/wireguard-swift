@@ -21,17 +21,14 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var peerEndpoints:[PeerIndex:Endpoint] = [:]
 	// m peers
 	internal var peerMPublicKey:[PeerIndex:PublicKey] = [:]
-	internal var peerMEndpoint:[PeerIndex:Endpoint] = [:]
 	
 	internal var myPeerIndicies:Set<PeerIndex> = []
 	internal var pubEndpoints:[PublicKey:Endpoint] = [:]
-	private var peerIndexGeometry:[PublicKey:HandshakeGeometry<PeerIndex>] = [:]
+	private var peerGeometry:[PublicKey:HandshakeGeometry<PeerIndex>] = [:]
 	
 	// stores a mapping of an initiatiors peer index and the corresponding authenticated payload that was generated
 	internal var initiatorPackets:[PeerIndex:Message.Initiation.Payload.Authenticated] = [:]
 
-	internal var peersAddressBook:[Endpoint:PublicKey] = [:]
-	
 	// Precomputed key for the cookie
 	internal let precomputedCookieKey:RAW_xchachapoly.Key
 	
@@ -41,29 +38,36 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// When will the cookies be ready? For the secretCookieR
 	internal let ovenTimer:TimeAmount = .seconds(120)
 	internal var secretCookieR:Result.Bytes8 = try! generateSecureRandomBytes(as:Result.Bytes8.self)
-	
-	// Rekey variables
-	private var rekeyAttemptTasks: [PeerIndex: RepeatedTask] = [:]
-	private var rekeyAttemptsStartTime: [PeerIndex: NIODeadline] = [:]
-	private var isRekeying: [PublicKey: Bool] = [:]
-	
+
 	// Rekey timers
 	private let rekeyTimeout: TimeAmount = .seconds(5)
 	private let rekeyAttemptTime: TimeAmount = .seconds(90)
-
-	// Timers for checking incoming initation packets
-	internal var initiationTimers:[PublicKey:TAI64N] = [:]
-	private var initiatorEphemeralPrivateKey:[PeerIndex:MemoryGuarded<PrivateKey>] = [:]
-	private var initiatorChainingData:[PeerIndex:(c:Result.Bytes32, h:Result.Bytes32)] = [:]
+	
+	private struct Rekey {
+		internal var rekeyAttemptTasks:[PeerIndex:RepeatedTask] = [:]
+		internal var rekeyAttemptsStartTime:[PeerIndex:NIODeadline] = [:]
+		internal var isRekeying:[PublicKey:Bool] = [:]
+	}
+	private var rekeyInfo:Rekey = Rekey()
+	
+	private var selfInitiatedInfo:SelfInitiated = SelfInitiated()
+	private struct SelfInitiated {
+		internal var initiationTimers:[PublicKey:TAI64N] = [:]
+		internal var initiatorEphemeralPrivateKey:[PeerIndex:MemoryGuarded<PrivateKey>] = [:]
+		internal var initiatorChainingData:[PeerIndex:(c:Result.Bytes32, h:Result.Bytes32)] = [:]
+	}
+	
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, logLevel:Logger.Level) {
+		privateKey = pkIn
+		let publicKey = PublicKey(privateKey: privateKey)
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
+		buildLogger[metadataKey:"public-key_self"] = "\(publicKey)"
 		log = buildLogger
-		privateKey = pkIn
 		// pre-computing HASH(LABEL-COOKIE || Spub)
 		var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 		try! hasher.update([UInt8]("cookie--".utf8))
-		try! hasher.update(PublicKey(privateKey: privateKey))
+		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
 	}
 	internal func handlerAdded(context:ChannelHandlerContext) {
@@ -88,15 +92,15 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// Rekey attempt when initiation doesn't get a valid response
 	private func startRekeyAttempts(for peerIndex:PeerIndex, context:ChannelHandlerContext, peerPublicKey:PublicKey, endpoint:Endpoint) {
 		var logger = log
-		guard rekeyAttemptTasks[peerIndex] == nil else { return }
-		rekeyAttemptsStartTime[peerIndex] = .now()
+		guard rekeyInfo.rekeyAttemptTasks[peerIndex] == nil else { return }
+		rekeyInfo.rekeyAttemptsStartTime[peerIndex] = .now()
 		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: rekeyTimeout, delay: rekeyTimeout) { [weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			let now = NIODeadline.now()
-			guard let start = rekeyAttemptsStartTime[peerIndex],
+			guard let start = rekeyInfo.rekeyAttemptsStartTime[peerIndex],
 				now - start < rekeyAttemptTime else {
-				rekeyAttemptTasks[peerIndex]?.cancel()
-				rekeyAttemptTasks[peerIndex] = nil
+				rekeyInfo.rekeyAttemptTasks[peerIndex]?.cancel()
+				rekeyInfo.rekeyAttemptTasks[peerIndex] = nil
 				logger.debug("rekey attempt time expired for peer \(peerIndex)")
 				return
 			}
@@ -106,7 +110,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 				contextPointer.pointee.writeAndFlush(wrapOutboundOut((endpoint, .initiation(initiatorPackets[peerIndex]!))), promise: nil)
 			}
 		}
-		rekeyAttemptTasks[peerIndex] = task
+		rekeyInfo.rekeyAttemptTasks[peerIndex] = task
 	}
 
 
@@ -118,7 +122,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 		// handles handshake packets, else passes them down
 		do {
 			let (endpoint, payload) = unwrapInboundIn(data)
-			logger[metadataKey:"peer_endpoint"] = "\(endpoint)"
+			logger[metadataKey:"endpoint_remote"] = "\(endpoint)"
 			switch payload {
 				// Validate initiation packet and send response upon successfull validation
 				case .initiation(let payload):
@@ -147,19 +151,19 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					}
 					let responderPeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)
 					var (c, h, initiatorStaticPublicKey, timestamp) = try payload.validate(responderStaticPrivateKey: privateKey)
-					logger.debug("successfully validated handshake initiation packet", metadata:["peer_index_initiator":"\(payload.payload.initiatorPeerIndex)", "peer_index_responder":"\(responderPeerIndex)", "peer_public_key":"\(initiatorStaticPublicKey)"])
+					logger.debug("successfully validated handshake initiation packet", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
-					peerIndexGeometry[initiatorStaticPublicKey] = geometry
+					peerGeometry[initiatorStaticPublicKey] = geometry
 					myPeerIndicies.update(with:geometry.m)
 					
 					// check handshake packet time
-					if let initiationTime = initiationTimers[initiatorStaticPublicKey] {
+					if let initiationTime = selfInitiatedInfo.initiationTimers[initiatorStaticPublicKey] {
 						if (timestamp <= initiationTime) {
 							return
 						}
 					}
-					initiationTimers[initiatorStaticPublicKey] = timestamp
+					selfInitiatedInfo.initiationTimers[initiatorStaticPublicKey] = timestamp
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
@@ -171,10 +175,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					pubEndpoints[initiatorStaticPublicKey] = endpoint
 										
 					initiatorPackets.removeValue(forKey:payload.payload.initiatorPeerIndex) 
-					
-					peerMPublicKey[payload.payload.initiatorPeerIndex] = initiatorStaticPublicKey
-					peerMEndpoint[payload.payload.initiatorPeerIndex] = endpoint
-					
+										
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
 					}
@@ -190,11 +191,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
-					guard let initiatorEphiPrivateKey = initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
+					guard let initiatorEphiPrivateKey = selfInitiatedInfo.initiatorEphemeralPrivateKey[payload.payload.initiatorIndex] else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					guard let (existingC, existingH) = initiatorChainingData[payload.payload.initiatorIndex] else {
+					guard let (existingC, existingH) = selfInitiatedInfo.initiatorChainingData[payload.payload.initiatorIndex] else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing chaining data")
 						return
 					}
@@ -211,13 +212,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					peerEndpoints[payload.payload.responderIndex] = endpoint
 					pubEndpoints[peerPublicKey] = endpoint
 					
-					
 					let geometry = HandshakeGeometry<PeerIndex>.selfInitiated(m:payload.payload.initiatorIndex, mp:payload.payload.responderIndex)
-					peerIndexGeometry[peerPublicKey] = geometry
+					peerGeometry[peerPublicKey] = geometry
 					myPeerIndicies.update(with:geometry.m)
 
 					peerMPublicKey[payload.payload.initiatorIndex] = peerPublicKey
-					peerMEndpoint[payload.payload.initiatorIndex] = endpoint
 
 					guard initiatorPackets.removeValue(forKey:payload.payload.initiatorIndex) != nil else {
 						logger.critical("inconsistent peer endpoint data found within handler. this is an internal error")
@@ -229,40 +228,40 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					context.fireChannelRead(wrapInboundOut(packet))
 					
 					// Stop rekey since handshake completed
-					rekeyAttemptTasks[payload.payload.initiatorIndex]?.cancel()
-					rekeyAttemptTasks[payload.payload.initiatorIndex] = nil
-					rekeyAttemptsStartTime[payload.payload.initiatorIndex] = nil
-					isRekeying[peerPublicKey] = nil
+					rekeyInfo.rekeyAttemptTasks[payload.payload.initiatorIndex]?.cancel()
+					rekeyInfo.rekeyAttemptTasks[payload.payload.initiatorIndex] = nil
+					rekeyInfo.rekeyAttemptsStartTime[payload.payload.initiatorIndex] = nil
+					rekeyInfo.isRekeying[peerPublicKey] = nil
 					
 				// Received cookie, recreate initiation handshake message with mac2
 				case .cookie(let cookiePayload):
 					logger.debug("received cookie packet", metadata:["endpoint_remote":"\(endpoint)"])
-					guard let peerPublicKey = peersAddressBook[endpoint] else {
-						logger.error("no peer public key for \(endpoint)")
-						return
-					}
-					guard let initiationPacket = initiatorPackets[cookiePayload.receiverIndex] else {
-						logger.error("no retained initiation packet")
-						return
-					}
-					withUnsafePointer(to:privateKey) { privateKey in
-						withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
-							var phantomCookie:Message.Initiation.Payload.Authenticated
-							do {
-								phantomCookie = try initiationPacket.payload.finalize(responderStaticPublicKey: expectedPeerPublicKey, cookie: cookiePayload)
-								initiatorPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
-							} catch {
-								logger.error("failed to validate cookie and create msgMac2")
-								return
-							}
-							logger.debug("cookie sent to shipping container... (packet handler)")
-							sendCookieInitiation(context:context, endpoint:endpoint, cookie:.initiation(phantomCookie))
-							rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex]?.cancel()
-							rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex] = nil
-							rekeyAttemptsStartTime[initiationPacket.payload.initiatorPeerIndex] = nil
-							startRekeyAttempts(for: initiationPacket.payload.initiatorPeerIndex, context: context, peerPublicKey: peerPublicKey, endpoint: endpoint)
-						}
-					}
+//					guard let peerPublicKey = peersAddressBook[endpoint] else {
+//						logger.error("no peer public key for \(endpoint)")
+//						return
+//					}
+//					guard let initiationPacket = initiatorPackets[cookiePayload.receiverIndex] else {
+//						logger.error("no retained initiation packet")
+//						return
+//					}
+//					withUnsafePointer(to:privateKey) { privateKey in
+//						withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
+//							var phantomCookie:Message.Initiation.Payload.Authenticated
+//							do {
+//								phantomCookie = try initiationPacket.payload.finalize(responderStaticPublicKey: expectedPeerPublicKey, cookie: cookiePayload)
+//								initiatorPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
+//							} catch {
+//								logger.error("failed to validate cookie and create msgMac2")
+//								return
+//							}
+//							logger.debug("cookie sent to shipping container... (packet handler)")
+//							sendCookieInitiation(context:context, endpoint:endpoint, cookie:.initiation(phantomCookie))
+//							rekeyInfo.rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex]?.cancel()
+//							rekeyInfo.rekeyAttemptTasks[initiationPacket.payload.initiatorPeerIndex] = nil
+//							rekeyInfo.rekeyAttemptsStartTime[initiationPacket.payload.initiatorPeerIndex] = nil
+//							startRekeyAttempts(for: initiationPacket.payload.initiatorPeerIndex, context: context, peerPublicKey: peerPublicKey, endpoint: endpoint)
+//						}
+//					}
 
 				case .data(let payload):
 					guard let pk = peers[payload.header.receiverIndex] else {
@@ -293,7 +292,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 				Im = initiator peer index
 				Im' = responder peer index (not yet known, only initiator peer index is available)
 				*/
-				guard isRekeying[peerPublicKey] == nil else {
+				guard rekeyInfo.isRekeying[peerPublicKey] == nil else {
 					return
 				}
 				do {
@@ -303,32 +302,29 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						peers[payload.initiatorPeerIndex] = peerPublicKey
 						peerMPublicKey[payload.initiatorPeerIndex] = peerPublicKey
 						if endpoint != nil {
-							peersAddressBook[endpoint!] = peerPublicKey
-							peerEndpoints[payload.initiatorPeerIndex] = endpoint!
-							peerMEndpoint[payload.initiatorPeerIndex] = endpoint!
 							pubEndpoints[peerPublicKey] = endpoint!
 						}
-						guard peerMEndpoint[payload.initiatorPeerIndex] != nil else {
+						guard pubEndpoints[expectedPeerPublicKey.pointee] != nil else {
 							logger.critical("no peer endpoint for \(payload.initiatorPeerIndex)")
 							return
 						}
 
 						// Store keys and c/h for response
-						initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
-						initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
+						selfInitiatedInfo.initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
+						selfInitiatedInfo.initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
 						
 						// Send initiation packet to packet handler
-						logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(peerEndpoints[payload.initiatorPeerIndex]!)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
+						logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(pubEndpoints[expectedPeerPublicKey.pointee]!)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
 						
 						let authPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
-						context.writeAndFlush(wrapOutboundOut((peerEndpoints[payload.initiatorPeerIndex]!, .initiation(authPayload))), promise:promise)
+						context.writeAndFlush(wrapOutboundOut((pubEndpoints[expectedPeerPublicKey.pointee]!, .initiation(authPayload))), promise:promise)
 
 						// Store packet for potential cookie
 						initiatorPackets[payload.initiatorPeerIndex] = authPayload
 						
 						// Start rekey timer
-						startRekeyAttempts(for:payload.initiatorPeerIndex, context:context, peerPublicKey:peerPublicKey, endpoint:peerEndpoints[payload.initiatorPeerIndex]!)
-						isRekeying[peerPublicKey] = true
+						startRekeyAttempts(for:payload.initiatorPeerIndex, context:context, peerPublicKey:peerPublicKey, endpoint:pubEndpoints[expectedPeerPublicKey.pointee]!)
+						rekeyInfo.isRekeying[peerPublicKey] = true
 					}
 				} catch let error {
 					context.fireErrorCaught(error)
@@ -339,10 +335,11 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					logger.critical("no known endpoint for peer", metadata:["public-key_peer":"\(publicKey)"])
 					return
 				}
-				guard let hsg = peerIndexGeometry[publicKey] else {
+				guard let hsg = peerGeometry[publicKey] else {
 					logger.critical("no handshake geometry available", metadata:["public-key_peer":"\(publicKey)"])
 					return
 				}
+				
 				context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)
 			default:
 				return
