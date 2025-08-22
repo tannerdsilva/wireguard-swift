@@ -32,17 +32,22 @@ extension Message {
 		public struct Header:Sendable {
 			/// message type (type and reserved)
 			public let typeHeader:TypeHeading
+			/// peer index of the recipient of the data payload
+			public let recipientIndex:PeerIndex
 			/// responder's peer index (I_r)
-			public let receiverIndex:PeerIndex
+			@available(*, deprecated, renamed:"recipientIndex")
+			public var receiverIndex:PeerIndex {
+				return recipientIndex
+			}
 			/// packet counter key
 			public let counter:Counter
 			/// packet tag of message
 			public let tag:Tag
 
 			/// initializes a new HandshakeResponseMessage
-			fileprivate init(typeHeader:TypeHeading = 0x4, receiverIndex:PeerIndex, counter:Counter, packetTag tag:Tag) {
+			fileprivate init(typeHeader:TypeHeading = 0x4, recipientIndex:PeerIndex, counter:Counter, packetTag tag:Tag) {
 				self.typeHeader = typeHeader
-				self.receiverIndex = receiverIndex
+				self.recipientIndex = recipientIndex
 				self.counter = counter
 				self.tag = tag
 			}
@@ -56,11 +61,11 @@ extension Message {
 				guard count >= MemoryLayout<Header>.size else { return nil }
 				(header, data) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
 					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
-					let receiverIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
+					let recipientIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
 					let counter = Counter(RAW_staticbuff_seeking:RAW_decode)
 					let dataCount = count - MemoryLayout<Header>.size
 					let packetTag = Tag(RAW_staticbuff:RAW_decode.pointee.advanced(by:dataCount))
-					return (Header(typeHeader:typeHeading, receiverIndex:receiverIndex, counter:counter, packetTag:packetTag), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount))
+					return (Header(typeHeader:typeHeading, recipientIndex:recipientIndex, counter:counter, packetTag:packetTag), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount))
 				}
 			}
 			
@@ -100,7 +105,7 @@ extension Message {
 				}
 				// step 4: nonce := nonce + 1
 				nonce += 1
-				return Self(header:Header(receiverIndex:receiverIndex, counter:msgCounter, packetTag:packetTag), data:packet)
+				return Self(header:Header(recipientIndex:receiverIndex, counter:msgCounter, packetTag:packetTag), data:packet)
 			}
 		}
 	}

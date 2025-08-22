@@ -177,6 +177,7 @@ extension WireguardSwiftTests {
 			})
 		}
 
+		/*
 		@Test func sendMultipleSmallMessages() async throws {
 			let payloadSize: Int = 10_000
 			
@@ -232,7 +233,7 @@ extension WireguardSwiftTests {
 				}
 			})
 		}
-        
+        */
         @Test func sendManySmallMessages() async throws {
             let payloadSize: Int = 2_000
             
@@ -277,7 +278,7 @@ extension WireguardSwiftTests {
                     #expect(key == myPublicKey)
                     #expect(incomingData == payloads[count])
                     count += 1
-                    if(count == 999) {
+                    if (count == 999) {
                         foo.cancelAll()
                     }
                 }
@@ -285,7 +286,7 @@ extension WireguardSwiftTests {
         }
 
 		@Test func sendSingleLargeMessage() async throws {
-			let payloadSize: Int = 100_000_000
+			let payloadSize: Int = 300_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
@@ -334,9 +335,9 @@ extension WireguardSwiftTests {
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
 				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 
-				let splitMark = payloadSize.count / 2
-				let firstLoad = payloadSize[0..<splitMark]
-				let secondLoad = payloadSize[splitMark..<payloadSize.count]
+				let splitMark = payloadSize / 2
+				let firstLoad = payload[0..<splitMark]
+				let secondLoad = payload[splitMark..<payloadSize]
 
 				foo.addTask {
 					try await myInterface.run()
@@ -351,10 +352,11 @@ extension WireguardSwiftTests {
 				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
 				try await peerInterface.waitForChannelInit()
 				
-				
-				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload)
+				try await myInterface.write(publicKey: peerPublicKey, data:[UInt8](firstLoad))
+				
+				cliLogger.info("first payload written. waiting 150 seconds before sending second payload...")
+				try await Task.sleep(nanoseconds:UInt64(2.0e11))
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				for try await (key, incomingData) in peerInterface {

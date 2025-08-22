@@ -324,11 +324,12 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 					
 					switch sessionStatus.activeSessions[publicKey] {
 						case .some(var statusVal):
-							guard statusVal.next == geometry.mp else {
+							guard statusVal.next?.m == geometry.mp else {
 								break
 							}
 							statusVal.rotate()
 						case .none:
+							return
 					}
 					
 					// Make sure the packet is not a keep alive packet
