@@ -40,11 +40,11 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		log.trace("handler added to NIO pipeline.")
+		log.debug("handler added to NIO pipeline.")
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
-		log.trace("handler removed from NIO pipeline.")
+		log.debug("handler removed from NIO pipeline.")
 	}
 
 	

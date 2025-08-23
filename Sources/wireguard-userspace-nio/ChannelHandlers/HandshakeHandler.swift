@@ -72,12 +72,12 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		var logger = log
-		logger.trace("handler added to NIO pipeline.")
+		logger.debug("handler added to NIO pipeline.")
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		var logger = log
-		logger.trace("handler removed from NIO pipeline.")
+		logger.debug("handler removed from NIO pipeline.")
 	}
 
 	// Sends the cookie after REKEY-TIMEOUT time

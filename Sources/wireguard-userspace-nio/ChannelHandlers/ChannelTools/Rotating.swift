@@ -2,21 +2,29 @@ internal struct Rotating<Element> {
 	internal private(set) var previous:Element?
 	internal private(set) var current:Element?
 	internal private(set) var next:Element?
+	
+	/// initialize a rotating value with no content (`nil` assigned to all 3 stored variables)
 	internal init() {
 		previous = nil
 		current = nil
 		next = nil
 	}
+	
+	/// initialize a rotating value with the specified `current` value
 	internal init(current cIn:Element) {
 		previous = nil
 		current = cIn
 		next = nil
 	}
+	
+	/// initialize a rotating value with the specified `next` value
 	internal init(next nIn:Element) {
 		previous = nil
 		current = nil
 		next = nIn
 	}
+	
+	/// initialize a rotating value with explicit assignments for all three stored variables in the rotational structure.
 	internal init(previous pIn:Element?, current cIn:Element?, next nIn:Element?) {
 		previous = pIn
 		current = cIn

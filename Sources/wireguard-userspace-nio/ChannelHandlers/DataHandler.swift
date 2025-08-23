@@ -31,6 +31,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private struct SessionStatus {
 		internal var activePeerList:[PublicKey:PeerInfo] = [:]
 		internal var activeSessions:[PublicKey:Rotating<HandshakeGeometry<PeerIndex>>] = [:]
+		internal var lastHandshake:[PublicKey:NIODeadline] = [:]
 	}
 		
 	// Nsend increments by 1 for every outbound encrypted packet
@@ -39,6 +40,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private var transmitKeys:[PeerIndex:(Tsend:Result.Bytes32, Trecv:Result.Bytes32)] = [:]
 	
 	// Active wireguard sessions
+	@available(*, deprecated, renamed:"sessionStatus.activeSessions")
 	private var sessions:[PublicKey:(previous:PeerIndex?, current:PeerIndex?, next:PeerIndex?)] = [:]
 	private var sessionsInv:[PeerIndex:PublicKey] = [:]
 	
@@ -50,9 +52,11 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private var lastOutbound:[PeerIndex:NIODeadline] = [:]
 
 	// KeepAlive interval. Default 25 seconds
+	@available(*, deprecated, message:"read the instance property for keepalive directly from the configuration sessionStatus.activePeerList")
 	private var keepaliveInterval:[PublicKey:TimeAmount] = [:]
 	
 	// Re handshake variables
+	@available(*, deprecated, renamed:"sessionStatus.lastHandshake")
 	private var lastHandshake:[PeerIndex:NIODeadline] = [:]
 	private var rehandshakeTasks:[PeerIndex:RepeatedTask] = [:]
 	private var nextAllowedReinit:[PeerIndex:NIODeadline] = [:]
@@ -311,23 +315,25 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 						return
 					}
 					
-					// Rotate sessions if the packet was from the `next` session
+					/* BEGIN THIS CAN BE DELETED */
 					if let next = sessions[publicKey]!.next {
 						if (next == peerIndex) {
 							rotateSessions(peerPublicKey: publicKey, context: context)
-							lastHandshake[peerIndex] = .now()
-							context.fireChannelRead(wrapInboundOut(.handshakeCompleted(publicKey, peerIndex, sessionStatus.activeSessions[publicKey]!.next!)))
-							startKeepalive(for: peerIndex, context: context, peerPublicKey: publicKey)
-							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: publicKey)
 						}
 					}
+					/* END THIS CAN BE DELETED */
 					
 					switch sessionStatus.activeSessions[publicKey] {
 						case .some(var statusVal):
 							guard statusVal.next?.m == geometry.mp else {
 								break
 							}
+							logger.trace("inbound data packet matched with peer index in rotational `next` position")
 							statusVal.rotate()
+							sessionStatus.lastHandshake[publicKey] = .now()
+							context.fireChannelRead(wrapInboundOut(.handshakeCompleted(publicKey, peerIndex, sessionStatus.activeSessions[publicKey]!.next!)))
+							startKeepalive(for: peerIndex, context: context, peerPublicKey: publicKey)
+							startRehandshakeTimer(for: peerIndex, context: context, peerPublicKey: publicKey)
 						case .none:
 							return
 					}
@@ -350,6 +356,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 					try withUnsafePointer(to:c) { cPtr in
 						switch geometry {
 							case .selfInitiated(m:let m, mp:let mp):
+								// switch that checks if there is already a session value in the dictionary
 								switch sessionStatus.activeSessions[peerPublicKey] {
 									case .some(var session):
 										session.rotate(replacingNext:geometry)
@@ -366,7 +373,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
  										switch session.next {
  											case .some(var nextSession):
  												// kill any session based on the currently stored next value
- 												killSession(peerIndex:nextSession.peerValue)
+ 												killSession(peerIndex:nextSession.mp)
  												// replace the next position of the session rotation with the new geometry
  												_ = session.apply(next:geometry)
  												
@@ -384,7 +391,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
  								}
 						}
 						
-						// Store session information
+						/* BEGIN THIS CAN BE DELETED */
 						if (isInitiator) {
 							if (sessions[peerPublicKey] == nil) {
 								sessions[peerPublicKey] = (nil, peerIndex, nil)
@@ -404,6 +411,7 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 								}
 							}
 						}
+						/* END THIS CAN BE DELETED */
 						
 						sessionsInv[peerIndex] = peerPublicKey
 						
@@ -432,7 +440,8 @@ internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {
 							return
 						}
 						for packet in packets {
-							if let peer = sessions[peerPublicKey]!.current {
+							if let hsGeometry = sessionStatus.activeSessions[peerPublicKey]!.current {
+								let (peerM, peer) = (hsGeometry.m, hsGeometry.mp)
 								let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:peer, nonce:&nonceCounters[peer]!.Nsend, transportKey:transmitKeys[peer]!.Tsend, plainText:packet.data)
 								context.write(wrapOutboundOut(PacketTypeOutbound.encryptedTransit(peerPublicKey, encryptedPacket)), promise:packet.promise)
 								lastOutbound[peerIndex] = .now()

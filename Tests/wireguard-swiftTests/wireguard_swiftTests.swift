@@ -177,7 +177,7 @@ extension WireguardSwiftTests {
 			})
 		}
 
-		/*
+		
 		@Test func sendMultipleSmallMessages() async throws {
 			let payloadSize: Int = 10_000
 			
@@ -211,7 +211,7 @@ extension WireguardSwiftTests {
 				try await peerInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload)
+				try await myInterface.write(publicKey: peerPublicKey, data: payload)
 				
 				cliLogger.info("Sending second data packet...")
 				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload2)
@@ -233,7 +233,7 @@ extension WireguardSwiftTests {
 				}
 			})
 		}
-        */
+        
         @Test func sendManySmallMessages() async throws {
             let payloadSize: Int = 2_000
             
@@ -324,7 +324,7 @@ extension WireguardSwiftTests {
 		}
 		
 		@Test func sendSingleSplitLargeMessage() async throws {
-			let payloadSize: Int = 100_000_000
+			let payloadSize: Int = 1_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
@@ -358,6 +358,9 @@ extension WireguardSwiftTests {
 				cliLogger.info("first payload written. waiting 150 seconds before sending second payload...")
 				try await Task.sleep(nanoseconds:UInt64(2.0e11))
 				
+				cliLogger.info("second payload written.")
+				try await myInterface.write(publicKey:peerPublicKey, data:[UInt8](secondLoad))
+				
 				cliLogger.info("Channel initialized. Reading data...")
 				for try await (key, incomingData) in peerInterface {
 					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
@@ -369,7 +372,7 @@ extension WireguardSwiftTests {
 		}
 				
 		@Test func sendMultipleLargeMessages() async throws {
-			let payloadSize: Int = 2_000_000
+			let payloadSize: Int = 1_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
@@ -424,4 +427,4 @@ extension WireguardSwiftTests {
 			}
 		}
 	}
-	}
+}

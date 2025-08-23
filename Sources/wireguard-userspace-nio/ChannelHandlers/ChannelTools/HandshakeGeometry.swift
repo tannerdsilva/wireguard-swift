@@ -33,20 +33,22 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	}
 	
 	/// access the value of self, also known as `m`
-	internal var selfValue:AugmentedType {
+	@available(*, deprecated, message:"use m or mp values instead")
+	internal var selfValueLegacy:AugmentedType {
 		switch self {
 			case .selfInitiated(m:let m, mp:let mp):
 			return m
 			case .peerInitiated(m:let m, mp:let mp):
-			return m
+			return mp
 		}
 	}
 	
 	/// access the value of the remote peer, also known as `mp`
-	internal var peerValue:AugmentedType {
+	@available(*, deprecated, message:"use m or mp values instead")
+	internal var peerValueLegacy:AugmentedType {
 		switch self {
 			case .selfInitiated(m:let m, mp:let mp):
-			return mp
+			return m
 			case .peerInitiated(m:let m, mp:let mp):
 			return mp
 		}
