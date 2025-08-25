@@ -315,7 +315,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 						selfInitiatedInfo.initiatorEphemeralPrivateKey[payload.initiatorPeerIndex] = ephiPrivateKey
 						selfInitiatedInfo.initiatorChainingData[payload.initiatorPeerIndex] = (c:c, h:h)
 						
-						// Send initiation packet to packet handler
+						// send initiation packet to packet handler
 						logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(pubEndpoints[expectedPeerPublicKey.pointee]!)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
 						
 						let authPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
