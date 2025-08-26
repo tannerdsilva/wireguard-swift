@@ -59,8 +59,8 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(1, interval:10, resend:1, nc:1)
-//		kcp[key]!.rcv_wnd = 60000
+		kcp[key]!.setNoDelay(0, interval:30)
+		kcp[key]!.rx_rto = 60000
 		kcp[key]!.rx_minrto = 60000
 		kcp[key]!.rx_maxrto = 60000
 	}
@@ -73,7 +73,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			
-			self.kcp[key]!.update(current:iclock()) { buffer, promise in
+			self.kcp[key]!.flush(current:iclock()) { buffer, promise in
 				let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
 				c.accessContext { contextPointer in
 					contextPointer.pointee.write(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)), promise:promise)
@@ -86,22 +86,14 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					// Next packet to be sent
 					let nextPacketIterator = packetIterators[key]!.nextIterator()!
 					// Check if the next is the head. If so, then we are at the end.
-					guard let node = nextPacketIterator.current() else {
-						break
-					}
+					guard let node = nextPacketIterator.current() else { break }
 					
-					let chunks = (node.1.count + Int(kcp[key]!.mss - 1)) / Int(kcp[key]!.mss)
-					// Check if there is room in the send buffer, if not, break
-					if((kcp[key]!.snd_buf.count + UInt32(chunks)) >= kcp[key]!.snd_wnd) {
-						break
-					}
 					do {
 						var data = node.1
 						// Successfully send a packet and then move iterator to next
-						_ = try kcp[key]!.send(&data, count:data.count, assosiatedData: nil)
+						let sent = try kcp[key]!.send(&data, count:data.count, assosiatedData: nil)
+						if(sent == 0) { break }
 						packetIterators[key]! = nextPacketIterator
-						
-						self.kcp[key]!.updateSend()
 					} catch let error {
 						logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 					}
@@ -164,7 +156,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		switch unwrapInboundIn(data) {
-			case .transitData(let key, let peerIndex, let data):
+			case .transitData(let key, _, let data):
 				if (kcp[key] == nil) {
 					makeIkcpCb(key:key, context:context)
 					kcpUpdates(for:key, context:context)
@@ -182,22 +174,18 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		var (key, data) = unwrapOutboundIn(data)
+		let (key, data) = unwrapOutboundIn(data)
 		if (kcp[key] == nil) {
 			makeIkcpCb(key:key, context:context)
 			kcpUpdates(for: key, context: context)
 		}
 
-		do {
-			// Create new linket list and iterators if it doesn't exist yet
-			if(pendingPackets[key] == nil) {
-				pendingPackets[key] = LinkedList<[UInt8]>()
-				packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
-			}
-			pendingPackets[key]!.addTail(data)
-		} catch let error {
-			logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
+		// Create new linket list and iterators if it doesn't exist yet
+		if(pendingPackets[key] == nil) {
+			pendingPackets[key] = LinkedList<[UInt8]>()
+			packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
 		}
+		pendingPackets[key]!.addTail(data)
 	}
 	
 	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
