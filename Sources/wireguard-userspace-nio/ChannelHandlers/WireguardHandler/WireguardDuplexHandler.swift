@@ -7,25 +7,34 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
-// tools
-extension WireguardHandler {
-	fileprivate final class LivePeerInfo {
+extension PeerInfo {
+	fileprivate final class Live<LiveIndexType> where LiveIndexType:Hashable, LiveIndexType:Equatable {
 		fileprivate let publicKey:PublicKey
 		fileprivate var endpoint:Endpoint?
 		fileprivate var persistentKeepalive:TimeAmount?
+		fileprivate private(set) var rotation:Rotating<LiveIndexType>
+		fileprivate var handshakeInitiationTime:TAI64N? = nil
 		fileprivate init(_ peerInfo:PeerInfo) {
 			publicKey = peerInfo.publicKey
 			endpoint = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
+			rotation = Rotating<LiveIndexType>()
+		}
+		fileprivate func applyPeerInitiated(_ element:LiveIndexType) -> LiveIndexType? {
+			return rotation.apply(next:element)
 		}
 	}
-	internal struct PeerDeltaEngine {
+}
+
+// tools
+extension WireguardHandler {
+	private struct PeerDeltaEngine {
 		internal typealias PeerAdditionHandler = (PublicKey) -> Void
 		internal typealias PeerRemovalHandler = (PublicKey) -> Void
 
-		internal let additionHandler:PeerAdditionHandler
-		internal let removalHandler:PeerRemovalHandler
-		private var peers:[PublicKey:LivePeerInfo] {
+		private let additionHandler:PeerAdditionHandler
+		private let removalHandler:PeerRemovalHandler
+		private var peers:[PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>] {
 			didSet {
 				let keyDelta = Delta<PublicKey>(start:oldValue.keys, end:peers.keys)
 				// handle the peers that were only at the start
@@ -43,98 +52,25 @@ extension WireguardHandler {
 			peers = [:]
 			additionHandler = ahIn
 			removalHandler = rhIn
-			var buildPeers = [PublicKey:LivePeerInfo]()
+			var buildPeers = [PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>]()
 			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = LivePeerInfo(peer)
+				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer)
 			}
 			peers = buildPeers
 		}
 		
 		internal mutating func setPeers(_ newPeers:[PeerInfo]) {
-			var buildPeers = [PublicKey:LivePeerInfo]()
+			var buildPeers = [PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>]()
 			for peer in newPeers {
-				buildPeers[peer.publicKey] = LivePeerInfo(peer)
+				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer)
 			}
 			peers = buildPeers
 		}
 		
-		fileprivate borrowing func peerLookup(publicKey:PublicKey) -> LivePeerInfo? {
+		fileprivate borrowing func peerLookup(publicKey:PublicKey) -> PeerInfo.Live<HandshakeGeometry<PeerIndex>>? {
 			return peers[publicKey]
 		}
 	}
-	internal struct SelfInitiatedIndexes {
-		private struct Keys {
-			private var initiatorEphemeralPrivateKey:[PeerIndex:MemoryGuarded<PrivateKey>] = [:]
-			private var initiatorChainingData:[PeerIndex:(c:Result.Bytes32, h:Result.Bytes32)] = [:]
-			private var initiatorPackets:[PeerIndex:Message.Initiation.Payload.Authenticated] = [:]
-			fileprivate mutating func install(index:PeerIndex, privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated) {
-				initiatorEphemeralPrivateKey[index] = privateKey
-				initiatorChainingData[index] = (c:c, h:h)
-				initiatorPackets[index] = authenticatedPayload
-			}
-			fileprivate mutating func remove(index:PeerIndex) -> (privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated)? {
-				guard	let chTuple = initiatorChainingData.removeValue(forKey:index),
-						let ephiKey = initiatorEphemeralPrivateKey.removeValue(forKey:index),
-						let authPacket = initiatorPackets.removeValue(forKey:index) else {
-					return nil
-				}
-				return (privateKey:ephiKey, c:chTuple.c, h:chTuple.h, authenticatedPayload:authPacket)
-			}
-		}
-		private var chainingKeys:Keys = Keys()
-
-		private struct RecurringRekey {
-			private var rekeyAttemptTasks:[PeerIndex:RepeatedTask] = [:]
-			fileprivate mutating func startRecurringRekey(interval:TimeAmount, for peerIndex:PeerIndex, context:ChannelHandlerContext, _ task:@escaping(RepeatedTask) throws -> Void) {
-				guard let oldRecurringTask = rekeyAttemptTasks.updateValue(context.eventLoop.scheduleRepeatedTask(initialDelay:interval, delay:interval, notifying:nil, task), forKey:peerIndex) else {
-					return
-				}
-				oldRecurringTask.cancel()
-			}
-			fileprivate mutating func endRecurringRekey(for peerIndex:PeerIndex) {
-				guard let hasExistingTask = rekeyAttemptTasks.removeValue(forKey:peerIndex) else {
-					return
-				}
-				hasExistingTask.cancel()
-			}
-		}
-		private var recurringRekeys = RecurringRekey()
-		
-		private var indexMPublicKey:[PeerIndex:PublicKey] = [:]
-		private var publicKeyIndexM:[PublicKey:PeerIndex] = [:]
-		internal mutating func journal(context:ChannelHandlerContext, index:PeerIndex, publicKey:PublicKey, chainingData:(privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated), _ task:@escaping(RepeatedTask) throws -> Void) {
-			defer {
-				chainingKeys.install(index:index, privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)
-				recurringRekeys.startRecurringRekey(interval:WireguardHandler.rekeyTimeout, for:index, context:context, task)
-			}
-			guard let oldInitiationIndex = publicKeyIndexM.updateValue(index, forKey:publicKey) else {
-				indexMPublicKey[index] = publicKey
-				return
-			}
-			defer {
-				_ = chainingKeys.remove(index:oldInitiationIndex)
-				recurringRekeys.endRecurringRekey(for:oldInitiationIndex)
-			}
-			guard indexMPublicKey.removeValue(forKey:oldInitiationIndex) != nil else {
-				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
-			}
-			indexMPublicKey[index] = publicKey
-		}
-		
-		internal mutating func extract(index:PeerIndex) -> (peerPublicKey:PublicKey, privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated)? {
-			guard let extractedPublicKey = indexMPublicKey.removeValue(forKey:index) else {
-				// index never existed
-				return nil
-			}
-			guard publicKeyIndexM.removeValue(forKey:extractedPublicKey) != nil else {
-				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
-			}
-			recurringRekeys.endRecurringRekey(for:index)
-			let extractedData = chainingKeys.remove(index:index)!
-			return (peerPublicKey:extractedPublicKey, privateKey:extractedData.privateKey, c:extractedData.c, h:extractedData.h, authenticatedPayload:extractedData.authenticatedPayload)
-		}
-	}
-	
 	// i think this needs some work
 	internal struct RekeyGate {
 		private var pubRekeyDeadline:[PublicKey:NIODeadline] = [:]
@@ -166,14 +102,20 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
 	
+	internal var secretCookieR:Result.Bytes8 = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+	
 	/// logger that will be used to produce output for the work completed by this handler
 	private let log:Logger
 	internal let privateKey:MemoryGuarded<PrivateKey>
+	
+	internal let isCongested:Atomic<Bool> = .init(false)
 	
 	// self-managed
 	private var peerDeltaEngine:PeerDeltaEngine!
 	private var rekeyGate = RekeyGate()
 	private var selfInitiatedIndexes = SelfInitiatedIndexes()
+	
+	internal let precomputedCookieKey:RAW_xchachapoly.Key
 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, logLevel:Logger.Level) {
 		privateKey = pkIn
@@ -182,6 +124,13 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		buildLogger.logLevel = logLevel
 		buildLogger[metadataKey:"public-key_self"] = "\(publicKey)"
 		log = buildLogger
+		
+		// pre-computing HASH(LABEL-COOKIE || Spub)
+		var hasher = try! WGHasher<RAW_xchachapoly.Key>()
+		try! hasher.update([UInt8]("cookie--".utf8))
+		try! hasher.update(publicKey)
+		precomputedCookieKey = try! hasher.finish()
+		
 		log.trace("instance initialized")
 	}
 }
@@ -207,16 +156,14 @@ extension WireguardHandler {
 					Im' = initiator peer index
 					*/
 					
-					/*
-					if underLoad == true {
+					if isCongested.load(ordering:.acquiring) == true {
 						do {
-							try payload.validateUnderLoadNoNIO(responderStaticPrivateKey:privateKey, R: secretCookieR, endpoint:endpoint)
+							try payload.validateUnderLoadNoNIO(responderStaticPrivateKey:privateKey, R:secretCookieR, endpoint:endpoint)
 						} catch Message.Initiation.Payload.Authenticated.Error.mac1Invalid {
-							// Ignore the packet, it is invalid
-							logger.debug("received invalid handshake initiation packet, ignoring")
+							logger.error("received invalid handshake initiation packet. ignoring.")
 							return
 						} catch let error {
-							// Create and send cookie
+							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
 							context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
 								logger.trace("cookie reply message sent to endpoint")
@@ -224,13 +171,45 @@ extension WireguardHandler {
 							return
 						}
 					}
-					*/
-					let responderPeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)
+					
+					let responderPeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
 					var (c, h, initiatorStaticPublicKey, timestamp) = try payload.validate(responderStaticPrivateKey: privateKey)
-					logger.debug("successfully validated handshake initiation packet", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
-
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:initiatorStaticPublicKey) else {
+						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
+						return
+					}
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
+					if let initiationTime = livePeerInfo.handshakeInitiationTime {
+						guard timestamp > initiationTime else {
+							return
+						}
+					}
+					livePeerInfo.endpoint = endpoint
+					livePeerInfo.handshakeInitiationTime = timestamp
+					livePeerInfo.applyPeerInitiated(geometry)
+					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
+					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
+					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
+					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
+					logger.debug("successfully validated handshake initiation packet", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
+					
+					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
+						logger.trace("handshake response sent successfully")
+					}
 					break;
+				case .response(let payload):
+					/*
+					peers role: responder
+					our role: initiator
+					=================
+					Im = initiator peer index
+					Im' = responder peer index
+					*/
+					guard let chainingData = selfInitiatedIndexes.extract(indexM:payload.payload.initiatorIndex) else {
+						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
+						return
+					}
+					let val = try payload.validate(c:chainingData.c, h:chainingData.h, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:chainingData.privateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
 				default:
 				break;
 			}
@@ -284,14 +263,20 @@ extension WireguardHandler {
 							promise?.fail(UnknownPeerEndpoint())
 							return
 						}
-
+						
+						// forge
 						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:privateKey, responderStaticPublicKey:expectedPeerPublicKey)
 						let authenticatedPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
-						selfInitiatedIndexes.journal(context:context, index:payload.initiatorPeerIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)) { [weak self, ap = authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = targetEndpoint] timer in
+						
+						// document
+						selfInitiatedIndexes.journal(context:context, indexM:payload.initiatorPeerIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)) { [weak self, ap = authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = targetEndpoint] timer in
+							// rekey attempt task.
 							guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
+								// recurring task should no longer be running
 								timer.cancel()
 								return
 							}
+							// write another initiation packet
 							c.accessContext { contextPointer in
 								contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
 							}
@@ -303,6 +288,7 @@ extension WireguardHandler {
 				case .encryptedTransit(let publicKey, let payload):
 					guard let ep = peerDeltaEngine.peerLookup(publicKey:publicKey)?.endpoint else {
 						logger.error("unable to find valid endpoint for peer", metadata:["public-key_remote":"\(publicKey)"])
+						promise?.fail(UnknownPeerEndpoint())
 						return
 					}
 					context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)

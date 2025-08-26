@@ -167,7 +167,7 @@ internal final class HandshakeHandler:ChannelDuplexHandler, @unchecked Sendable 
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					
-					// store mp values					
+					// store mp values
 					
 					peers[authResponse.payload.responderIndex] = initiatorStaticPublicKey
 					pubEndpoints[initiatorStaticPublicKey] = endpoint
