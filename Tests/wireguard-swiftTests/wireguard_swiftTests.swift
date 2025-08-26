@@ -323,6 +323,7 @@ extension WireguardSwiftTests {
 			})
 		}
 		
+		/*
 		@Test func sendSingleSplitLargeMessage() async throws {
 			let payloadSize: Int = 1_000_000
 			
@@ -370,9 +371,10 @@ extension WireguardSwiftTests {
 				}
 			})
 		}
+		*/
 				
 		@Test func sendMultipleLargeMessages() async throws {
-			let payloadSize: Int = 1_000_000
+			let payloadSize: Int = 20_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {

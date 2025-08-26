@@ -10,7 +10,7 @@ import bedrock
 extension PeerInfo {
 	fileprivate final class Live<LiveIndexType> where LiveIndexType:Hashable, LiveIndexType:Equatable {
 		fileprivate let publicKey:PublicKey
-		fileprivate var endpoint:Endpoint?
+		fileprivate private(set) var endpoint:Endpoint?
 		fileprivate var persistentKeepalive:TimeAmount?
 		fileprivate private(set) var rotation:Rotating<LiveIndexType>
 		fileprivate var handshakeInitiationTime:TAI64N? = nil
@@ -19,6 +19,13 @@ extension PeerInfo {
 			endpoint = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
 			rotation = Rotating<LiveIndexType>()
+		}
+		/// journal the endpoint that the peer has been observed at
+		fileprivate func updateEndpoint(_ inputEndpoint:Endpoint) {
+			guard endpoint != inputEndpoint else {
+				return
+			}
+			endpoint = inputEndpoint
 		}
 		fileprivate func applyPeerInitiated(_ element:LiveIndexType) -> LiveIndexType? {
 			return rotation.apply(next:element)
@@ -158,7 +165,6 @@ extension WireguardHandler {
 					Im = responder peer index
 					Im' = initiator peer index
 					*/
-					
 					if isCongested.load(ordering:.acquiring) == true {
 						do {
 							try payload.validateUnderLoadNoNIO(responderStaticPrivateKey:privateKey, R:secretCookieR, endpoint:endpoint)
@@ -188,9 +194,7 @@ extension WireguardHandler {
 							return
 						}
 					}
-					if livePeerInfo.endpoint != endpoint {
-						livePeerInfo.endpoint = endpoint
-					}
+					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
 					livePeerInfo.applyPeerInitiated(geometry)
 					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
@@ -198,7 +202,6 @@ extension WireguardHandler {
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
-					
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
 					}
@@ -221,9 +224,6 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 						return
 					}
-					if livePeerInfo.endpoint != endpoint {
-						livePeerInfo.endpoint = endpoint
-					}
 					livePeerInfo.applySelfInitiated(geometry)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
 					break;
@@ -239,7 +239,7 @@ extension WireguardHandler {
 						logger.error("received cookie response for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
 						return
 					}
-					guard let peerInfo = peerDeltaEngine[
+//					guard let peerInfo = peerDeltaEngine[
 					logger.debug("received cookie packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 					withUnsafePointer(to:chainingData.peerPublicKey) { expectedPeerPublicKey in
 						var phantomCookie:Message.Initiation.Payload.Authenticated

@@ -20,7 +20,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .milliseconds(10)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(100)
 
 	// task for killing ikcp when inactive
 	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]

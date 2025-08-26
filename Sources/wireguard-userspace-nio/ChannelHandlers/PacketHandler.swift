@@ -24,6 +24,8 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		/// thrown when a packet type is received on the listening socket but that packet type is not recognized.
 		/// - parameter type: the type of packet that was not recognized
 		case packetTypeUnrecognized(type:UInt8)
+		/// thrown when the packet mtu is too small to encompass the specified message
+		case mtuExceeded
 	}
 	
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
@@ -32,11 +34,13 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
 	private let log:Logger
-
-	internal init(logLevel:Logger.Level) {
+	private let datagramMTU:UInt16
+	
+	internal init(mtu:UInt16, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		log = buildLogger
+		datagramMTU = mtu
 	}
 
 	internal func handlerAdded(context:ChannelHandlerContext) {
@@ -46,7 +50,6 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		log.debug("handler removed from NIO pipeline.")
 	}
-
 	
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		var logger = log
@@ -100,7 +103,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		let (destinationEndpoint, mode) = unwrapOutboundIn(data)
 		var logger = log
 		logger[metadataKey:"remote_address"] = "\(destinationEndpoint)"
-		logger.trace("writing data...")
+		
 		let sendBuffer:ByteBuffer
 		switch mode {
 			case let .initiation(payload):
@@ -152,9 +155,15 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					case .success:
 						l.debug("data packet sent successfully", metadata:["packet_length":"\(s)"])
 					case .failure(let error):
+						fatalError()
 						l.error("failed to send data packet: \(error)")
 					}
 				}
+		}
+		guard sendBuffer.readableBytesView.count <= datagramMTU else {
+			promise?.fail(Error.mtuExceeded)
+			logger.error("mtu exceeded during write operation")
+			return
 		}
 		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:SocketAddress(destinationEndpoint), data:sendBuffer)), promise:promise)
 	}
