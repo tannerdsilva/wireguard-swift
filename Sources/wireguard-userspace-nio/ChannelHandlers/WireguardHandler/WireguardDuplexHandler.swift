@@ -188,7 +188,9 @@ extension WireguardHandler {
 							return
 						}
 					}
-					livePeerInfo.endpoint = endpoint
+					if livePeerInfo.endpoint != endpoint {
+						livePeerInfo.endpoint = endpoint
+					}
 					livePeerInfo.handshakeInitiationTime = timestamp
 					livePeerInfo.applyPeerInitiated(geometry)
 					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
@@ -219,6 +221,9 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 						return
 					}
+					if livePeerInfo.endpoint != endpoint {
+						livePeerInfo.endpoint = endpoint
+					}
 					livePeerInfo.applySelfInitiated(geometry)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
 					break;
@@ -234,6 +239,7 @@ extension WireguardHandler {
 						logger.error("received cookie response for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
 						return
 					}
+					guard let peerInfo = peerDeltaEngine[
 					logger.debug("received cookie packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 					withUnsafePointer(to:chainingData.peerPublicKey) { expectedPeerPublicKey in
 						var phantomCookie:Message.Initiation.Payload.Authenticated
@@ -257,7 +263,6 @@ extension WireguardHandler {
 								contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
 							}
 						}
-
 					}
 
 					break;
