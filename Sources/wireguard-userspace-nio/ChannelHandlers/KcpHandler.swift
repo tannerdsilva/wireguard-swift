@@ -42,7 +42,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(1, interval:10, resend:1, nc:1)
+		kcp[key]!.setNoDelay(1, interval:100, resend:1, nc:1)
 	}
 
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {

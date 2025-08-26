@@ -99,11 +99,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		// handles receiving Outbound Packets and sending out a UDP packet to the remote address
 		let (destinationEndpoint, mode) = unwrapOutboundIn(data)
 		var logger = log
 		logger[metadataKey:"remote_address"] = "\(destinationEndpoint)"
-		
+		logger.trace("writing data...", metadata:["promise":"\(promise)"])
 		let sendBuffer:ByteBuffer
 		switch mode {
 			case let .initiation(payload):
@@ -112,10 +111,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				sendBuffer = buffer
 				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
 					switch r {
-					case .success:
-						l.debug("handshake initiation packet sent successfully")
-					case .failure(let error):
-						l.error("failed to send initiation packet: \(error)")
+						case .success:
+							l.debug("handshake initiation packet sent successfully")
+						case .failure(let error):
+							l.error("failed to send initiation packet: \(error)")
 					}
 				}
 			case let .response(payload):
@@ -124,10 +123,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				sendBuffer = buffer
 				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
 					switch r {
-					case .success:
-						l.debug("handshake response packet sent successfully")
-					case .failure(let error):
-						l.error("failed to send response packet: \(error)")
+						case .success:
+							l.debug("handshake response packet sent successfully")
+						case .failure(let error):
+							l.error("failed to send response packet: \(error)")
 					}
 				}
 			case let .cookie(payload):
@@ -136,10 +135,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				sendBuffer = buffer
 				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
 					switch r {
-					case .success:
-						l.debug("cookie packet sent successfully")
-					case .failure(let error):
-						l.error("failed to send cookie packet: \(error)")
+						case .success:
+							l.debug("cookie packet sent successfully")
+						case .failure(let error):
+							l.error("failed to send cookie packet: \(error)")
 					}
 				}
 			case .data(let payload):
@@ -152,17 +151,17 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
                 sendBuffer = buffer
 				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint, s = size] r in
 					switch r {
-					case .success:
-						l.debug("data packet sent successfully", metadata:["packet_length":"\(s)"])
-					case .failure(let error):
-						fatalError()
-						l.error("failed to send data packet: \(error)")
+						case .success:
+							l.debug("data packet sent successfully", metadata:["packet_length":"\(s)"])
+						case .failure(let error):
+							fatalError()
+							l.error("failed to send data packet: \(error)")
 					}
 				}
 		}
 		guard sendBuffer.readableBytesView.count <= datagramMTU else {
 			promise?.fail(Error.mtuExceeded)
-			logger.error("mtu exceeded during write operation")
+			logger.critical("mtu exceeded during write operation")
 			return
 		}
 		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:SocketAddress(destinationEndpoint), data:sendBuffer)), promise:promise)
