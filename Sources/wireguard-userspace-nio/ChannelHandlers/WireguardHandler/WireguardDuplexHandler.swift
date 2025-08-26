@@ -23,6 +23,9 @@ extension PeerInfo {
 		fileprivate func applyPeerInitiated(_ element:LiveIndexType) -> LiveIndexType? {
 			return rotation.apply(next:element)
 		}
+		fileprivate func applySelfInitiated(_ element:LiveIndexType) -> LiveIndexType? {
+			return rotation.rotate(replacingNext:element).previous
+		}
 	}
 }
 
@@ -137,7 +140,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 // swift nio read handler function
 extension WireguardHandler {
-	internal borrowing func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -181,6 +184,7 @@ extension WireguardHandler {
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
 					if let initiationTime = livePeerInfo.handshakeInitiationTime {
 						guard timestamp > initiationTime else {
+							logger.notice("dropping packet due to timestamp value")
 							return
 						}
 					}
@@ -191,7 +195,7 @@ extension WireguardHandler {
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
-					logger.debug("successfully validated handshake initiation packet", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
+					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
@@ -210,8 +214,55 @@ extension WireguardHandler {
 						return
 					}
 					let val = try payload.validate(c:chainingData.c, h:chainingData.h, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:chainingData.privateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
+					let geometry = HandshakeGeometry<PeerIndex>.selfInitiated(m:payload.payload.initiatorIndex, mp:payload.payload.responderIndex)
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:chainingData.peerPublicKey) else {
+						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
+						return
+					}
+					livePeerInfo.applySelfInitiated(geometry)
+					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
+					break;
+				case .cookie(let cookiePayload):
+					/*
+					peers role: responder
+					our role: initiator
+					=================
+					Im = initiator peer index
+					Im' = responder peer index
+					*/
+					guard let chainingData = selfInitiatedIndexes.extract(indexM:cookiePayload.receiverIndex) else {
+						logger.error("received cookie response for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
+					logger.debug("received cookie packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
+					withUnsafePointer(to:chainingData.peerPublicKey) { expectedPeerPublicKey in
+						var phantomCookie:Message.Initiation.Payload.Authenticated
+						do {
+							phantomCookie = try chainingData.authenticatedPayload.payload.finalize(responderStaticPublicKey:expectedPeerPublicKey, cookie:cookiePayload)
+//							selfInitiatedInfo.initiatorPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
+						} catch {
+//							logger.error("failed to validate cookie and create msgMac2")
+//							return
+						}
+						let nioNow = NIODeadline.now()
+						selfInitiatedIndexes.journal(context:context, indexM:cookiePayload.receiverIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)) { [weak self, ap = chainingData.authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = endpoint] timer in
+							// rekey attempt task.
+							guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
+								// recurring task should no longer be running
+								timer.cancel()
+								return
+							}
+							// write another initiation packet
+							c.accessContext { contextPointer in
+								contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
+							}
+						}
+
+					}
+
+					break;
 				default:
-				break;
+					break;
 			}
 		} catch let error {
 			logger.error("error processing handshake packet: \(error)")
