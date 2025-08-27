@@ -236,13 +236,13 @@ extension WireguardSwiftTests {
         
         @Test func sendManySmallMessages() async throws {
             let payloadSize: Int = 2_000
-            
+			var payload = [UInt8](repeating: 0, count: payloadSize)
+			for i in 0..<payloadSize {
+				payload[i] = UInt8(i%256)
+			}
+			
             var payloads:[[UInt8]] = []
             for _ in 0..<1_000 {
-                var payload = [UInt8](repeating: 0, count: payloadSize)
-                for i in 0..<payloadSize {
-                    payload[i] = UInt8(i%256)
-                }
                 payloads.append(payload)
             }
             
