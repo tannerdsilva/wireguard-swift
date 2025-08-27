@@ -164,7 +164,7 @@ extension WireguardSwiftTests {
 				try await peerInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: messageBytes)
+				try await myInterface.write(publicKey: peerPublicKey, data: messageBytes)
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				for try await (key, incomingData) in peerInterface {
@@ -214,7 +214,7 @@ extension WireguardSwiftTests {
 				try await myInterface.write(publicKey: peerPublicKey, data: payload)
 				
 				cliLogger.info("Sending second data packet...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload2)
+				try await myInterface.write(publicKey: peerPublicKey, data: payload2)
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				var count = 0
@@ -238,7 +238,7 @@ extension WireguardSwiftTests {
             let payloadSize: Int = 2_000
             
             var payloads:[[UInt8]] = []
-            for _ in 0..<1000 {
+            for _ in 0..<1_000 {
                 var payload = [UInt8](repeating: 0, count: payloadSize)
                 for i in 0..<payloadSize {
                     payload[i] = UInt8(i%256)
@@ -286,7 +286,7 @@ extension WireguardSwiftTests {
         }
 
 		@Test func sendSingleLargeMessage() async throws {
-			let payloadSize: Int = 300_000_000
+			let payloadSize: Int = 1_000_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
@@ -311,7 +311,7 @@ extension WireguardSwiftTests {
 				try await peerInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload)
+				try await myInterface.write(publicKey: peerPublicKey, data: payload)
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				for try await (key, incomingData) in peerInterface {
@@ -406,10 +406,10 @@ extension WireguardSwiftTests {
 				try await peerInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload)
+				try await myInterface.write(publicKey: peerPublicKey, data: payload)
 				
 				cliLogger.info("Sending second data packet...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload2)
+				try await myInterface.write(publicKey: peerPublicKey, data: payload2)
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				var count = 0
