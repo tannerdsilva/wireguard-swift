@@ -25,7 +25,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .milliseconds(100)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(30)
 
 	// task for killing ikcp when inactive
 	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
@@ -47,10 +47,10 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(0, interval:30)
-		kcp[key]!.rx_rto = 60000
-		kcp[key]!.rx_minrto = 60000
-		kcp[key]!.rx_maxrto = 60000
+		kcp[key]!.setNoDelay(1, interval: 30, resend: 1, nc: 1)
+		kcp[key]!.rx_rto = 200
+		kcp[key]!.rx_minrto = 200
+		kcp[key]!.rx_maxrto = 200
 	}
 
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
@@ -61,7 +61,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			
-			self.kcp[key]!.flush(current:iclock()) { buffer, promise in
+			self.kcp[key]!.update(current:iclock()) { buffer, promise in
 				let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
 				c.accessContext { contextPointer in
 					contextPointer.pointee.write(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)), promise:promise)
