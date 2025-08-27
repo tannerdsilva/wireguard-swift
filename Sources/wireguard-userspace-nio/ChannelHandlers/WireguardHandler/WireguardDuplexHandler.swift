@@ -9,29 +9,64 @@ import bedrock
 
 extension PeerInfo {
 	fileprivate final class Live<LiveIndexType> where LiveIndexType:Hashable, LiveIndexType:Equatable {
+		fileprivate let log:Logger
 		fileprivate let publicKey:PublicKey
-		fileprivate private(set) var endpoint:Endpoint?
+		private var ep:Endpoint?
 		fileprivate var persistentKeepalive:TimeAmount?
-		fileprivate private(set) var rotation:Rotating<LiveIndexType>
+		private var rotation:Rotating<LiveIndexType>
 		fileprivate var handshakeInitiationTime:TAI64N? = nil
-		fileprivate init(_ peerInfo:PeerInfo) {
+		
+		private struct SendReceive<SendType, ReceiveType> {
+			internal var nSend:SendType
+			internal var nRecv:ReceiveType
+		}
+		
+		private var nVars:[LiveIndexType:SendReceive<Counter, SlidingWindow<Counter>>] = [:]
+		private var tVars:[LiveIndexType:SendReceive<Result.Bytes32, Result.Bytes32>] = [:]
+		
+		fileprivate init(_ peerInfo:PeerInfo, context:ChannelHandlerContext, logLevel:Logger.Level) {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop() 
+			#endif
+			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			buildLogger.logLevel = logLevel
+			buildLogger[metadataKey:"public-key_peer"] = "\(peerInfo.publicKey)"
+			log = buildLogger
+
 			publicKey = peerInfo.publicKey
-			endpoint = peerInfo.endpoint
+			ep = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
 			rotation = Rotating<LiveIndexType>()
+			_ = context
+		}
+		fileprivate borrowing func endpoint() -> Endpoint? {
+			return ep
 		}
 		/// journal the endpoint that the peer has been observed at
-		fileprivate func updateEndpoint(_ inputEndpoint:Endpoint) {
-			guard endpoint != inputEndpoint else {
+		fileprivate borrowing func updateEndpoint(_ inputEndpoint:Endpoint) {
+			guard ep != inputEndpoint else {
 				return
 			}
-			endpoint = inputEndpoint
+			ep = inputEndpoint
+			log.info("peer roamed to new endopint", metadata:["endpoint_remote":"\(inputEndpoint)"])
 		}
 		fileprivate func applyPeerInitiated(_ element:LiveIndexType) -> LiveIndexType? {
-			return rotation.apply(next:element)
+			log.info("rotation applied for peer initiated data")
+			guard let outgoingIndexValue = rotation.apply(next:element) else {
+				// no outgoing index value, return
+				return nil
+			}
+			nVars.removeValue(forKey:outgoingIndexValue)
 		}
 		fileprivate func applySelfInitiated(_ element:LiveIndexType) -> LiveIndexType? {
-			return rotation.rotate(replacingNext:element).previous
+			log.info("rotation applied for self initiated data")
+			let rotationResults = rotation.rotate(replacingNext:element)
+			if rotationResults.previous != nil {
+				nVars.removeValue(forKey:rotationResults.previous!)
+			}
+			if rotationResults.next != nil {
+				nVars.removeValue(forKey:rotationResults.next!)
+			}
 		}
 	}
 }
@@ -58,21 +93,21 @@ extension WireguardHandler {
 			}
 		}
 				
-		internal init(initiallyConfigured:[PeerInfo], additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) {
+		internal init(context:ChannelHandlerContext, initiallyConfigured:[PeerInfo], additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) {
 			peers = [:]
 			additionHandler = ahIn
 			removalHandler = rhIn
 			var buildPeers = [PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>]()
 			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer)
+				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer, context:context, logLevel:.debug)
 			}
 			peers = buildPeers
 		}
 		
-		internal mutating func setPeers(_ newPeers:[PeerInfo]) {
+		internal mutating func setPeers(_ newPeers:[PeerInfo], context:ChannelHandlerContext) {
 			var buildPeers = [PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>]()
 			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer)
+				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer, context:context, logLevel:.debug)
 			}
 			peers = buildPeers
 		}
@@ -112,22 +147,29 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
 	
+	private enum State {
+		case initialized([PeerInfo])
+		case channelEngaged
+		case terminated
+	}
+	
 	internal var secretCookieR:Result.Bytes8 = try! generateSecureRandomBytes(as:Result.Bytes8.self)
 	
 	/// logger that will be used to produce output for the work completed by this handler
 	private let log:Logger
-	internal let privateKey:MemoryGuarded<PrivateKey>
-	
+	private let privateKey:MemoryGuarded<PrivateKey>
+	internal let precomputedCookieKey:RAW_xchachapoly.Key
 	internal let isCongested:Atomic<Bool> = .init(false)
 	
-	// self-managed
+	// functionally self-managed
 	private var peerDeltaEngine:PeerDeltaEngine!
 	private var rekeyGate = RekeyGate()
 	private var selfInitiatedIndexes = SelfInitiatedIndexes()
 	
-	internal let precomputedCookieKey:RAW_xchachapoly.Key
+	// directly managed
+	private var operatingState:State
 
-	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, logLevel:Logger.Level) {
+	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:[PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -141,7 +183,44 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
 		
-		log.trace("instance initialized")
+		log.trace("instance initialized", metadata:["peer_count":"\(initialPeers.count)"])
+		operatingState = .initialized(initialPeers)
+	}
+}
+
+extension WireguardHandler {
+	internal func handlerAdded(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop() 
+		#endif
+		var logger = log
+		switch operatingState {
+			case .initialized(let initPeers):
+				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, additionHandler: { [weak self, l = log] _ in 
+					// when peer is added
+				}, removalHandler: { [weak self, l = log] _ in
+					// when peer is removed
+				})
+				operatingState = .channelEngaged
+			default:
+				fatalError("this should never happen \(#file):\(#line)")
+		}
+		logger.trace("handler added to NIO pipeline.")
+	}
+	internal func handlerRemoved(context: ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop() 
+		#endif
+		var logger = log
+		logger.trace("handler removed from NIO pipeline.")
+		operatingState = .terminated
+	}
+	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop() 
+		#endif
+		var logger = log
+		logger.trace("user inbound event triggered")
 	}
 }
 
@@ -266,6 +345,7 @@ extension WireguardHandler {
 					}
 
 					break;
+				
 				default:
 					break;
 			}
@@ -311,7 +391,7 @@ extension WireguardHandler {
 						if endpoint != nil {
 							// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
 							targetEndpoint = endpoint!
-						} else if let peerEndpoint = peerDeltaEngine.peerLookup(publicKey:expectedPeerPublicKey.pointee)?.endpoint {
+						} else if let peerEndpoint = peerDeltaEngine.peerLookup(publicKey:expectedPeerPublicKey.pointee)?.endpoint() {
 							// use the value that came from the peer list
 							targetEndpoint = peerEndpoint
 						} else {
@@ -342,7 +422,7 @@ extension WireguardHandler {
 					}
 					break;
 				case .encryptedTransit(let publicKey, let payload):
-					guard let ep = peerDeltaEngine.peerLookup(publicKey:publicKey)?.endpoint else {
+					guard let ep = peerDeltaEngine.peerLookup(publicKey:publicKey)?.endpoint() else {
 						logger.error("unable to find valid endpoint for peer", metadata:["public-key_remote":"\(publicKey)"])
 						promise?.fail(UnknownPeerEndpoint())
 						return

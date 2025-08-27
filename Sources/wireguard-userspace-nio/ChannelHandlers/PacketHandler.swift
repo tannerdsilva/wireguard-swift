@@ -154,7 +154,6 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 						case .success:
 							l.debug("data packet sent successfully", metadata:["packet_length":"\(s)"])
 						case .failure(let error):
-							fatalError()
 							l.error("failed to send data packet: \(error)")
 					}
 				}
