@@ -21,13 +21,17 @@ extension PeerInfo {
 		private struct SendReceive<SendType, ReceiveType> {
 			internal var valueSend:SendType
 			internal var valueRecv:ReceiveType
-			fileprivate init(valueSend:SendType, valueRecv:ReceiveType) {
-				self.valueSend = valueSend
-				self.valueRecv = valueRecv
+			fileprivate init(valueSend vs:SendType, valueRecv vr:ReceiveType) {
+				valueSend = vs
+				valueRecv = vr
 			}
-			internal init(_ inputTuple:(SendType, ReceiveType)) {
+			fileprivate init(peerInitiated inputTuple:(SendType, ReceiveType)) {
 				valueSend = inputTuple.0
 				valueRecv = inputTuple.1
+			}
+			fileprivate init(selfInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
+				valueSend = inputTuple.1
+				valueRecv = inputTuple.0
 			}
 		}
 		
@@ -64,19 +68,22 @@ extension PeerInfo {
 		}
 		
 		fileprivate func applyPeerInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> HandshakeGeometry<PeerIndex>? {
+			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
+			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
 			log.info("rotation applied for peer initiated data")
 			guard let outgoingIndexValue = rotation.apply(next:element) else {
 				// no outgoing index value, return
 				return nil
 			}
+			// clean up the outgoing index value
 			nVars.removeValue(forKey:outgoingIndexValue)
 			tVars.removeValue(forKey:outgoingIndexValue)
-			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
-			tVars.updateValue(SendReceive(try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
 			return outgoingIndexValue
 		}
 		
-		fileprivate func applySelfInitiated(_ element:HandshakeGeometry<PeerIndex>) -> (previous:HandshakeGeometry<PeerIndex>?, next:HandshakeGeometry<PeerIndex>?) {
+		fileprivate func applySelfInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> (previous:HandshakeGeometry<PeerIndex>?, next:HandshakeGeometry<PeerIndex>?) {
+			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
+			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
 			log.info("rotation applied for self initiated data")
 			let rotationResults = rotation.rotate(replacingNext:element)
 			if rotationResults.previous != nil {
@@ -317,7 +324,7 @@ extension WireguardHandler {
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
-					guard let chainingData = selfInitiatedIndexes.extract(indexM:payload.payload.initiatorIndex) else {
+					guard var chainingData = selfInitiatedIndexes.extract(indexM:payload.payload.initiatorIndex) else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
@@ -327,7 +334,7 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 						return
 					}
-					try livePeerInfo.applySelfInitiated(geometry)
+					try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
 					break;
 				case .cookie(let cookiePayload):
