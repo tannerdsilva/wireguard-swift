@@ -8,22 +8,31 @@ import Synchronization
 import bedrock
 
 extension PeerInfo {
-	fileprivate final class Live<LiveIndexType> where LiveIndexType:Hashable, LiveIndexType:Equatable {
-		fileprivate let log:Logger
+	fileprivate final class Live {
+		
+		private let log:Logger
 		fileprivate let publicKey:PublicKey
 		private var ep:Endpoint?
 		fileprivate var persistentKeepalive:TimeAmount?
 		fileprivate var handshakeInitiationTime:TAI64N? = nil
 
-		private var rotation:Rotating<LiveIndexType>
+		private var rotation:Rotating<HandshakeGeometry<PeerIndex>>
 
 		private struct SendReceive<SendType, ReceiveType> {
 			internal var valueSend:SendType
 			internal var valueRecv:ReceiveType
+			fileprivate init(valueSend:SendType, valueRecv:ReceiveType) {
+				self.valueSend = valueSend
+				self.valueRecv = valueRecv
+			}
+			internal init(_ inputTuple:(SendType, ReceiveType)) {
+				valueSend = inputTuple.0
+				valueRecv = inputTuple.1
+			}
 		}
 		
-		private var nVars:[LiveIndexType:SendReceive<Counter, SlidingWindow<Counter>>] = [:]
-		private var tVars:[LiveIndexType:SendReceive<Result.Bytes32, Result.Bytes32>] = [:]
+		private var nVars:[HandshakeGeometry<PeerIndex>:SendReceive<Counter, SlidingWindow<Counter>>] = [:]
+		private var tVars:[HandshakeGeometry<PeerIndex>:SendReceive<Result.Bytes32, Result.Bytes32>] = [:]
 		
 		fileprivate init(_ peerInfo:PeerInfo, context:ChannelHandlerContext, logLevel:Logger.Level) {
 			#if DEBUG
@@ -37,13 +46,14 @@ extension PeerInfo {
 			publicKey = peerInfo.publicKey
 			ep = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
-			rotation = Rotating<LiveIndexType>()
+			rotation = Rotating<HandshakeGeometry<PeerIndex>>()
 			_ = context
 		}
 		/// retrieve the previously known endpoint for the peer
 		fileprivate borrowing func endpoint() -> Endpoint? {
 			return ep
 		}
+	
 		/// journal the endpoint that the peer has been observed at
 		fileprivate borrowing func updateEndpoint(_ inputEndpoint:Endpoint) {
 			guard ep != inputEndpoint else {
@@ -53,7 +63,7 @@ extension PeerInfo {
 			log.info("peer roamed to new endopint", metadata:["endpoint_remote":"\(inputEndpoint)"])
 		}
 		
-		fileprivate func applyPeerInitiated(_ element:LiveIndexType) -> LiveIndexType? {
+		fileprivate func applyPeerInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> HandshakeGeometry<PeerIndex>? {
 			log.info("rotation applied for peer initiated data")
 			guard let outgoingIndexValue = rotation.apply(next:element) else {
 				// no outgoing index value, return
@@ -61,10 +71,12 @@ extension PeerInfo {
 			}
 			nVars.removeValue(forKey:outgoingIndexValue)
 			tVars.removeValue(forKey:outgoingIndexValue)
+			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
+			tVars.updateValue(SendReceive(try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
 			return outgoingIndexValue
 		}
 		
-		fileprivate func applySelfInitiated(_ element:LiveIndexType) -> (previous:LiveIndexType?, next:LiveIndexType?) {
+		fileprivate func applySelfInitiated(_ element:HandshakeGeometry<PeerIndex>) -> (previous:HandshakeGeometry<PeerIndex>?, next:HandshakeGeometry<PeerIndex>?) {
 			log.info("rotation applied for self initiated data")
 			let rotationResults = rotation.rotate(replacingNext:element)
 			if rotationResults.previous != nil {
@@ -86,7 +98,7 @@ extension WireguardHandler {
 
 		private let additionHandler:PeerAdditionHandler
 		private let removalHandler:PeerRemovalHandler
-		private var peers:[PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>] {
+		private var peers:[PublicKey:PeerInfo.Live] {
 			didSet {
 				let keyDelta = Delta<PublicKey>(start:oldValue.keys, end:peers.keys)
 				// handle the peers that were only at the start
@@ -104,22 +116,22 @@ extension WireguardHandler {
 			peers = [:]
 			additionHandler = ahIn
 			removalHandler = rhIn
-			var buildPeers = [PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>]()
+			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer, context:context, logLevel:.debug)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, context:context, logLevel:.debug)
 			}
 			peers = buildPeers
 		}
 		
 		internal mutating func setPeers(_ newPeers:[PeerInfo], context:ChannelHandlerContext) {
-			var buildPeers = [PublicKey:PeerInfo.Live<HandshakeGeometry<PeerIndex>>]()
+			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live<HandshakeGeometry<PeerIndex>>(peer, context:context, logLevel:.debug)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, context:context, logLevel:.debug)
 			}
 			peers = buildPeers
 		}
 		
-		fileprivate borrowing func peerLookup(publicKey:PublicKey) -> PeerInfo.Live<HandshakeGeometry<PeerIndex>>? {
+		fileprivate borrowing func peerLookup(publicKey:PublicKey) -> PeerInfo.Live? {
 			return peers[publicKey]
 		}
 	}
@@ -282,7 +294,7 @@ extension WireguardHandler {
 					}
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
-					livePeerInfo.applyPeerInitiated(geometry)
+					try livePeerInfo.applyPeerInitiated(geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
 					let (lhs, rhs) = try c.RAW_access_staticbuff { cPtr in
 						return try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
@@ -315,7 +327,7 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 						return
 					}
-					livePeerInfo.applySelfInitiated(geometry)
+					try livePeerInfo.applySelfInitiated(geometry)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
 					break;
 				case .cookie(let cookiePayload):
