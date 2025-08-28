@@ -47,10 +47,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(1, interval: 30, resend: 1, nc: 1)
-		kcp[key]!.rx_rto = 200
-		kcp[key]!.rx_minrto = 200
-		kcp[key]!.rx_maxrto = 200
+		kcp[key]!.setNoDelay(1, interval: 30, resend: 1, nc: 0)
 	}
 
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
@@ -101,14 +98,9 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 							packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
 						}
 					}
-					
-					
 					_ = pendingPackets[key]!.popFront()
 					ackCounter += chunks
-					print((frontNode.value!.count / Int(kcp[key]!.mss)) )
-					print(ackCounter)
-					print(kcp[key]!.snd_una)
-					print("Pending Packets Removed")
+					logger.info("\(kcp[key]!.snd_una)")
 				} else {
 					break
 				}
@@ -118,7 +110,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			rcvLoop: while true {
 				do {
 					let receivedData = try self.kcp[key]!.receive()
-					print("Received Data")
+					logger.info("Received KCP Data")
 					c.accessContext { contextPointer in
 						contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
 					}
