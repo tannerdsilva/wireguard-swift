@@ -7,96 +7,6 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
-extension PeerInfo {
-	fileprivate final class Live {
-		
-		private let log:Logger
-		fileprivate let publicKey:PublicKey
-		private var ep:Endpoint?
-		fileprivate var persistentKeepalive:TimeAmount?
-		fileprivate var handshakeInitiationTime:TAI64N? = nil
-
-		private var rotation:Rotating<HandshakeGeometry<PeerIndex>>
-
-		private struct SendReceive<SendType, ReceiveType> {
-			internal var valueSend:SendType
-			internal var valueRecv:ReceiveType
-			fileprivate init(valueSend vs:SendType, valueRecv vr:ReceiveType) {
-				valueSend = vs
-				valueRecv = vr
-			}
-			fileprivate init(peerInitiated inputTuple:(SendType, ReceiveType)) {
-				valueSend = inputTuple.0
-				valueRecv = inputTuple.1
-			}
-			fileprivate init(selfInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
-				valueSend = inputTuple.1
-				valueRecv = inputTuple.0
-			}
-		}
-		
-		private var nVars:[HandshakeGeometry<PeerIndex>:SendReceive<Counter, SlidingWindow<Counter>>] = [:]
-		private var tVars:[HandshakeGeometry<PeerIndex>:SendReceive<Result.Bytes32, Result.Bytes32>] = [:]
-		
-		fileprivate init(_ peerInfo:PeerInfo, context:ChannelHandlerContext, logLevel:Logger.Level) {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop() 
-			#endif
-			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = logLevel
-			buildLogger[metadataKey:"public-key_peer"] = "\(peerInfo.publicKey)"
-			log = buildLogger
-
-			publicKey = peerInfo.publicKey
-			ep = peerInfo.endpoint
-			persistentKeepalive = peerInfo.internalKeepAlive
-			rotation = Rotating<HandshakeGeometry<PeerIndex>>()
-			_ = context
-		}
-		/// retrieve the previously known endpoint for the peer
-		fileprivate borrowing func endpoint() -> Endpoint? {
-			return ep
-		}
-	
-		/// journal the endpoint that the peer has been observed at
-		fileprivate borrowing func updateEndpoint(_ inputEndpoint:Endpoint) {
-			guard ep != inputEndpoint else {
-				return
-			}
-			ep = inputEndpoint
-			log.info("peer roamed to new endopint", metadata:["endpoint_remote":"\(inputEndpoint)"])
-		}
-		
-		fileprivate func applyPeerInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> HandshakeGeometry<PeerIndex>? {
-			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
-			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
-			log.info("rotation applied for peer initiated data")
-			guard let outgoingIndexValue = rotation.apply(next:element) else {
-				// no outgoing index value, return
-				return nil
-			}
-			// clean up the outgoing index value
-			nVars.removeValue(forKey:outgoingIndexValue)
-			tVars.removeValue(forKey:outgoingIndexValue)
-			return outgoingIndexValue
-		}
-		
-		fileprivate func applySelfInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> (previous:HandshakeGeometry<PeerIndex>?, next:HandshakeGeometry<PeerIndex>?) {
-			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
-			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
-			log.info("rotation applied for self initiated data")
-			let rotationResults = rotation.rotate(replacingNext:element)
-			if rotationResults.previous != nil {
-				nVars.removeValue(forKey:rotationResults.previous!)
-			}
-			if rotationResults.next != nil {
-				nVars.removeValue(forKey:rotationResults.next!)
-			}
-			return rotationResults
-		}
-	}
-}
-
 // tools
 extension WireguardHandler {
 	private struct PeerDeltaEngine {
@@ -118,7 +28,7 @@ extension WireguardHandler {
 				}
 			}
 		}
-				
+		
 		internal init(context:ChannelHandlerContext, initiallyConfigured:[PeerInfo], additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) {
 			peers = [:]
 			additionHandler = ahIn
@@ -195,7 +105,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// directly managed
 	private var operatingState:State
 
-	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:[PeerInfo], logLevel:Logger.Level) {
+	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -292,20 +202,19 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
 						return
 					}
+					
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
 					if let initiationTime = livePeerInfo.handshakeInitiationTime {
 						guard timestamp > initiationTime else {
-							logger.notice("dropping packet due to timestamp value")
+							logger.notice("dropping packet due to old timestamp value", metadata:["timestamp_value":"\(timestamp)"])
 							return
 						}
 					}
+					
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
 					try livePeerInfo.applyPeerInitiated(geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
-					let (lhs, rhs) = try c.RAW_access_staticbuff { cPtr in
-						return try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
-					}
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
@@ -313,8 +222,6 @@ extension WireguardHandler {
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
 					}
-					
-					
 					break;
 				case .response(let payload):
 					/*
@@ -334,6 +241,7 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 						return
 					}
+					livePeerInfo.updateEndpoint(endpoint)
 					try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
 					break;
@@ -377,7 +285,8 @@ extension WireguardHandler {
 
 					break;
 				
-				default:
+				case .data(let payload):
+					withUnsafePointer(to:chainingData.peerPublicKey) { 
 					break;
 			}
 		} catch let error {

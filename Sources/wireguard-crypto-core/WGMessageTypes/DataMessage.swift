@@ -19,6 +19,7 @@ extension Message.Data.Payload {
 		return header
 	}
 }
+
 // legacy support for packetTag stored variable
 extension Message.Data.Header {
 	@available(*, deprecated, renamed: "tag")
