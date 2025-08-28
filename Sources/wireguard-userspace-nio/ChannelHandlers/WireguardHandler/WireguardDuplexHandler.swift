@@ -74,10 +74,15 @@ extension WireguardHandler {
 	}
 }
 
+internal enum WireguardEvent {
+	case handshakeCompleted(PublicKey, PeerIndex, HandshakeGeometry<PeerIndex>)
+	case transitData(PublicKey, PeerIndex, [UInt8])
+}
+
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = (Endpoint, Message)
-	internal typealias InboundOut = PacketTypeInbound
-	internal typealias OutboundIn = PacketTypeOutbound
+	internal typealias InboundOut = WireguardEvent
+	internal typealias OutboundIn = (PublicKey, ByteBuffer)
 	internal typealias OutboundOut = (Endpoint, Message)
 	
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
@@ -95,12 +100,16 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	private let log:Logger
 	private let privateKey:MemoryGuarded<PrivateKey>
 	internal let precomputedCookieKey:RAW_xchachapoly.Key
+	
 	internal let isCongested:Atomic<Bool> = .init(false)
 	
-	// functionally self-managed
+	// functionally managed
 	private var peerDeltaEngine:PeerDeltaEngine!
+	
 	private var rekeyGate = RekeyGate()
 	private var selfInitiatedIndexes = SelfInitiatedIndexes()
+	
+	private var peerMMap = PeerIndexMMapper()
 	
 	// directly managed
 	private var operatingState:State
@@ -222,6 +231,7 @@ extension WireguardHandler {
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
 					}
+					peerMMap.add(geometry:geometry, publicKey:initiatorStaticPublicKey)
 					break;
 				case .response(let payload):
 					/*
@@ -242,8 +252,9 @@ extension WireguardHandler {
 						return
 					}
 					livePeerInfo.updateEndpoint(endpoint)
-					try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
+					let (previousOutgoing, nextOutgoing) = try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
+					peerMMap.add(geometry:geometry, publicKey:chainingData.peerPublicKey)
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -286,7 +297,7 @@ extension WireguardHandler {
 					break;
 				
 				case .data(let payload):
-					withUnsafePointer(to:chainingData.peerPublicKey) { 
+					// verify that a current peer index exists for the public key already. if 
 					break;
 			}
 		} catch let error {
@@ -298,6 +309,48 @@ extension WireguardHandler {
 
 // swift nio write handler function
 extension WireguardHandler {
+	private func beginHandshakeInitiation(context:ChannelHandlerContext, peerPublicKey:PublicKey, endpointOverride endpoint:Endpoint?, logger:Logger) throws {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		let nioNow = NIODeadline.now()
+		try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
+			// endpoint logic
+			let targetEndpoint:Endpoint
+			if endpoint != nil {
+				// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
+				targetEndpoint = endpoint!
+			} else if let peerEndpoint = peerDeltaEngine.peerLookup(publicKey:expectedPeerPublicKey.pointee)?.endpoint() {
+				// use the value that came from the peer list
+				targetEndpoint = peerEndpoint
+			} else {
+				// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
+				UnknownPeerEndpoint()
+				return
+			}
+			
+			// forge
+			let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:privateKey, responderStaticPublicKey:expectedPeerPublicKey)
+			let authenticatedPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
+			
+			// document
+			selfInitiatedIndexes.journal(context:context, indexM:payload.initiatorPeerIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)) { [weak self, ap = authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = targetEndpoint] timer in
+				// rekey attempt task.
+				guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
+					// recurring task should no longer be running
+					timer.cancel()
+					return
+				}
+				// write another initiation packet
+				c.accessContext { contextPointer in
+					contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
+				}
+			}
+			logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(targetEndpoint)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
+			context.writeAndFlush(wrapOutboundOut((targetEndpoint, .initiation(authenticatedPayload))), promise:nil)
+		}
+	}
+	
 	/// thrown when a handshake initiation is attempted on a peer with no documented endpoint
 	internal struct UnknownPeerEndpoint:Swift.Error {}
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
@@ -307,70 +360,23 @@ extension WireguardHandler {
 		var logger = log
 		let nioNow = NIODeadline.now()
 		do {
-			switch unwrapOutboundIn(data) {
-				case let .handshakeInitiate(peerPublicKey, endpoint):
-				
-					/*
-					peers role: responder
-					our role: initiator
-					=================
-					Im = initiator peer index
-					Im' = responder peer index (not yet known, only initiator peer index is available)
-					*/
-					logger[metadataKey:"public-key_remote"] = "\(peerPublicKey)"
-					
-					// this probably needs to be improved
-					guard rekeyGate.canRekey(publicKey:peerPublicKey, now:nioNow, delta:Self.rekeyTimeout) == true else {
-						logger.notice("rekey gate rejected outbound handshake initiation")
-						return
-					}
-					
-					try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
-						// endpoint logic
-						let targetEndpoint:Endpoint
-						if endpoint != nil {
-							// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
-							targetEndpoint = endpoint!
-						} else if let peerEndpoint = peerDeltaEngine.peerLookup(publicKey:expectedPeerPublicKey.pointee)?.endpoint() {
-							// use the value that came from the peer list
-							targetEndpoint = peerEndpoint
-						} else {
-							// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
-							promise?.fail(UnknownPeerEndpoint())
-							return
-						}
-						
-						// forge
-						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:privateKey, responderStaticPublicKey:expectedPeerPublicKey)
-						let authenticatedPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
-						
-						// document
-						selfInitiatedIndexes.journal(context:context, indexM:payload.initiatorPeerIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)) { [weak self, ap = authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = targetEndpoint] timer in
-							// rekey attempt task.
-							guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
-								// recurring task should no longer be running
-								timer.cancel()
-								return
-							}
-							// write another initiation packet
-							c.accessContext { contextPointer in
-								contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
-							}
-						}
-						logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(targetEndpoint)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
-						context.writeAndFlush(wrapOutboundOut((targetEndpoint, .initiation(authenticatedPayload))), promise:nil)
-					}
-					break;
-				case .encryptedTransit(let publicKey, let payload):
-					guard let ep = peerDeltaEngine.peerLookup(publicKey:publicKey)?.endpoint() else {
-						logger.error("unable to find valid endpoint for peer", metadata:["public-key_remote":"\(publicKey)"])
-						promise?.fail(UnknownPeerEndpoint())
-						return
-					}
-					context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)
-				default:
-					break;
+			let (publicKey, payload) = unwrapOutboundIn(data)
+			guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
+				logger.error("peer is not configured. can not write data.", metadata:["public-key_remote":"\(publicKey)"])
+				promise?.fail(UnknownPeerEndpoint())
+				return
 			}
+			guard let ep = peerInfoLive.endpoint() else {
+				logger.error("trying to write data to a peer with no known endpoint.")
+				promise?.fail(UnknownPeerEndpoint())
+				return
+			}
+			guard let currentHandshakeGeometry = peerIndex.currentRotation() else {
+				// need to send a handshake and then the data can be sent
+				peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
+			}
+			let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:
+			context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)
 		} catch let error {
 			logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
 			context.fireErrorCaught(error)

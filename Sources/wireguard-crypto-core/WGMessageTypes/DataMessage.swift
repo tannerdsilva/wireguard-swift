@@ -28,23 +28,26 @@ extension Message.Data.Header {
 	}
 }
 
+extension Message.Data.Header {
+	/// responder's peer index (I_r)
+	@available(*, deprecated, renamed:"recipientIndex")
+	public var receiverIndex:PeerIndex {
+		return recipientIndex
+	}
+}
+
 extension Message {
 	public struct Data {
+		/// the header that is used for data messages in wireguard. in this case, header is a loosely used term, as it also includes the encryption tag "tail" which encodes at the end of the data sequence as opposed to before.
 		public struct Header:Sendable {
 			/// message type (type and reserved)
 			public let typeHeader:TypeHeading
 			/// peer index of the recipient of the data payload
 			public let recipientIndex:PeerIndex
-			/// responder's peer index (I_r)
-			@available(*, deprecated, renamed:"recipientIndex")
-			public var receiverIndex:PeerIndex {
-				return recipientIndex
-			}
 			/// packet counter key
 			public let counter:Counter
 			/// packet tag of message
 			public let tag:Tag
-
 			/// initializes a new HandshakeResponseMessage
 			fileprivate init(typeHeader:TypeHeading = 0x4, recipientIndex:PeerIndex, counter:Counter, packetTag tag:Tag) {
 				self.typeHeader = typeHeader

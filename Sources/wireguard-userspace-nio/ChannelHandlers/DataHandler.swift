@@ -4,19 +4,6 @@ import Logging
 import bedrock_fifo
 import wireguard_crypto_core
 
-internal enum InterfaceInstruction {
-	// Add peer to pipeline configuration
-	case addPeer(PeerInfo)
-	// Remove peer from pipeline configuration
-	case removePeer(PeerInfo)
-	/// indicates a series of bytes that are to be encrypted and sent to the peer
-	case encryptAndTransmit(PublicKey, [UInt8])
-}
-
-internal enum WireguardEvent {
-	case handshakeCompleted(PublicKey, PeerIndex, HandshakeGeometry<PeerIndex>)
-	case transitData(PublicKey, PeerIndex, [UInt8])
-}
 
 // Handles the data packet encryption and decryption
 internal final class DataHandler:ChannelDuplexHandler, @unchecked Sendable {

@@ -7,6 +7,15 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
+extension PeerInfo.Live {
+	private struct PendingPostHandshake {
+		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>)] = []
+		internal func queue(data:ByteBuffer, promise:EventLoopPromise<Void>) {
+			pendingWriteData.append(data:data, promise:promise)
+		}
+	}
+}
+
 extension PeerInfo {
 	internal final class Live {
 		
@@ -18,7 +27,7 @@ extension PeerInfo {
 
 		private var rotation:Rotating<HandshakeGeometry<PeerIndex>>
 		
-		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>)] = []
+		private var postHandshakePackets = PendingPostHandshake()
 
 		private struct SendReceive<SendType, ReceiveType> {
 			internal var valueSend:SendType
@@ -41,7 +50,7 @@ extension PeerInfo {
 		
 		internal init(_ peerInfo:PeerInfo, context:ChannelHandlerContext, logLevel:Logger.Level) {
 			#if DEBUG
-			context.eventLoop.assertInEventLoop() 
+			context.eventLoop.assertInEventLoop()
 			#endif
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
@@ -54,6 +63,14 @@ extension PeerInfo {
 			rotation = Rotating<HandshakeGeometry<PeerIndex>>()
 			_ = context
 		}
+		
+		internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>) {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			postHandshakePackets.queue(data:data, promise:promise)
+		}
+		
 		/// retrieve the previously known endpoint for the peer
 		internal borrowing func endpoint() -> Endpoint? {
 			return ep
@@ -66,6 +83,10 @@ extension PeerInfo {
 			}
 			ep = inputEndpoint
 			log.info("peer roamed to new endopint", metadata:["endpoint_remote":"\(inputEndpoint)"])
+		}
+		
+		internal borrowing func currentRotation() -> HandshakeGeometry<PeerIndex>? {
+			return rotation.current
 		}
 		
 		internal func applyPeerInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> HandshakeGeometry<PeerIndex>? {
