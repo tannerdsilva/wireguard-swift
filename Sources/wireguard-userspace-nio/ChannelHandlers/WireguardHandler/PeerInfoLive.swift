@@ -9,19 +9,20 @@ import bedrock
 
 extension PeerInfo.Live {
 	private struct PendingPostHandshake {
-		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>)] = []
-		internal func queue(data:ByteBuffer, promise:EventLoopPromise<Void>) {
-			pendingWriteData.append(data:data, promise:promise)
+		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>?)] = []
+		internal mutating func queue(data:ByteBuffer, promise:EventLoopPromise<Void>?) {
+			pendingWriteData.append((data:data, promise:promise))
 		}
 	}
 }
 
 extension PeerInfo {
 	internal final class Live {
-		
 		private let log:Logger
 		internal let publicKey:PublicKey
+		
 		private var ep:Endpoint?
+		
 		internal var persistentKeepalive:TimeAmount?
 		internal var handshakeInitiationTime:TAI64N? = nil
 
@@ -61,10 +62,17 @@ extension PeerInfo {
 			ep = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
 			rotation = Rotating<HandshakeGeometry<PeerIndex>>()
-			_ = context
 		}
 		
-		internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>) {
+		internal func getSendVars() -> (nSend:Counter, tSend:Result.Bytes32)? {
+			guard let currentGeometry = rotation.current else {
+				// no active handshakes
+				return nil
+			}
+			return (nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend)
+		}
+		
+		internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>?) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif

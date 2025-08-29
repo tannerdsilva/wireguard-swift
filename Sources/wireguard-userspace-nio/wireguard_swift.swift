@@ -70,7 +70,6 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let logger:Logger
 	private let bootstrappedFuture:Future<Void, Swift.Error> = Future<Void, Swift.Error>()
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
-	private let dh:DataHandler
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
 	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
@@ -83,7 +82,6 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-		self.dh = DataHandler(logLevel:logLevel, initialConfiguration: initialConfiguration)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 	}
 
@@ -96,15 +94,12 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .initialized:
 				state = .engaging
-				let hs = HandshakeHandler(privateKey:staticPrivateKey, logLevel:.debug)
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelInitializer { [hs = hs, dh = dh, dhh = dhh, l = logger] channel in
+					.channelInitializer { [dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
 							PacketHandler(mtu:1500, logLevel:l.logLevel),
-							hs,
-							dh,
 							KcpHandler(logLevel: .info),
 							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
 							dhh

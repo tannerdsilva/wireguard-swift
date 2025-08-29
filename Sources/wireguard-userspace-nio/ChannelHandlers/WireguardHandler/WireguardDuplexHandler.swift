@@ -83,7 +83,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias InboundIn = (Endpoint, Message)
 	internal typealias InboundOut = WireguardEvent
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
-	internal typealias OutboundOut = (Endpoint, Message)
+	internal typealias OutboundOut = (Endpoint, Message.NIO)
 	
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
@@ -109,7 +109,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	private var rekeyGate = RekeyGate()
 	private var selfInitiatedIndexes = SelfInitiatedIndexes()
 	
-	private var peerMMap = PeerIndexMMapper()
+	private var dualPeerIndex = DualPeerIndex()
 	
 	// directly managed
 	private var operatingState:State
@@ -231,7 +231,7 @@ extension WireguardHandler {
 					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
 						logger.trace("handshake response sent successfully")
 					}
-					peerMMap.add(geometry:geometry, publicKey:initiatorStaticPublicKey)
+					dualPeerIndex.add(geometry:geometry, publicKey:initiatorStaticPublicKey)
 					break;
 				case .response(let payload):
 					/*
@@ -254,7 +254,7 @@ extension WireguardHandler {
 					livePeerInfo.updateEndpoint(endpoint)
 					let (previousOutgoing, nextOutgoing) = try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
-					peerMMap.add(geometry:geometry, publicKey:chainingData.peerPublicKey)
+					dualPeerIndex.add(geometry:geometry, publicKey:chainingData.peerPublicKey)
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -371,12 +371,14 @@ extension WireguardHandler {
 				promise?.fail(UnknownPeerEndpoint())
 				return
 			}
-			guard let currentHandshakeGeometry = peerIndex.currentRotation() else {
+			guard let currentHandshakeGeometry = peerInfoLive.currentRotation() else {
 				// need to send a handshake and then the data can be sent
 				peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
+				try beginHandshakeInitiation(context:context, peerPublicKey:publicKey, endpointOverride:ep, logger:logger)
+				return
 			}
-			let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:
-			context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)
+//			let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, 
+//			context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)
 		} catch let error {
 			logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
 			context.fireErrorCaught(error)

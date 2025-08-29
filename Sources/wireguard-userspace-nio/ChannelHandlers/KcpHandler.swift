@@ -9,7 +9,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	public typealias InboundOut = (PublicKey, [UInt8])
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8])
-	internal typealias OutboundOut = InterfaceInstruction
+	internal typealias OutboundOut = (PublicKey, ByteBuffer)
 	
 	private var kcp:[PublicKey:ikcp_cb<EventLoopPromise<Void>>] = [:]
 	
@@ -56,7 +56,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			self.kcp[key]!.update(current:iclock()) { buffer, promise in
 				let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
 				c.accessContext { contextPointer in
-					contextPointer.pointee.write(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)), promise:promise)
+//					contextPointer.pointee.write(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)), promise:promise)
 				}
 			 }
 

@@ -16,12 +16,6 @@ extension Message {
 	}
 }
 
-extension Message.Cookie.Payload {
-	internal struct NIO {
-		
-	}
-}
-
 extension Message.Data.Payload {
 	internal struct NIO {
 		internal let header:Message.Data.Header
