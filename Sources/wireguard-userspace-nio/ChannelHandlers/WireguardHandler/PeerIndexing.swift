@@ -52,6 +52,12 @@ extension WireguardHandler {
 			}
 			return hasExistingIDsInstalled
 		}
+		fileprivate borrowing func seek(_ pi:PeerIndex) -> PublicKey? {
+			return indexPublicKey[pi]
+		}
+		fileprivate borrowing func seek(_ pk:PublicKey) -> Set<PeerIndex>? {
+			return publicKeyIndex[pk]
+		} 
 	}
 }
 
@@ -67,8 +73,11 @@ extension WireguardHandler {
 			peerM.remove(index:index)
 			peerMP.remove(index:index)
 		}
-		@discardableResult fileprivate mutating func remove(publicKey:PublicKey) -> (m:Set<PeerIndex>?, mp:Set<PeerIndex>?) {
+		@discardableResult internal mutating func remove(publicKey:PublicKey) -> (m:Set<PeerIndex>?, mp:Set<PeerIndex>?) {
 			return (m:peerM.remove(publicKey:publicKey), mp:peerMP.remove(publicKey:publicKey))
+		}
+		internal borrowing func seek(peerM peerMIndex:PeerIndex) -> PublicKey? {
+			return peerM.seek(peerMIndex)
 		}
 	}
 }

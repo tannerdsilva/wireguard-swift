@@ -143,8 +143,12 @@ extension WireguardHandler {
 			case .initialized(let initPeers):
 				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, additionHandler: { [weak self, l = log] _ in 
 					// when peer is added
-				}, removalHandler: { [weak self, l = log] _ in
+					guard let self = self else { return }
+				}, removalHandler: { [weak self, l = log] removedPublicKey in
 					// when peer is removed
+					guard let self = self else { return }
+					self.dualPeerIndex.remove(publicKey:removedPublicKey)
+					
 				})
 				operatingState = .channelEngaged
 			default:
@@ -219,7 +223,6 @@ extension WireguardHandler {
 							return
 						}
 					}
-					
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
 					try livePeerInfo.applyPeerInitiated(geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
@@ -298,6 +301,10 @@ extension WireguardHandler {
 				
 				case .data(let payload):
 					// verify that a current peer index exists for the public key already. if 
+					guard let identifiedPublicKey = dualPeerIndex.seek(peerM:payload.header.recipientIndex) else {
+						logger.error("could not find matching traffic for inbound data peer index m \(payload.header.recipientIndex)")
+						return
+					}
 					break;
 			}
 		} catch let error {

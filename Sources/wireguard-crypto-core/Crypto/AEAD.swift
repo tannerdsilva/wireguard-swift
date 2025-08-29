@@ -57,3 +57,10 @@ internal func aeadDecryptV2<A, D, K, O>(as _:O.Type, key:borrowing K, counter:UI
 		return O(RAW_decode:plainText.baseAddress!, count:cipherTextBuff.count)!
 	}
 }
+
+internal func aeadDecryptV3(into plaintextPtr:UnsafeMutablePointer<UInt8>, key:UnsafeBufferPointer<UInt8>, counter:UInt64, cipherText cipherTextBuff:UnsafeBufferPointer<UInt8>, aad aadBuff:UnsafeBufferPointer<UInt8>, tag:Tag) throws {
+	var context = RAW_chachapoly.Context(key:key)!
+	try CountedNonce(counter: counter).RAW_access_staticbuff { 
+		try context.decrypt(tag:tag, nonce:$0.load(as:Nonce.self), associatedData:aadBuff, inputData:cipherTextBuff, output:plaintextPtr)
+	}
+}
