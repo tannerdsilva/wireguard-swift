@@ -64,7 +64,6 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 		envelope.data.withUnsafeReadableBytes { byteBuffer in
 			let firstByte = byteBuffer[0]
 			logger[metadataKey:"packet_type"] = "\(firstByte)"
-			logger.trace("received packet...")
 			// proceed based on the first byte of the buffer
 			switch firstByte {
 				case 0x1:

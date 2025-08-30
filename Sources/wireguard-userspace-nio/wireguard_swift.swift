@@ -74,6 +74,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let group:MultiThreadedEventLoopGroup
 	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
 	private let listeningPort:Int
+	private let wgh:WireguardHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[Peer] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
@@ -83,6 +84,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
+		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.trace)
 	}
 
 	public func waitForChannelInit() async throws {
@@ -94,13 +96,15 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .initialized:
 				state = .engaging
+				
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap =  DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelInitializer { [dhh = dhh, l = logger] channel in
+					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
 							PacketHandler(mtu:1500, logLevel:l.logLevel),
-							KcpHandler(logLevel: .info),
+							wgh,
+							KcpHandler(logLevel:l.logLevel),
 							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
 							dhh
 						])

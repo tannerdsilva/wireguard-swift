@@ -51,6 +51,11 @@ extension Message {
 			public let header:Header
 			public let data:[UInt8]
 			public let tag:Tag
+
+			public static func paddedLength(count:Int) -> Int {
+				return 16 * Int(ceil(Double(count) / 16.0))
+			}
+
 			public init?(RAW_decode inputPtr:consuming UnsafeRawPointer, count:size_t) {
 				guard count >= MemoryLayout<Header>.size + MemoryLayout<Tag>.size else { return nil }
 				(header, data, tag) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
@@ -89,7 +94,7 @@ extension Message {
 			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, plainText:[UInt8]) throws -> Self {
 				// step 1: P := P || 0... Zero Padding the Packet
 				let pLength:Int = plainText.count
-				let zeros = [UInt8](repeating: 0, count:16 * Int(ceil(Double(pLength)/16.0)) - pLength)
+				let zeros = [UInt8](repeating: 0, count:Self.paddedLength(count:pLength) - pLength)
 				var joined = plainText + zeros
 				// step 2: msg.counter = nonce
 				let msgCounter = nonce
@@ -105,7 +110,7 @@ extension Message {
 
 			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, plainText:UnsafeRawBufferPointer, output:UnsafeMutableRawPointer) throws -> Int {
 				// step 1: P := P || 0... Zero Padding the Packet
-				let zeroPaddedDataLength = 16 * Int(ceil(Double(plainText.count)/16.0))
+				let zeroPaddedDataLength = Self.paddedLength(count:plainText.count)
 				let fullPacketLength = MemoryLayout<Header>.size + zeroPaddedDataLength + MemoryLayout<Tag>.size
 				// write the zero length region
 				let zeroRegionLength = zeroPaddedDataLength - plainText.count

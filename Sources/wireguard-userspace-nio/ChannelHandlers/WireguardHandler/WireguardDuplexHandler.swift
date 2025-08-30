@@ -83,7 +83,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias InboundIn = (Endpoint, Message)
 	internal typealias InboundOut = WireguardEvent
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
-	internal typealias OutboundOut = (Endpoint, ByteBuffer)
+	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
@@ -137,10 +137,11 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		var mesLen = 0
 		message.RAW_encode(count:&mesLen)
 		encodeBuffer.clear(minimumCapacity:mesLen)
-		encodeBuffer.withUnsafeMutableWritableBytes { outputBuffer in
+		encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:mesLen) { outputBuffer in
 			return outputBuffer.baseAddress!.distance(to:message.RAW_encode(dest:outputBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 		}
-		context.writeAndFlush(wrapOutboundOut((destinationEndpoint, encodeBuffer)), promise:promise)
+		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(destinationEndpoint), data: encodeBuffer)
+		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 	}
 }
 
@@ -387,6 +388,7 @@ extension WireguardHandler {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var logger = log
+		logger.trace("ENTER", metadata:["_func":"\(#function)"])
 		let (publicKey, payload) = unwrapOutboundIn(data)
 		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
 			logger.error("peer is not configured. can not write data.", metadata:["public-key_remote":"\(publicKey)"])
@@ -412,8 +414,12 @@ extension WireguardHandler {
 		}
 		var nSend = nSendCur
 		do {
-			encodeBuffer.clear(minimumCapacity:1800)
-			_ = try encodeBuffer.withUnsafeMutableWritableBytes { bufferPtr in
+			var forgedLength = 0
+			forgedLength += MemoryLayout<Message.Data.Header>.size
+			forgedLength += MemoryLayout<Tag>.size
+			forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
+			encodeBuffer.clear(minimumCapacity:forgedLength)
+			_ = try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
 				return try payload.withUnsafeReadableBytes { payloadPtr in
 					return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, nonce:&nSend, transportKey:tSend, plainText:payloadPtr, output:bufferPtr.baseAddress!)
 				}
@@ -425,6 +431,7 @@ extension WireguardHandler {
 			return
 		}
 		peerInfoLive.nSendUpdate(nSend, geometry:currentHandshakeGeometry)
-		context.writeAndFlush(wrapOutboundOut((ep, encodeBuffer)), promise:promise)
+		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data: encodeBuffer)
+		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 	}
 }

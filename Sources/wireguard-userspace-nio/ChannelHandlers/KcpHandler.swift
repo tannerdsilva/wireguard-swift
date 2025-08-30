@@ -54,9 +54,10 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			guard let self = self else { return }
 			
 			self.kcp[key]!.update(current:iclock()) { buffer, promise in
-				let bytes = Array(UnsafeBufferPointer(start: buffer.baseAddress, count: buffer.count))
 				c.accessContext { contextPointer in
-//					contextPointer.pointee.write(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, bytes)), promise:promise)
+					var newBuffer = contextPointer.pointee.channel.allocator.buffer(capacity:buffer.count)
+					newBuffer.writeBytes(buffer)
+					contextPointer.pointee.write(self.wrapOutboundOut((key, newBuffer)), promise:promise)
 				}
 			 }
 
