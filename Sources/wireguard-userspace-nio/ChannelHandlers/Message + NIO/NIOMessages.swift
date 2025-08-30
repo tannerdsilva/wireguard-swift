@@ -7,19 +7,30 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
-extension Message {
-	internal enum NIO {
-		case initiation(Initiation.Payload.Authenticated)
-		case response(Response.Payload.Authenticated)
-		case cookie(Cookie.Payload)
-		case data(Data.Payload.NIO)
+extension Message:RAW_encodable {
+    public func RAW_encode(count: inout RAW.size_t) {
+        switch self {
+            case .initiation(let payload):
+                payload.RAW_encode(count: &count)
+            case .response(let payload):
+                payload.RAW_encode(count: &count)
+            case .cookie(let payload):
+                payload.RAW_encode(count: &count)
+            case .data(let payload):
+                fatalError("do not use RAW_encodable protocol on Message.Data")
+        }
+    }
+
+	public func RAW_encode(dest:UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
+		switch self {
+			case .initiation(let payload):
+				return payload.RAW_encode(dest:dest)
+			case .response(let payload):
+				return payload.RAW_encode(dest:dest)
+			case .cookie(let payload):
+				return payload.RAW_encode(dest:dest)
+			case .data(let payload):
+				fatalError("do not use RAW_encodable protocol on Message.Data")
+		}
 	}
 }
-
-extension Message.Data.Payload {
-	internal struct NIO {
-		internal let header:Message.Data.Header
-		internal let data:ByteBufferView
-	}
-}
-

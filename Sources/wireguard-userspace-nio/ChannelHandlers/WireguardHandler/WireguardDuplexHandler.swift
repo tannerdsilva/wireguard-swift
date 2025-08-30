@@ -83,7 +83,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias InboundIn = (Endpoint, Message)
 	internal typealias InboundOut = WireguardEvent
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
-	internal typealias OutboundOut = (Endpoint, Message.NIO)
+	internal typealias OutboundOut = (Endpoint, ByteBuffer)
 	
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
@@ -105,6 +105,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	// functionally managed
 	private var peerDeltaEngine:PeerDeltaEngine!
+	private var encodeBuffer:ByteBuffer!
 	
 	private var rekeyGate = RekeyGate()
 	private var selfInitiatedIndexes = SelfInitiatedIndexes()
@@ -131,6 +132,16 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		log.trace("instance initialized", metadata:["peer_count":"\(initialPeers.count)"])
 		operatingState = .initialized(initialPeers)
 	}
+
+	private func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
+		var mesLen = 0
+		message.RAW_encode(count:&mesLen)
+		encodeBuffer.clear(minimumCapacity:mesLen)
+		encodeBuffer.withUnsafeMutableWritableBytes { outputBuffer in
+			return outputBuffer.baseAddress!.distance(to:message.RAW_encode(dest:outputBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)))
+		}
+		context.writeAndFlush(wrapOutboundOut((destinationEndpoint, encodeBuffer)), promise:promise)
+	}
 }
 
 extension WireguardHandler {
@@ -141,6 +152,7 @@ extension WireguardHandler {
 		var logger = log
 		switch operatingState {
 			case .initialized(let initPeers):
+				encodeBuffer = context.channel.allocator.buffer(capacity:1800)
 				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, additionHandler: { [weak self, l = log] _ in 
 					// when peer is added
 					guard let self = self else { return }
@@ -202,9 +214,7 @@ extension WireguardHandler {
 						} catch let error {
 							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
-							context.writeAndFlush(wrapOutboundOut((endpoint, .cookie(cookie)))).whenSuccess { [logger = logger, e = endpoint] in
-								logger.trace("cookie reply message sent to endpoint")
-							}
+							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
 							return
 						}
 					}
@@ -225,16 +235,17 @@ extension WireguardHandler {
 					}
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
-					try livePeerInfo.applyPeerInitiated(geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
+					let outgoingGeometry = try livePeerInfo.applyPeerInitiated(geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
-					context.writeAndFlush(wrapOutboundOut((endpoint, .response(authResponse)))).whenSuccess { [logger = logger] in
-						logger.trace("handshake response sent successfully")
-					}
+					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
 					dualPeerIndex.add(geometry:geometry, publicKey:initiatorStaticPublicKey)
+					if outgoingGeometry != nil {
+						dualPeerIndex.remove(geometry:outgoingGeometry!)
+					}
 					break;
 				case .response(let payload):
 					/*
@@ -258,6 +269,12 @@ extension WireguardHandler {
 					let (previousOutgoing, nextOutgoing) = try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
 					dualPeerIndex.add(geometry:geometry, publicKey:chainingData.peerPublicKey)
+					if previousOutgoing != nil {
+						dualPeerIndex.remove(geometry:previousOutgoing!)
+					}
+					if nextOutgoing != nil {
+						dualPeerIndex.remove(geometry:nextOutgoing!)
+					}
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -292,7 +309,7 @@ extension WireguardHandler {
 							}
 							// write another initiation packet
 							c.accessContext { contextPointer in
-								contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
+								self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 							}
 						}
 					}
@@ -332,7 +349,12 @@ extension WireguardHandler {
 				targetEndpoint = peerEndpoint
 			} else {
 				// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
-				UnknownPeerEndpoint()
+				throw UnknownPeerEndpoint()
+			}
+
+			guard rekeyGate.canRekey(publicKey:peerPublicKey, now:nioNow, delta:Self.rekeyAttemptTime - Self.rekeyTimeout) == true else {
+				// rekey not allowed at this time
+				logger.debug("rekey not allowed at this time. skipping handshake initiation", metadata:["public-key_remote":"\(peerPublicKey)"])
 				return
 			}
 			
@@ -350,11 +372,11 @@ extension WireguardHandler {
 				}
 				// write another initiation packet
 				c.accessContext { contextPointer in
-					contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((endpoint, .initiation(ap))), promise:nil)
+					self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 				}
 			}
 			logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(targetEndpoint)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
-			context.writeAndFlush(wrapOutboundOut((targetEndpoint, .initiation(authenticatedPayload))), promise:nil)
+			self.writeMessage(.initiation(authenticatedPayload), to:targetEndpoint, context:context, promise:nil)
 		}
 	}
 	
@@ -365,31 +387,44 @@ extension WireguardHandler {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var logger = log
-		let nioNow = NIODeadline.now()
-		do {
-			let (publicKey, payload) = unwrapOutboundIn(data)
-			guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
-				logger.error("peer is not configured. can not write data.", metadata:["public-key_remote":"\(publicKey)"])
-				promise?.fail(UnknownPeerEndpoint())
-				return
-			}
-			guard let ep = peerInfoLive.endpoint() else {
-				logger.error("trying to write data to a peer with no known endpoint.")
-				promise?.fail(UnknownPeerEndpoint())
-				return
-			}
-			guard let currentHandshakeGeometry = peerInfoLive.currentRotation() else {
-				// need to send a handshake and then the data can be sent
-				peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
+		let (publicKey, payload) = unwrapOutboundIn(data)
+		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
+			logger.error("peer is not configured. can not write data.", metadata:["public-key_remote":"\(publicKey)"])
+			promise?.fail(UnknownPeerEndpoint())
+			return
+		}
+		guard let ep = peerInfoLive.endpoint() else {
+			logger.error("trying to write data to a peer with no known endpoint.")
+			promise?.fail(UnknownPeerEndpoint())
+			return
+		}
+		guard let (nSendCur, tSend, currentHandshakeGeometry) = peerInfoLive.getSendVars() else {
+			// need to send a handshake and then the data can be sent
+			do {
 				try beginHandshakeInitiation(context:context, peerPublicKey:publicKey, endpointOverride:ep, logger:logger)
+			} catch let error {
+				logger.error("failed to begin handshake initiation", metadata:["error":"\(error)"])
+				promise?.fail(error)
 				return
 			}
-//			let encryptedPacket = try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, 
-//			context.writeAndFlush(wrapOutboundOut((ep, .data(payload))), promise:promise)
+			peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
+			return
+		}
+		var nSend = nSendCur
+		do {
+			encodeBuffer.clear(minimumCapacity:1800)
+			_ = try encodeBuffer.withUnsafeMutableWritableBytes { bufferPtr in
+				return try payload.withUnsafeReadableBytes { payloadPtr in
+					return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, nonce:&nSend, transportKey:tSend, plainText:payloadPtr, output:bufferPtr.baseAddress!)
+				}
+			}
 		} catch let error {
 			logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
 			context.fireErrorCaught(error)
 			promise?.fail(error)
+			return
 		}
+		peerInfoLive.nSendUpdate(nSend, geometry:currentHandshakeGeometry)
+		context.writeAndFlush(wrapOutboundOut((ep, encodeBuffer)), promise:promise)
 	}
 }

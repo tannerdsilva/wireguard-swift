@@ -30,6 +30,13 @@ internal func aeadEncryptV2<A, D, K, O>(as _:O.Type = A.self, key:borrowing K, c
 	}
 }
 
+internal func aeadEncryptV3(plaintext:UnsafeRawBufferPointer, key:UnsafeRawBufferPointer, counter:UInt64, cipherText cipherTextPtr:UnsafeMutableRawPointer, aad aadPtr:UnsafeRawBufferPointer, tag:UnsafeMutableRawPointer) throws {
+	var context = RAW_chachapoly.Context(key:key)!
+	return try CountedNonce(counter: counter).RAW_access_staticbuff { 
+		return try context.encrypt(nonce:$0, associatedData:aadPtr, inputData:plaintext, output:cipherTextPtr, tag:tag)
+	}
+}
+
 internal func aeadDecrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, cipherText:UnsafePointer<A>, aad:UnsafePointer<D>, tag:Tag) throws -> A where A:RAW_accessible, A:RAW_decodable, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype {
 	var context = RAW_chachapoly.Context(key:key)
 	return try cipherText.pointee.RAW_access { cipherTextBuff in
@@ -58,9 +65,9 @@ internal func aeadDecryptV2<A, D, K, O>(as _:O.Type, key:borrowing K, counter:UI
 	}
 }
 
-internal func aeadDecryptV3(into plaintextPtr:UnsafeMutablePointer<UInt8>, key:UnsafeBufferPointer<UInt8>, counter:UInt64, cipherText cipherTextBuff:UnsafeBufferPointer<UInt8>, aad aadBuff:UnsafeBufferPointer<UInt8>, tag:Tag) throws {
-	var context = RAW_chachapoly.Context(key:key)!
-	try CountedNonce(counter: counter).RAW_access_staticbuff { 
-		try context.decrypt(tag:tag, nonce:$0.load(as:Nonce.self), associatedData:aadBuff, inputData:cipherTextBuff, output:plaintextPtr)
-	}
-}
+// internal func aeadDecryptV3(into plaintextPtr:UnsafeMutablePointer<UInt8>, key:UnsafeBufferPointer<UInt8>, counter:UInt64, cipherText cipherTextBuff:UnsafeBufferPointer<UInt8>, aad aadBuff:UnsafeBufferPointer<UInt8>, tag:Tag) throws {
+// 	var context = RAW_chachapoly.Context(key:key)!
+// 	try CountedNonce(counter: counter).RAW_access_staticbuff { 
+// 		try context.decrypt(tag:tag, nonce:$0.load(as:Nonce.self), associatedData:aadBuff, inputData:cipherTextBuff, output:plaintextPtr)
+// 	}
+// }

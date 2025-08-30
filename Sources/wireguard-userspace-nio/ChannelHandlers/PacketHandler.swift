@@ -14,7 +14,7 @@ internal enum PacketTypeOutbound {
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
 
-internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
+internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
 		/// specifies that the packet length does not match the expected length for the given packet type
@@ -30,8 +30,6 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias InboundOut = (Endpoint, Message)
-	internal typealias OutboundIn = (Endpoint, Message)
-	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
 	private let log:Logger
 	private let datagramMTU:UInt16
@@ -96,73 +94,5 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					context.fireErrorCaught(Error.packetTypeUnrecognized(type:byteBuffer[0]))
 			}
 		}
-	}
-	
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		let (destinationEndpoint, mode) = unwrapOutboundIn(data)
-		var logger = log
-		logger[metadataKey:"remote_address"] = "\(destinationEndpoint)"
-		logger.trace("writing data...", metadata:["promise":"\(promise)"])
-		let sendBuffer:ByteBuffer
-		switch mode {
-			case let .initiation(payload):
-				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)
-				buffer.writeBytes(payload)
-				sendBuffer = buffer
-				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
-					switch r {
-						case .success:
-							l.debug("handshake initiation packet sent successfully")
-						case .failure(let error):
-							l.error("failed to send initiation packet: \(error)")
-					}
-				}
-			case let .response(payload):
-				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Response.Payload.Authenticated>.size)
-				buffer.writeBytes(payload)
-				sendBuffer = buffer
-				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
-					switch r {
-						case .success:
-							l.debug("handshake response packet sent successfully")
-						case .failure(let error):
-							l.error("failed to send response packet: \(error)")
-					}
-				}
-			case let .cookie(payload):
-				var buffer = context.channel.allocator.buffer(capacity:MemoryLayout<Message.Cookie.Payload>.size)
-				buffer.writeBytes(payload)
-				sendBuffer = buffer
-				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint] r in
-					switch r {
-						case .success:
-							l.debug("cookie packet sent successfully")
-						case .failure(let error):
-							l.error("failed to send cookie packet: \(error)")
-					}
-				}
-			case .data(let payload):
-				var size: RAW.size_t = 0
-				payload.RAW_encode(count: &size)
-				var buffer = context.channel.allocator.buffer(capacity:size)
-				buffer.writeWithUnsafeMutableBytes(minimumWritableBytes:size) { [p = payload] ob in
-					return ob.baseAddress!.distance(to:p.RAW_encode(dest:ob.baseAddress!.assumingMemoryBound(to:UInt8.self)))
-				}
-                sendBuffer = buffer
-				promise?.futureResult.whenComplete { [l = logger, de = destinationEndpoint, s = size] r in
-					switch r {
-						case .success:
-							l.debug("data packet sent successfully", metadata:["packet_length":"\(s)"])
-						case .failure(let error):
-							l.error("failed to send data packet: \(error)")
-					}
-				}
-		}
-		guard sendBuffer.readableBytesView.count <= datagramMTU else {
-			promise?.fail(Error.mtuExceeded)
-			logger.critical("mtu exceeded during write operation")
-			return
-		}
-		context.writeAndFlush(wrapOutboundOut(AddressedEnvelope(remoteAddress:SocketAddress(destinationEndpoint), data:sendBuffer)), promise:promise)
 	}
 }

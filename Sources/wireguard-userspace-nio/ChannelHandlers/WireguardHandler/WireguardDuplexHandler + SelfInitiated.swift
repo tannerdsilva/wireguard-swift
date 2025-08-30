@@ -8,7 +8,7 @@ import Synchronization
 import bedrock
 
 extension WireguardHandler.SelfInitiatedIndexes {
-	/// primary mechanism for storing chaining data for initiations send outbound
+	/// primary mechanism for storing chaining data for initiations sent outbound
 	private struct Keys {
 		private var initiatorEphemeralPrivateKey:[PeerIndex:MemoryGuarded<PrivateKey>] = [:]
 		private var initiatorChainingData:[PeerIndex:(c:Result.Bytes32, h:Result.Bytes32)] = [:]

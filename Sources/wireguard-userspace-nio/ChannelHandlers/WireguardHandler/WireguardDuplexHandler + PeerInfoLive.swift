@@ -64,12 +64,20 @@ extension PeerInfo {
 			rotation = Rotating<HandshakeGeometry<PeerIndex>>()
 		}
 		
-		internal func getSendVars() -> (nSend:Counter, tSend:Result.Bytes32)? {
+		internal func getSendVars() -> (nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)? {
 			guard let currentGeometry = rotation.current else {
 				// no active handshakes
 				return nil
 			}
-			return (nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend)
+			return (nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend, geometry:currentGeometry)
+		}
+
+		internal func nSendUpdate(_ nSend:Counter, geometry:HandshakeGeometry<PeerIndex>) {
+			guard var currentNVar = nVars[geometry] else {
+				fatalError("no nVar for geometry \(geometry) \(#file):\(#line)")
+			}
+			currentNVar.valueSend = nSend
+			nVars[geometry] = currentNVar
 		}
 		
 		internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>?) {
