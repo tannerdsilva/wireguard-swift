@@ -62,7 +62,7 @@ extension Message {
 					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
 					let recipientIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
 					let counter = Counter(RAW_staticbuff_seeking:RAW_decode)
-					let dataCount = count - MemoryLayout<Header>.size
+					let dataCount = count - (MemoryLayout<Header>.size + MemoryLayout<Tag>.size)
 					let packetTag = Tag(RAW_staticbuff:RAW_decode.pointee.advanced(by:dataCount))
 					return (Header(typeHeader:typeHeading, recipientIndex:recipientIndex, counter:counter), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount), packetTag)
 				}
@@ -108,28 +108,26 @@ extension Message {
 				return Self(header:Header(recipientIndex:receiverIndex, counter:msgCounter), data:packet, tag:packetTag)
 			}
 
-			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, plainText:UnsafeRawBufferPointer, output:UnsafeMutableRawPointer) throws -> Int {
+			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, paddedPlainText:UnsafeRawBufferPointer, output:UnsafeMutableRawPointer) throws -> Int {
 				// step 1: P := P || 0... Zero Padding the Packet
-				let zeroPaddedDataLength = Self.paddedLength(count:plainText.count)
-				let fullPacketLength = MemoryLayout<Header>.size + zeroPaddedDataLength + MemoryLayout<Tag>.size
+				let fullPacketLength = MemoryLayout<Header>.size + paddedPlainText.count + MemoryLayout<Tag>.size
 				// write the zero length region
-				let zeroRegionLength = zeroPaddedDataLength - plainText.count
 				let msgCounter = nonce
 				let buildHeader = Header(recipientIndex:receiverIndex, counter:msgCounter)
 
 				// step 3: msg.packet := AEAD(Tm, Nm, P, e)
 				let outputDelta = buildHeader.RAW_encode(dest:output.assumingMemoryBound(to:UInt8.self))
-				let memzeroStart = outputDelta.advanced(by:plainText.count)
-				RAW_memset(memzeroStart, 0, zeroRegionLength)
-				let tagStart = memzeroStart + zeroRegionLength
+				let tagStart = outputDelta + paddedPlainText.count
+				let tagAssociatedData = UnsafeMutableRawPointer(tagStart).assumingMemoryBound(to:Tag.self)
 				try transportKey.RAW_access_staticbuff { tsKeyPtr in
-					try aeadEncryptV3(plaintext:plainText, key:UnsafeRawBufferPointer(start:tsKeyPtr, count:MemoryLayout<Result.Bytes32>.size), counter:nonce.RAW_native(), cipherText:outputDelta, aad:UnsafeRawBufferPointer(start:memzeroStart, count:0), tag:tagStart)
+					try aeadEncryptV3(plaintext:paddedPlainText, key:UnsafeRawBufferPointer(start:tsKeyPtr, count:MemoryLayout<Result.Bytes32>.size), counter:nonce.RAW_native(), cipherText:outputDelta, aad:UnsafeRawBufferPointer(start:outputDelta, count:0), tag:tagStart)
 				}
+				
 				// step 4: nonce := nonce + 1
 				nonce += 1
 				let tagEnd = tagStart + MemoryLayout<Tag>.size
 				#if DEBUG
-				guard tagEnd <= output.advanced(by:fullPacketLength).assumingMemoryBound(to:UInt8.self) else {
+				guard tagEnd == output.advanced(by:fullPacketLength).assumingMemoryBound(to:UInt8.self) else {
 					fatalError("tag exceeds output buffer. this is a critical internal error. \(#file):\(#line)")
 				}
 				#endif

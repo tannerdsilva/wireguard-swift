@@ -64,6 +64,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		case initialized
 		case engaging
 		case engaged(Channel)
+		case terminated
 	}
 	public struct InvalidInterfaceStateError:Swift.Error {}
 
@@ -77,7 +78,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let wgh:WireguardHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[Peer] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -98,7 +99,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				state = .engaging
 				
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
-				let bootstrap =  DatagramBootstrap(group: group)
+				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
@@ -130,10 +131,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					throw error
 				}
 				inboundData.finish()
-
-			case .engaged(_):
-				fallthrough
-			case .engaging:
+				state = .terminated
+			case .engaged(_), .engaging, .terminated:
 				throw InvalidInterfaceStateError()
 		}
 

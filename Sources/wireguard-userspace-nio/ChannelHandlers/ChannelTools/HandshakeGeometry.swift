@@ -57,8 +57,13 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 
 extension HandshakeGeometry:CustomDebugStringConvertible where AugmentedType:CustomDebugStringConvertible {
 	internal var debugDescription:String {
-		var startingString = "\(String(describing:Self.self))"
-		
+		var startingString = "\(String(describing:Self.self))."
+		switch self {
+			case .selfInitiated(m:let m, mp:let mp):
+			startingString += "selfInitiated(m:\(m.debugDescription), mp:\(mp.debugDescription))"
+			case .peerInitiated(m:let m, mp:let mp):
+			startingString += "peerInitiated(m:\(m.debugDescription), mp:\(mp.debugDescription))"
+		}
 		return startingString
 	}
 }

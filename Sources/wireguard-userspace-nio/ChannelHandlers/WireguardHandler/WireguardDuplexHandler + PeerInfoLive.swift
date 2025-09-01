@@ -13,6 +13,9 @@ extension PeerInfo.Live {
 		internal mutating func queue(data:ByteBuffer, promise:EventLoopPromise<Void>?) {
 			pendingWriteData.append((data:data, promise:promise))
 		}
+		internal mutating func dequeue() -> (data:ByteBuffer, promise:EventLoopPromise<Void>?)? {
+			return pendingWriteData.isEmpty ? nil : pendingWriteData.removeFirst()
+		}
 	}
 }
 
@@ -37,13 +40,13 @@ extension PeerInfo {
 				valueSend = vs
 				valueRecv = vr
 			}
-			fileprivate init(peerInitiated inputTuple:(SendType, ReceiveType)) {
-				valueSend = inputTuple.0
-				valueRecv = inputTuple.1
-			}
-			fileprivate init(selfInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
+			fileprivate init(peerInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
 				valueSend = inputTuple.1
 				valueRecv = inputTuple.0
+			}
+			fileprivate init(selfInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
+				valueSend = inputTuple.0
+				valueRecv = inputTuple.1
 			}
 		}
 		private var nVars:[HandshakeGeometry<PeerIndex>:SendReceive<Counter, SlidingWindow<Counter>>] = [:]
@@ -86,6 +89,20 @@ extension PeerInfo {
 			#endif
 			postHandshakePackets.queue(data:data, promise:promise)
 		}
+
+		internal borrowing func dequeuePostHandshake(context:ChannelHandlerContext) -> (data:ByteBuffer, promise:EventLoopPromise<Void>?)? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			return postHandshakePackets.dequeue()
+		}
+
+		internal borrowing func getRecvVars(geometry:HandshakeGeometry<PeerIndex>) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
+			guard let nRecv = nVars[geometry]?.valueRecv, let tRecv = tVars[geometry]?.valueRecv else {
+				return nil
+			}
+			return (nRecv:nRecv, tRecv:tRecv)
+		}
 		
 		/// retrieve the previously known endpoint for the peer
 		internal borrowing func endpoint() -> Endpoint? {
@@ -112,8 +129,9 @@ extension PeerInfo {
 			}
 			#endif
 			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
-			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
-			log.info("rotation applied for peer initiated data")
+			let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
+			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults), forKey:element)
+			log.info("rotation applied for peer initiated data", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
 			guard let outgoingIndexValue = rotation.apply(next:element) else {
 				// no outgoing index value, return
 				return nil
@@ -131,8 +149,9 @@ extension PeerInfo {
 			}
 			#endif
 			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
-			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)), forKey:element)
-			log.info("rotation applied for self initiated data")
+			let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
+			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), forKey:element)
+			log.info("rotation applied for self initiated data", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
 			let rotationResults = rotation.rotate(replacingNext:element)
 			if let outgoingPrevious = rotationResults.previous {
 				nVars.removeValue(forKey:outgoingPrevious)

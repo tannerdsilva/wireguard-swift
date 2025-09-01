@@ -9,10 +9,10 @@ import bedrock
 
 extension WireguardHandler {
 	fileprivate struct PeerIndexKeyMapper {
-		private var indexPublicKey:[PeerIndex:PublicKey] = [:]
+		private var indexPublicKey:[PeerIndex:(PublicKey, HandshakeGeometry<PeerIndex>)] = [:]
 		private var publicKeyIndex:[PublicKey:Set<PeerIndex>] = [:]
-		fileprivate mutating func add(index:PeerIndex, publicKey:PublicKey) {
-			guard indexPublicKey.updateValue(publicKey, forKey:index) == nil else {
+		fileprivate mutating func add(index:PeerIndex, associated geometry:HandshakeGeometry<PeerIndex>, publicKey:PublicKey) {
+			guard indexPublicKey.updateValue((publicKey, geometry), forKey:index) == nil else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			if var hasExistingPISet = publicKeyIndex[publicKey] {
@@ -25,7 +25,7 @@ extension WireguardHandler {
 			}
 		}
 		fileprivate mutating func remove(index:PeerIndex) {
-			guard let hasExistingPublicKey = indexPublicKey.removeValue(forKey:index) else {
+			guard let (hasExistingPublicKey, _) = indexPublicKey.removeValue(forKey:index) else {
 				return
 			}
 			guard var hasExistingPISet = publicKeyIndex[hasExistingPublicKey] else {
@@ -52,7 +52,7 @@ extension WireguardHandler {
 			}
 			return hasExistingIDsInstalled
 		}
-		fileprivate borrowing func seek(_ pi:PeerIndex) -> PublicKey? {
+		fileprivate borrowing func seek(_ pi:PeerIndex) -> (PublicKey, HandshakeGeometry<PeerIndex>)? {
 			return indexPublicKey[pi]
 		}
 	}
@@ -63,8 +63,8 @@ extension WireguardHandler {
 		private var peerM = PeerIndexKeyMapper()
 		private var peerMP = PeerIndexKeyMapper()
 		internal mutating func add(geometry:HandshakeGeometry<PeerIndex>, publicKey:PublicKey) {
-			peerM.add(index:geometry.m, publicKey:publicKey)
-			peerMP.add(index:geometry.mp, publicKey:publicKey)
+			peerM.add(index:geometry.m, associated:geometry, publicKey:publicKey)
+			peerMP.add(index:geometry.mp, associated:geometry, publicKey:publicKey)
 		}
 		internal mutating func remove(geometry:HandshakeGeometry<PeerIndex>) {
 			peerM.remove(index:geometry.m)
@@ -73,7 +73,7 @@ extension WireguardHandler {
 		@discardableResult internal mutating func remove(publicKey:PublicKey) -> (m:Set<PeerIndex>?, mp:Set<PeerIndex>?) {
 			return (m:peerM.remove(publicKey:publicKey), mp:peerMP.remove(publicKey:publicKey))
 		}
-		internal borrowing func seek(peerM peerMIndex:PeerIndex) -> PublicKey? {
+		internal borrowing func seek(peerM peerMIndex:PeerIndex) -> (PublicKey, HandshakeGeometry<PeerIndex>)? {
 			return peerM.seek(peerMIndex)
 		}
 	}

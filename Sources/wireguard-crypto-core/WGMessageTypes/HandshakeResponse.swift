@@ -104,7 +104,7 @@ extension Message.Response.Payload {
 		public let payload:Message.Response.Payload
 		public let msgMac1:Result.Bytes16
 		public let msgMac2:Result.Bytes16
-		fileprivate init(payload:Message.Response.Payload, msgMac1:Result.Bytes16, msgMac2:Result.Bytes16) {
+		public init(payload:Message.Response.Payload, msgMac1:Result.Bytes16, msgMac2:Result.Bytes16) {
 			self.payload = payload
 			self.msgMac1 = msgMac1
 			self.msgMac2 = msgMac2

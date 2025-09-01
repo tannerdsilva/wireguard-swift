@@ -5,7 +5,7 @@ import Logging
 import wireguard_crypto_core
 
 internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = WireguardEvent
+	internal typealias InboundIn = (PublicKey, ByteBuffer)
 	public typealias InboundOut = (PublicKey, [UInt8])
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8])
@@ -88,20 +88,17 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-		switch unwrapInboundIn(data) {
-			case .transitData(let key, let peerIndex, let data):
-				if (kcp[key] == nil) {
-					makeIkcpCb(key:key, context:context)
-					kcpUpdates(for:key, context:context)
-				}
-				do {
-					_ = try kcp[key]!.input(data, count: data.count)
-				} catch let error {
-					logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
-				}
-			case .handshakeCompleted(let pubkey, let peerIndex, let geometry):
-				logger.debug("configuring for handshake", metadata:["peer_index":"\(peerIndex)", "peer_public_key":"\(pubkey)"])
-				kcp_peers[peerIndex] = ()
+		let (key, data) = unwrapInboundIn(data)
+		if (kcp[key] == nil) {
+			makeIkcpCb(key:key, context:context)
+			kcpUpdates(for:key, context:context)
+		}
+		do {
+			_ = try data.withUnsafeReadableBytes { readableBytes in
+				_ = try kcp[key]!.input(readableBytes.baseAddress!.assumingMemoryBound(to:UInt8.self), count:readableBytes.count)
+			}
+		} catch let error {
+			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
 	}
 	

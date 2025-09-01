@@ -65,3 +65,9 @@ internal struct Rotating<Element> {
 		return (previous, next)
 	}
 }
+
+extension Rotating:CustomDebugStringConvertible where Element:CustomDebugStringConvertible {
+	internal var debugDescription:String {
+		return "(previous:\(String(describing:previous)), current:\(String(describing:current)), next:\(String(describing:next)))"
+	}
+}

@@ -276,6 +276,10 @@ extension WireguardHandler {
 					if nextOutgoing != nil {
 						dualPeerIndex.remove(geometry:nextOutgoing!)
 					}
+					while var pendingPacket = livePeerInfo.dequeuePostHandshake(context:context) {
+						logger.debug("flushing queued post-handshake packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
+						writeBytes(context:context, publicKey:chainingData.peerPublicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
+					}
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -314,19 +318,38 @@ extension WireguardHandler {
 							}
 						}
 					}
-
 					break;
 				
 				case .data(let payload):
 					// verify that a current peer index exists for the public key already. if 
-					guard let identifiedPublicKey = dualPeerIndex.seek(peerM:payload.header.recipientIndex) else {
+					guard let (identifiedPublicKey, existingGeometry) = dualPeerIndex.seek(peerM:payload.header.recipientIndex) else {
 						logger.error("could not find matching traffic for inbound data peer index m \(payload.header.recipientIndex)")
 						return
 					}
-					break;
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:identifiedPublicKey) else {
+						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(identifiedPublicKey)"])
+						return
+					}
+					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometry)!
+					guard varsRecv.nRecv.isPacketAllowed(payload.header.counter.RAW_native()) else {
+						logger.warning("SLIDING WINDOW REJECTED", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(payload.header.counter.RAW_native())"])
+						return
+					}
+					logger.info("GOT RECV VARS", metadata:["count":"\(varsRecv.nRecv)", "public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)"])
+					let decrypted = try payload.decrypt(transportKey:varsRecv.tRecv)
+					
+					// todo: key rotation
+
+					guard decrypted.isEmpty == false else {
+						// keepalive packet
+						logger.debug("received keepalive packet", metadata:["public-key_remote":"\(identifiedPublicKey)"])
+						return
+					}
+
+					// context.fireChannelRead(wrapInboundOut(.transitData(publicKey, peerIndex, decrypted)))
 			}
 		} catch let error {
-			logger.error("error processing handshake packet: \(error)")
+			logger.error("error processing packet: \(error)")
 			context.fireErrorCaught(error)
 		}
 	}
@@ -380,16 +403,13 @@ extension WireguardHandler {
 			self.writeMessage(.initiation(authenticatedPayload), to:targetEndpoint, context:context, promise:nil)
 		}
 	}
-	
-	/// thrown when a handshake initiation is attempted on a peer with no documented endpoint
-	internal struct UnknownPeerEndpoint:Swift.Error {}
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+
+	private func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var logger = log
+		let logger = log
 		logger.trace("ENTER", metadata:["_func":"\(#function)"])
-		let (publicKey, payload) = unwrapOutboundIn(data)
 		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
 			logger.error("peer is not configured. can not write data.", metadata:["public-key_remote":"\(publicKey)"])
 			promise?.fail(UnknownPeerEndpoint())
@@ -418,11 +438,10 @@ extension WireguardHandler {
 			forgedLength += MemoryLayout<Message.Data.Header>.size
 			forgedLength += MemoryLayout<Tag>.size
 			forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
+			logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
 			encodeBuffer.clear(minimumCapacity:forgedLength)
-			_ = try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
-				return try payload.withUnsafeReadableBytes { payloadPtr in
-					return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, nonce:&nSend, transportKey:tSend, plainText:payloadPtr, output:bufferPtr.baseAddress!)
-				}
+			try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
+				return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, nonce:&nSend, transportKey:tSend, plainText:&payload, output:bufferPtr.baseAddress!)
 			}
 		} catch let error {
 			logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
@@ -431,7 +450,19 @@ extension WireguardHandler {
 			return
 		}
 		peerInfoLive.nSendUpdate(nSend, geometry:currentHandshakeGeometry)
-		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data: encodeBuffer)
+		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:ByteBuffer(buffer:encodeBuffer))
 		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+	}
+
+	/// thrown when a handshake initiation is attempted on a peer with no documented endpoint
+	internal struct UnknownPeerEndpoint:Swift.Error {}
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		var logger = log
+		logger.trace("ENTER", metadata:["_func":"\(#function)"])
+		var (publicKey, payload) = unwrapOutboundIn(data)
+		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
 	}
 }

@@ -32,5 +32,27 @@ extension Message:RAW_encodable {
 			case .data(let payload):
 				fatalError("do not use RAW_encodable protocol on Message.Data")
 		}
+		
+	}
+}
+
+extension Message {
+	internal enum NIO {
+		case initiation(Message.Initiation.Payload.Authenticated)
+		case response(Message.Response.Payload.Authenticated)
+		case cookie(Message.Cookie.Payload)
+		case data(Message.Data.Header, ByteBufferView)
+	}
+}
+
+extension Message.Data.Payload {
+	internal static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, plainText:inout ByteBuffer, output:UnsafeMutableRawPointer) throws -> Int {
+		let unpaddedLength = plainText.readableBytes
+		let messagePadding = Message.Data.Payload.paddedLength(count:unpaddedLength) - unpaddedLength
+		plainText.writeBytes([UInt8](repeating:0, count:messagePadding))
+		let wroteBytes = try plainText.withUnsafeReadableBytes { paddedPlaintext in
+			return try forge(receiverIndex:receiverIndex, nonce:&nonce, transportKey:transportKey, paddedPlainText:paddedPlaintext, output:output)
+		}
+		return wroteBytes
 	}
 }
