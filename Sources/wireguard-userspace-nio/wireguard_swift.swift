@@ -85,7 +85,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
-		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.trace)
+		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.debug)
 	}
 
 	public func waitForChannelInit() async throws {

@@ -41,7 +41,7 @@ extension Message {
 		case initiation(Message.Initiation.Payload.Authenticated)
 		case response(Message.Response.Payload.Authenticated)
 		case cookie(Message.Cookie.Payload)
-		case data(Message.Data.Header, ByteBufferView)
+		case data(recipientIndex:PeerIndex, counter:Counter, payload:ByteBufferView)
 	}
 }
 

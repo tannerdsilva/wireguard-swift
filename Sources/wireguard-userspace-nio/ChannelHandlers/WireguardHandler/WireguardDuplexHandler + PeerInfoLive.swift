@@ -121,7 +121,18 @@ extension PeerInfo {
 		internal borrowing func currentRotation() -> HandshakeGeometry<PeerIndex>? {
 			return rotation.current
 		}
-		
+		internal borrowing func nextRotation() -> HandshakeGeometry<PeerIndex>? {
+			return rotation.next
+		}
+		internal borrowing func applyRotation() -> HandshakeGeometry<PeerIndex>? {
+			log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
+			guard let outgoingID = rotation.rotate() else {
+				return nil
+			}
+			tVars.removeValue(forKey:outgoingID)
+			nVars.removeValue(forKey:outgoingID)
+			return outgoingID
+		}
 		internal func applyPeerInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> HandshakeGeometry<PeerIndex>? {
 			#if DEBUG
 			guard case .peerInitiated(m:_, mp:_) = element else {
@@ -131,7 +142,7 @@ extension PeerInfo {
 			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
 			let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults), forKey:element)
-			log.info("rotation applied for peer initiated data", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
+			log.info("transmit keys generated from peer initiated handshake", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
 			guard let outgoingIndexValue = rotation.apply(next:element) else {
 				// no outgoing index value, return
 				return nil
@@ -151,7 +162,7 @@ extension PeerInfo {
 			nVars.updateValue(SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), forKey:element)
 			let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), forKey:element)
-			log.info("rotation applied for self initiated data", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
+			log.info("transmit keys generated from self initiated handshake", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
 			let rotationResults = rotation.rotate(replacingNext:element)
 			if let outgoingPrevious = rotationResults.previous {
 				nVars.removeValue(forKey:outgoingPrevious)

@@ -91,6 +91,12 @@ extension Message {
 				return try aeadDecryptV2(as:[UInt8].self, key:transportKey, counter:header.counter.RAW_native(), cipherText:data, aad:[], tag:tag)
 			}
 
+			public static func decrypt(transportKey:borrowing Result.Bytes32, counter:Counter, cipherText input:UnsafeRawBufferPointer, tag:UnsafeRawPointer, aad:UnsafeRawBufferPointer, plainText output:UnsafeMutableRawPointer) throws {
+				try transportKey.RAW_access_staticbuff { transportKeyPtr in
+					try aeadDecryptV3(plainText:output, key:UnsafeRawBufferPointer(start:transportKeyPtr, count:MemoryLayout<Result.Bytes32>.size), counter:counter.RAW_native(), cipherText:input, aad:UnsafeRawBufferPointer(start:tag, count:0), tag:tag)
+				}
+			}
+
 			public static func forge(receiverIndex:PeerIndex, nonce:inout Counter, transportKey:Result.Bytes32, plainText:[UInt8]) throws -> Self {
 				// step 1: P := P || 0... Zero Padding the Packet
 				let pLength:Int = plainText.count

@@ -64,8 +64,8 @@ extension WireguardHandler {
 				pubRekeyDeadline[clientPub] = futureTime
 				return true
 			}
-			guard hasDeadline <= futureTime else {
-				// the deadline is further in the future than `futureDate`....rekey not allowed.
+			guard hasDeadline <= now else {
+				// the deadline is further in the future than `now`...so rekey not allowed.
 				return false
 			}
 			pubRekeyDeadline[clientPub] = futureTime
@@ -80,8 +80,8 @@ internal enum WireguardEvent {
 }
 
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = (Endpoint, Message)
-	internal typealias InboundOut = WireguardEvent
+	internal typealias InboundIn = (Endpoint, Message.NIO)
+	internal typealias InboundOut = (PublicKey, ByteBuffer)
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
@@ -133,7 +133,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		operatingState = .initialized(initialPeers)
 	}
 
-	private func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
+	private func writeMessageLegacy(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
 		var mesLen = 0
 		message.RAW_encode(count:&mesLen)
 		encodeBuffer.clear(minimumCapacity:mesLen)
@@ -160,8 +160,8 @@ extension WireguardHandler {
 				}, removalHandler: { [weak self, l = log] removedPublicKey in
 					// when peer is removed
 					guard let self = self else { return }
+					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
 					self.dualPeerIndex.remove(publicKey:removedPublicKey)
-					
 				})
 				operatingState = .channelEngaged
 			default:
@@ -215,7 +215,7 @@ extension WireguardHandler {
 						} catch let error {
 							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
-							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
+							writeMessageLegacy(.cookie(cookie), to:endpoint, context:context, promise:nil)
 							return
 						}
 					}
@@ -242,7 +242,7 @@ extension WireguardHandler {
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
-					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
+					writeMessageLegacy(.response(authResponse), to:endpoint, context:context, promise:nil)
 					dualPeerIndex.add(geometry:geometry, publicKey:initiatorStaticPublicKey)
 					if outgoingGeometry != nil {
 						dualPeerIndex.remove(geometry:outgoingGeometry!)
@@ -277,7 +277,7 @@ extension WireguardHandler {
 						dualPeerIndex.remove(geometry:nextOutgoing!)
 					}
 					while var pendingPacket = livePeerInfo.dequeuePostHandshake(context:context) {
-						logger.debug("flushing queued post-handshake packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
+						logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
 						writeBytes(context:context, publicKey:chainingData.peerPublicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
 					}
 					break;
@@ -314,16 +314,16 @@ extension WireguardHandler {
 							}
 							// write another initiation packet
 							c.accessContext { contextPointer in
-								self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
+								self.writeMessageLegacy(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 							}
 						}
 					}
 					break;
 				
-				case .data(let payload):
+				case .data(recipientIndex: let recipientIndex, counter: let counter, payload: let payload):
 					// verify that a current peer index exists for the public key already. if 
-					guard let (identifiedPublicKey, existingGeometry) = dualPeerIndex.seek(peerM:payload.header.recipientIndex) else {
-						logger.error("could not find matching traffic for inbound data peer index m \(payload.header.recipientIndex)")
+					guard let (identifiedPublicKey, existingGeometry) = dualPeerIndex.seek(peerM:recipientIndex) else {
+						logger.error("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
 					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:identifiedPublicKey) else {
@@ -331,22 +331,34 @@ extension WireguardHandler {
 						return
 					}
 					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometry)!
-					guard varsRecv.nRecv.isPacketAllowed(payload.header.counter.RAW_native()) else {
-						logger.warning("SLIDING WINDOW REJECTED", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(payload.header.counter.RAW_native())"])
+					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
+						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
 						return
 					}
-					logger.info("GOT RECV VARS", metadata:["count":"\(varsRecv.nRecv)", "public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)"])
-					let decrypted = try payload.decrypt(transportKey:varsRecv.tRecv)
-					
-					// todo: key rotation
+					encodeBuffer.clear(minimumCapacity:payload.count - MemoryLayout<Tag>.size)
+					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:payload.count - MemoryLayout<Tag>.size) { decrypted in
+						return try payload.withUnsafeBytes { dataBuffer in
+							let lenWithoutTag = dataBuffer.count - MemoryLayout<Tag>.size
+							let dataRegion = UnsafeRawBufferPointer(start:dataBuffer.baseAddress, count:lenWithoutTag)
+							let tagRegion = dataBuffer.baseAddress!.advanced(by:lenWithoutTag)
+							try Message.Data.Payload.decrypt(transportKey:varsRecv.tRecv, counter:counter, cipherText:dataRegion, tag:tagRegion, aad:UnsafeRawBufferPointer(start:dataRegion.baseAddress!, count:0), plainText:decrypted.baseAddress!)	
+							return payload.count - MemoryLayout<Tag>.size
+						}
+					}
+					if let nextGeometry = livePeerInfo.nextRotation(), nextGeometry == existingGeometry {
+						logger.trace("applying rotation for recv vars", metadata:["public-key_remote":"\(identifiedPublicKey)"])
+						if let lastGeometry = livePeerInfo.applyRotation() {
+							dualPeerIndex.remove(geometry:lastGeometry)
+						}
+					}
 
-					guard decrypted.isEmpty == false else {
+					guard encodeBuffer.readableBytes != 0 else {
 						// keepalive packet
 						logger.debug("received keepalive packet", metadata:["public-key_remote":"\(identifiedPublicKey)"])
 						return
 					}
 
-					// context.fireChannelRead(wrapInboundOut(.transitData(publicKey, peerIndex, decrypted)))
+					context.fireChannelRead(wrapInboundOut((identifiedPublicKey, encodeBuffer)))
 			}
 		} catch let error {
 			logger.error("error processing packet: \(error)")
@@ -378,7 +390,7 @@ extension WireguardHandler {
 
 			guard rekeyGate.canRekey(publicKey:peerPublicKey, now:nioNow, delta:Self.rekeyAttemptTime - Self.rekeyTimeout) == true else {
 				// rekey not allowed at this time
-				logger.debug("rekey not allowed at this time. skipping handshake initiation", metadata:["public-key_remote":"\(peerPublicKey)"])
+				logger.trace("rekey not allowed at this time. skipping handshake initiation", metadata:["public-key_remote":"\(peerPublicKey)"])
 				return
 			}
 			
@@ -396,11 +408,11 @@ extension WireguardHandler {
 				}
 				// write another initiation packet
 				c.accessContext { contextPointer in
-					self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
+					self.writeMessageLegacy(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 				}
 			}
 			logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(targetEndpoint)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
-			self.writeMessage(.initiation(authenticatedPayload), to:targetEndpoint, context:context, promise:nil)
+			writeMessageLegacy(.initiation(authenticatedPayload), to:targetEndpoint, context:context, promise:nil)
 		}
 	}
 
