@@ -8,12 +8,5 @@ import Synchronization
 import bedrock
 
 extension WireguardHandler {
-	private struct HandshakeGate {
-		internal enum HandshakeInvokeReason {
-			case firstHandshake
-			case proactiveRekey(forOutgoingGeometry:HandshakeGeometry<PeerIndex>)
-		}
-		private var reason:HandshakeInvokeReason = .firstHandshake
-		private var lastHandshakeTime:NIODeadline? = nil
-	}
+	
 }

@@ -8,9 +8,14 @@ import Synchronization
 import bedrock
 
 extension WireguardHandler {
+	/// maps a given peer index to a corresponding public key. this mapper was updated to allow associations with the complete HandshakeGeometry<PeerIndex> value.
 	fileprivate struct PeerIndexKeyMapper {
+		/// maps an index value to a corresponding (public key, handshakegeometry) tuple
 		private var indexPublicKey:[PeerIndex:(PublicKey, HandshakeGeometry<PeerIndex>)] = [:]
+		/// maps a public key to a set of associated index values
 		private var publicKeyIndex:[PublicKey:Set<PeerIndex>] = [:]
+
+		/// install a new handshake geometry and public key into the mapper
 		fileprivate mutating func add(index:PeerIndex, associated geometry:HandshakeGeometry<PeerIndex>, publicKey:PublicKey) {
 			guard indexPublicKey.updateValue((publicKey, geometry), forKey:index) == nil else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
@@ -24,6 +29,8 @@ extension WireguardHandler {
 				publicKeyIndex[publicKey] = [index]
 			}
 		}
+
+		/// remove a peer index and its associated public key and handshake geometry. if this is the last peer index to associate with the public key, the public key will be removed from the mapper.
 		fileprivate mutating func remove(index:PeerIndex) {
 			guard let (hasExistingPublicKey, _) = indexPublicKey.removeValue(forKey:index) else {
 				return
@@ -40,6 +47,8 @@ extension WireguardHandler {
 			}
 			_ = publicKeyIndex.updateValue(hasExistingPISet, forKey:hasExistingPublicKey)
 		}
+
+		/// remove a public key and all associated peer indicies from the mapper.
 		@discardableResult fileprivate mutating func remove(publicKey:PublicKey) -> Set<PeerIndex> {
 			guard let hasExistingIDsInstalled = publicKeyIndex.removeValue(forKey:publicKey) else {
 				// there is no existing value
@@ -52,6 +61,8 @@ extension WireguardHandler {
 			}
 			return hasExistingIDsInstalled
 		}
+
+		/// identify the corresponding public key and handshake geometry for a given peer index.
 		fileprivate borrowing func seek(_ pi:PeerIndex) -> (PublicKey, HandshakeGeometry<PeerIndex>)? {
 			return indexPublicKey[pi]
 		}

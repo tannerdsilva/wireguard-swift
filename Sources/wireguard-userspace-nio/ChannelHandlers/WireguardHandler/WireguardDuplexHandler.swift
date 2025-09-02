@@ -29,21 +29,21 @@ extension WireguardHandler {
 			}
 		}
 		
-		internal init(context:ChannelHandlerContext, initiallyConfigured:[PeerInfo], additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) {
+		internal init(context:ChannelHandlerContext, initiallyConfigured:[PeerInfo], handler:WireguardHandler, additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) {
 			peers = [:]
 			additionHandler = ahIn
 			removalHandler = rhIn
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, context:context, logLevel:.debug)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:.debug)
 			}
 			peers = buildPeers
 		}
 		
-		internal mutating func setPeers(_ newPeers:[PeerInfo], context:ChannelHandlerContext) {
+		internal mutating func setPeers(_ newPeers:[PeerInfo], handler:WireguardHandler, context:ChannelHandlerContext) {
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, context:context, logLevel:.debug)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:.debug)
 			}
 			peers = buildPeers
 		}
@@ -101,7 +101,45 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal let precomputedCookieKey:RAW_xchachapoly.Key
 	
 	internal let isCongested:Atomic<Bool> = .init(false)
+
+	internal struct ActivelyInitiating {
+		private var publicKeyInitiationIndex:[PublicKey:PeerIndex] = [:]
+		private var initiationIndexPublicKey:[PeerIndex:PublicKey] = [:]
+		internal mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, peerIndex:PeerIndex) -> PeerIndex? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard let outgoingPeerIndex = publicKeyInitiationIndex.updateValue(peerIndex, forKey:publicKey) else {
+				// no existing value
+				publicKeyInitiationIndex[publicKey] = peerIndex
+				initiationIndexPublicKey[peerIndex] = publicKey
+				return nil
+			}
+			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
+				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+			}
+			return outgoingPeerIndex
+		}
+
+		internal mutating func remove(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard let outgoingPeerIndex = publicKeyInitiationIndex.removeValue(forKey:publicKey) else {
+				// no existing value
+				return nil
+			}
+			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
+				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+			}
+			return outgoingPeerIndex
+		}
+	}
 	
+	/// initiation indicies. this variable is modified directly by the PeerIndex.
+	internal var activelyInitiatingIndicies = ActivelyInitiating()
+
+
 	// functionally managed
 	private var peerDeltaEngine:PeerDeltaEngine!
 	private var encodeBuffer:ByteBuffer!
@@ -157,7 +195,7 @@ extension WireguardHandler {
 		switch operatingState {
 			case .initialized(let initPeers):
 				encodeBuffer = context.channel.allocator.buffer(capacity:1800)
-				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, additionHandler: { [weak self, l = log] _ in 
+				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, additionHandler: { [weak self, l = log] _ in 
 					// when peer is added
 					guard let self = self else { return }
 				}, removalHandler: { [weak self, l = log] removedPublicKey in
@@ -377,7 +415,6 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		
 	}
 	private func beginHandshakeInitiation(context:ChannelHandlerContext, peerPublicKey:PublicKey, endpointOverride endpoint:Endpoint?, logger:Logger) throws {
 		#if DEBUG

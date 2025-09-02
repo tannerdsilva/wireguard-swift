@@ -30,6 +30,7 @@ extension WireguardHandler.SelfInitiatedIndexes {
 }
 
 extension WireguardHandler.SelfInitiatedIndexes {
+	/// stores the task 
 	private struct RecurringRekey {
 		private var rekeyAttemptTasks:[PeerIndex:RepeatedTask] = [:]
 		fileprivate mutating func startRecurringRekey(interval:TimeAmount, for peerIndex:PeerIndex, context:ChannelHandlerContext, _ task:@escaping(RepeatedTask) throws -> Void) {
@@ -65,7 +66,6 @@ extension WireguardHandler {
 	}
 	internal struct SelfInitiatedIndexes {
 		private var initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>
-		private var timeouts:SelfInitiatedTimeouts = SelfInitiatedTimeouts()
 		private var chainingKeys:Keys = Keys()
 		private var recurringRekeys = RecurringRekey()
 		private var indexMPublicKey:[PeerIndex:PublicKey] = [:]
@@ -97,7 +97,7 @@ extension WireguardHandler {
 					fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 				}
 				indexMPublicKey[index] = peerPublicKey
-				timeouts.recordInitiationSent(publicKey:peerPublicKey, now:NIODeadline.now())
+				// timeouts.recordInitiationSent(publicKey:peerPublicKey, now:NIODeadline.now())
 			}
 		}
 
@@ -118,7 +118,7 @@ extension WireguardHandler {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			indexMPublicKey[index] = publicKey
-			timeouts.recordInitiationSent(publicKey:publicKey, now:NIODeadline.now())
+			// timeouts.recordInitiationSent(publicKey:publicKey, now:NIODeadline.now())
 		}
 		
 		internal mutating func extract(indexM index:PeerIndex) -> (peerPublicKey:PublicKey, privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated)? {
