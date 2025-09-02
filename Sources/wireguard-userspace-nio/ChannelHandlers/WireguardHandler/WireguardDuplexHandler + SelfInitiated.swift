@@ -70,11 +70,13 @@ extension WireguardHandler {
 		private var recurringRekeys = RecurringRekey()
 		private var indexMPublicKey:[PeerIndex:PublicKey] = [:]
 		private var publicKeyIndexM:[PublicKey:PeerIndex] = [:]
+	
 		internal init(initiatorStaticPrivateKey staticPrivate:MemoryGuarded<PrivateKey>) {
 			initiatorStaticPrivateKey = staticPrivate
 		}
-		internal mutating func rekeyV2(context:ChannelHandlerContext, indexM index:PeerIndex, publicKey:PublicKey, now:NIODeadline) throws {
-			try withUnsafePointer(to:publicKey) { publicKeyPtr in
+
+		internal mutating func rekeyV2(context:ChannelHandlerContext, indexM index:PeerIndex, peerPublicKey:PublicKey, now:NIODeadline) throws {
+			try withUnsafePointer(to:peerPublicKey) { publicKeyPtr in
 				let (c, h, ephemeralPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorStaticPrivateKey, responderStaticPublicKey:publicKeyPtr)
 				let authenticatedPayload = try payload.finalize(responderStaticPublicKey:publicKeyPtr)
 				defer {
@@ -83,12 +85,22 @@ extension WireguardHandler {
 						// need to do something here
 					}
 				}
-				guard let oldInitiationIndex = publicKeyIndexM.updateValue(index, forKey:publicKey) else {
-					indexMPublicKey[index] = publicKey
+				guard let oldInitiationIndex = publicKeyIndexM.updateValue(index, forKey:peerPublicKey) else {
+					indexMPublicKey[index] = peerPublicKey
 					return
 				}
+				defer {
+					_ = chainingKeys.remove(index:oldInitiationIndex)
+					recurringRekeys.endRecurringRekey(for:oldInitiationIndex)
+				}
+				guard indexMPublicKey.removeValue(forKey:oldInitiationIndex) != nil else {
+					fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+				}
+				indexMPublicKey[index] = peerPublicKey
+				timeouts.recordInitiationSent(publicKey:peerPublicKey, now:NIODeadline.now())
 			}
 		}
+
 		internal mutating func rekey(context:ChannelHandlerContext, indexM index:PeerIndex, publicKey:PublicKey, chainingData:(privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated), _ task:@escaping(RepeatedTask) throws -> Void) {
 			defer {
 				chainingKeys.install(index:index, privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)
