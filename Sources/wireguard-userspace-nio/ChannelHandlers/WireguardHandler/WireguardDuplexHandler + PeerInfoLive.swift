@@ -17,40 +17,49 @@ extension PeerInfo.Live {
 			return pendingWriteData.isEmpty ? nil : pendingWriteData.removeFirst()
 		}
 	}
+
+	private struct SendReceive<SendType, ReceiveType> {
+		internal var valueSend:SendType
+		internal var valueRecv:ReceiveType
+		fileprivate init(valueSend vs:SendType, valueRecv vr:ReceiveType) {
+			valueSend = vs
+			valueRecv = vr
+		}
+		fileprivate init(peerInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
+			valueSend = inputTuple.1
+			valueRecv = inputTuple.0
+		}
+		fileprivate init(selfInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
+			valueSend = inputTuple.0
+			valueRecv = inputTuple.1
+		}
+	}
 }
 
 extension PeerInfo {
 	internal final class Live {
 		private let log:Logger
+
+		// standard configuration stuff
 		internal let publicKey:PublicKey
-		
 		private var ep:Endpoint?
-		
 		internal var persistentKeepalive:TimeAmount?
 		internal var handshakeInitiationTime:TAI64N? = nil
 
-		private var rotation:Rotating<HandshakeGeometry<PeerIndex>>
-		
+		// cryptokey rotation
+		private var rotation:Rotating<(NIODeadline, HandshakeGeometry<PeerIndex>)>
+
+		// packets that need to be sent after a handshake is complete
 		private var postHandshakePackets = PendingPostHandshake()
 
-		private struct SendReceive<SendType, ReceiveType> {
-			internal var valueSend:SendType
-			internal var valueRecv:ReceiveType
-			fileprivate init(valueSend vs:SendType, valueRecv vr:ReceiveType) {
-				valueSend = vs
-				valueRecv = vr
-			}
-			fileprivate init(peerInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
-				valueSend = inputTuple.1
-				valueRecv = inputTuple.0
-			}
-			fileprivate init(selfInitiated inputTuple:(SendType, ReceiveType)) where SendType == ReceiveType {
-				valueSend = inputTuple.0
-				valueRecv = inputTuple.1
-			}
-		}
+		private var rekeyAttemptTimeNow:NIODeadline? = nil
 		private var nVars:[HandshakeGeometry<PeerIndex>:SendReceive<Counter, SlidingWindow<Counter>>] = [:]
 		private var tVars:[HandshakeGeometry<PeerIndex>:SendReceive<Result.Bytes32, Result.Bytes32>] = [:]
+
+
+		private struct RekeyIndex {
+			private var rekeyTasks:[HandshakeGeometry<PeerIndex>:Scheduled<Void>] = [:]
+		}
 		
 		internal init(_ peerInfo:PeerInfo, context:ChannelHandlerContext, logLevel:Logger.Level) {
 			#if DEBUG
@@ -64,15 +73,32 @@ extension PeerInfo {
 			publicKey = peerInfo.publicKey
 			ep = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
-			rotation = Rotating<HandshakeGeometry<PeerIndex>>()
+			rotation = Rotating<(NIODeadline, HandshakeGeometry<PeerIndex>)>()
 		}
 		
+		internal enum SendVarsResult {
+			case currentKeys(nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)
+			case noCurrentKeys(lastRekeyAttempt:NIODeadline?)
+		}
 		internal func getSendVars() -> (nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)? {
-			guard let currentGeometry = rotation.current else {
+			guard let (_, currentGeometry) = rotation.current else {
 				// no active handshakes
 				return nil
 			}
+			defer {
+				rekeyAttemptTimeNow = NIODeadline.now()
+			}
 			return (nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend, geometry:currentGeometry)
+		}
+		internal func getSendVarsV2() -> SendVarsResult? {
+			guard let (_, currentGeometry) = rotation.current else {
+				return .noCurrentKeys(lastRekeyAttempt:rekeyAttemptTimeNow)
+			}
+			defer {
+				rekeyAttemptTimeNow = NIODeadline.now()
+			}
+			// we have a current geometry, return it
+			return .currentKeys(nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend, geometry:currentGeometry)
 		}
 
 		internal func nSendUpdate(_ nSend:Counter, geometry:HandshakeGeometry<PeerIndex>) {
@@ -103,36 +129,7 @@ extension PeerInfo {
 			}
 			return (nRecv:nRecv, tRecv:tRecv)
 		}
-		
-		/// retrieve the previously known endpoint for the peer
-		internal borrowing func endpoint() -> Endpoint? {
-			return ep
-		}
-	
-		/// journal the endpoint that the peer has been observed at
-		internal borrowing func updateEndpoint(_ inputEndpoint:Endpoint) {
-			guard ep != inputEndpoint else {
-				return
-			}
-			ep = inputEndpoint
-			log.info("peer roamed to new endopint", metadata:["endpoint_remote":"\(inputEndpoint)"])
-		}
-		
-		internal borrowing func currentRotation() -> HandshakeGeometry<PeerIndex>? {
-			return rotation.current
-		}
-		internal borrowing func nextRotation() -> HandshakeGeometry<PeerIndex>? {
-			return rotation.next
-		}
-		internal borrowing func applyRotation() -> HandshakeGeometry<PeerIndex>? {
-			log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
-			guard let outgoingID = rotation.rotate() else {
-				return nil
-			}
-			tVars.removeValue(forKey:outgoingID)
-			nVars.removeValue(forKey:outgoingID)
-			return outgoingID
-		}
+
 		internal func applyPeerInitiated(_ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws -> HandshakeGeometry<PeerIndex>? {
 			#if DEBUG
 			guard case .peerInitiated(m:_, mp:_) = element else {
@@ -143,7 +140,7 @@ extension PeerInfo {
 			let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults), forKey:element)
 			log.info("transmit keys generated from peer initiated handshake", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
-			guard let outgoingIndexValue = rotation.apply(next:element) else {
+			guard let (_, outgoingIndexValue) = rotation.apply(next:(NIODeadline.now(), element)) else {
 				// no outgoing index value, return
 				return nil
 			}
@@ -163,16 +160,52 @@ extension PeerInfo {
 			let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 			tVars.updateValue(SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), forKey:element)
 			log.info("transmit keys generated from self initiated handshake", metadata:["lhs":"\(kdfResults.0)", "rhs":"\(kdfResults.1)"])
-			let rotationResults = rotation.rotate(replacingNext:element)
-			if let outgoingPrevious = rotationResults.previous {
+			let rotationResults = rotation.rotate(replacingNext:(NIODeadline.now(), element))
+			if let (_, outgoingPrevious) = rotationResults.previous {
 				nVars.removeValue(forKey:outgoingPrevious)
 				tVars.removeValue(forKey:outgoingPrevious)
 			}
-			if let outgoingNext = rotationResults.next {
+			if let (_, outgoingNext) = rotationResults.next {
 				nVars.removeValue(forKey:outgoingNext)
 				tVars.removeValue(forKey:outgoingNext)
 			}
-			return rotationResults
+			return (previous:rotationResults.previous?.1, next:rotationResults.next?.1)
 		}
+	}
+}
+
+// MARK: Rotation
+extension PeerInfo.Live {		
+	internal borrowing func currentRotation() -> (NIODeadline, HandshakeGeometry<PeerIndex>)? {
+		return rotation.current
+	}
+	internal borrowing func nextRotation() -> (NIODeadline, HandshakeGeometry<PeerIndex>)? {
+		return rotation.next
+	}
+	internal borrowing func applyRotation() -> HandshakeGeometry<PeerIndex>? {
+		log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
+		guard let (_, outgoingID) = rotation.rotate() else {
+			return nil
+		}
+		tVars.removeValue(forKey:outgoingID)
+		nVars.removeValue(forKey:outgoingID)
+		return outgoingID
+	}
+}
+
+// MARK: Endpoint
+extension PeerInfo.Live {
+	/// retrieve the previously known endpoint for the peer
+	internal borrowing func endpoint() -> Endpoint? {
+		return ep
+	}
+
+	/// journal the endpoint that the peer has been observed at
+	internal borrowing func updateEndpoint(_ inputEndpoint:Endpoint) {
+		guard ep != inputEndpoint else {
+			return
+		}
+		ep = inputEndpoint
+		log.info("peer roamed to new endpoint", metadata:["endpoint_remote":"\(inputEndpoint)"])
 	}
 }

@@ -69,7 +69,7 @@ extension Message {
 			}
 			
 			public func RAW_encode(count: inout RAW.size_t) {
-				count = MemoryLayout<Header>.size + data.count + MemoryLayout<Tag>.size
+				count = MemoryLayout<Header>.size + Self.paddedLength(count:data.count) + MemoryLayout<Tag>.size
 			}
 			
 			public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {

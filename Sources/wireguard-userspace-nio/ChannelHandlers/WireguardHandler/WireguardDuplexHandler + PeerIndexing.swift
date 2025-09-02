@@ -59,6 +59,7 @@ extension WireguardHandler {
 }
 
 extension WireguardHandler {
+	/// the dual peer index helps correlate a single peer index with a complete HandshakeGeometry<PeerIndex> value.
 	internal struct DualPeerIndex {
 		private var peerM = PeerIndexKeyMapper()
 		private var peerMP = PeerIndexKeyMapper()

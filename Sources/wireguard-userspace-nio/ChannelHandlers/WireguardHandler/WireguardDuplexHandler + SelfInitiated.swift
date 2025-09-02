@@ -8,7 +8,7 @@ import Synchronization
 import bedrock
 
 extension WireguardHandler.SelfInitiatedIndexes {
-	/// primary mechanism for storing chaining data for initiations sent outbound
+	/// primary mechanism for storing chaining data for initiations sent outbound.
 	private struct Keys {
 		private var initiatorEphemeralPrivateKey:[PeerIndex:MemoryGuarded<PrivateKey>] = [:]
 		private var initiatorChainingData:[PeerIndex:(c:Result.Bytes32, h:Result.Bytes32)] = [:]
@@ -48,12 +48,48 @@ extension WireguardHandler.SelfInitiatedIndexes {
 }
 
 extension WireguardHandler {
+	internal struct SelfInitiatedTimeouts {
+		internal var publicKeyRekeyTimeout:[PublicKey:NIODeadline] = [:]
+		internal mutating func canSendInitiation(publicKey:PublicKey, now:NIODeadline) -> Bool {
+			guard let lastInitiationSent = publicKeyRekeyTimeout[publicKey] else {
+				return true
+			}
+			guard (lastInitiationSent + rekeyTimeout) < now else {
+				return false
+			}
+			return true
+		}
+		internal mutating func recordInitiationSent(publicKey:PublicKey, now:NIODeadline) {
+			publicKeyRekeyTimeout[publicKey] = now
+		}
+	}
 	internal struct SelfInitiatedIndexes {
+		private var initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>
+		private var timeouts:SelfInitiatedTimeouts = SelfInitiatedTimeouts()
 		private var chainingKeys:Keys = Keys()
 		private var recurringRekeys = RecurringRekey()
 		private var indexMPublicKey:[PeerIndex:PublicKey] = [:]
 		private var publicKeyIndexM:[PublicKey:PeerIndex] = [:]
-		internal mutating func journal(context:ChannelHandlerContext, indexM index:PeerIndex, publicKey:PublicKey, chainingData:(privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated), _ task:@escaping(RepeatedTask) throws -> Void) {
+		internal init(initiatorStaticPrivateKey staticPrivate:MemoryGuarded<PrivateKey>) {
+			initiatorStaticPrivateKey = staticPrivate
+		}
+		internal mutating func rekeyV2(context:ChannelHandlerContext, indexM index:PeerIndex, publicKey:PublicKey, now:NIODeadline) throws {
+			try withUnsafePointer(to:publicKey) { publicKeyPtr in
+				let (c, h, ephemeralPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorStaticPrivateKey, responderStaticPublicKey:publicKeyPtr)
+				let authenticatedPayload = try payload.finalize(responderStaticPublicKey:publicKeyPtr)
+				defer {
+					chainingKeys.install(index:index, privateKey:ephemeralPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
+					recurringRekeys.startRecurringRekey(interval:WireguardHandler.rekeyTimeout, for:index, context:context) { task in
+						// need to do something here
+					}
+				}
+				guard let oldInitiationIndex = publicKeyIndexM.updateValue(index, forKey:publicKey) else {
+					indexMPublicKey[index] = publicKey
+					return
+				}
+			}
+		}
+		internal mutating func rekey(context:ChannelHandlerContext, indexM index:PeerIndex, publicKey:PublicKey, chainingData:(privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated), _ task:@escaping(RepeatedTask) throws -> Void) {
 			defer {
 				chainingKeys.install(index:index, privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)
 				recurringRekeys.startRecurringRekey(interval:WireguardHandler.rekeyTimeout, for:index, context:context, task)
@@ -70,6 +106,7 @@ extension WireguardHandler {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			indexMPublicKey[index] = publicKey
+			timeouts.recordInitiationSent(publicKey:publicKey, now:NIODeadline.now())
 		}
 		
 		internal mutating func extract(indexM index:PeerIndex) -> (peerPublicKey:PublicKey, privateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated)? {
