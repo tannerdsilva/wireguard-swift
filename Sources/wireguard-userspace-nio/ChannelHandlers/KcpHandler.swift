@@ -2,105 +2,118 @@ import NIO
 import RAW_dh25519
 import kcp_swift
 import Logging
+import wireguard_crypto_core
 
 internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = (PublicKey, [UInt8])
+	internal typealias InboundIn = (PublicKey, ByteBuffer)
 	public typealias InboundOut = (PublicKey, [UInt8])
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8])
-	internal typealias OutboundOut = InterfaceInstruction
+	internal typealias OutboundOut = (PublicKey, ByteBuffer)
 	
-	private var kcp:[PublicKey: ikcp_cb] = [:]
+	private var kcp:[PublicKey:ikcp_cb<EventLoopPromise<Void>>] = [:]
 	
-	private var logger:Logger
+	private var kcp_peers = [PeerIndex:Void]()
 	
-	// Task for updating for acks
+	private let logger:Logger
+	
+	// task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .seconds(5)
-	
-	// Tasks for killing ikcp when inactive
-	private var kcpKillTasks: [PublicKey: Scheduled<Void>] = [:]
-	private let kcpKillTime: TimeAmount = .seconds(300)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(100)
 
+	// task for killing ikcp when inactive
+	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
+	private let kcpKillTime:TimeAmount = .seconds(300)
+	
 	internal init(logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 	}
 
-	internal func handlerAdded(context: ChannelHandlerContext) {
-		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
-		logger.trace("handler added to pipeline.")
+	internal func handlerAdded(context:ChannelHandlerContext) {
+		logger.trace("handler added to NIO pipeline.")
+	}
+	
+	internal func handlerRemoved(context:ChannelHandlerContext) {
+		logger.trace("handler removed from NIO pipeline.")
 	}
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
-		kcp[key] = ikcp_cb(conv: 0, output: { buffer in
-			// Pass outbound kcp segment buffers to data handler
-			context.writeAndFlush(self.wrapOutboundOut(InterfaceInstruction.encryptAndTransmit(key, buffer)) , promise: nil)
-		}, user: nil, synchronous: true)
+		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
+		kcp[key]!.setNoDelay(1, interval:100, resend:5, nc:1)
 	}
-	
-	private func kcpCheckAck(for key:PublicKey, context:ChannelHandlerContext) {
+
+	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
 		guard kcpUpdateTasks[key] == nil else { return }
 		kcpStartTimers[key] = 0
 		
 		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
-			[weak self] _ in
+			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			
-			if(!kcp[key]!.ackUpToDate()) {
-				kcpStartTimers[key]! += 10_000
-				kcp[key]!.update(current: kcpStartTimers[key]!)
-			} else {
-				kcpUpdateTasks[key] = nil
+			self.kcp[key]!.update(current:iclock()) { buffer, promise in
+				c.accessContext { contextPointer in
+					var newBuffer = contextPointer.pointee.channel.allocator.buffer(capacity:buffer.count)
+					newBuffer.writeBytes(buffer)
+					contextPointer.pointee.write(self.wrapOutboundOut((key, newBuffer)), promise:promise)
+				}
+			 }
+
+			rcvLoop: while true {
+				do {
+					let receivedData = try self.kcp[key]!.receive()
+					c.accessContext { contextPointer in
+						contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
+					}
+				} catch { break rcvLoop } // received no data or it failed
 			}
 		}
-		
 		kcpUpdateTasks[key] = task
 	}
 	
 	private func reset(key:PublicKey, context:ChannelHandlerContext) {
-		if(kcpKillTasks[key] == nil) {
-			kcpKillTasks[key] = context.eventLoop.scheduleTask(in: kcpKillTime) { [weak self] in
+		if (kcpKillTasks[key] == nil) {
+			kcpKillTasks[key] = context.eventLoop.scheduleTask(in:kcpKillTime) { [weak self] in
 				self!.kcp[key] = nil
 			}
 		} else {
 			kcpKillTasks[key]!.cancel()
-			kcpKillTasks[key] = context.eventLoop.scheduleTask(in: kcpKillTime) { [weak self] in
+			kcpKillTasks[key] = context.eventLoop.scheduleTask(in:kcpKillTime) { [weak self] in
 				self!.kcp[key] = nil
 			}
 		}
 	}
 	
 	// Receiving kcp segment
-	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let (key, data) = unwrapInboundIn(data)
-		if(kcp[key] == nil) {
-			makeIkcpCb(key: key, context: context)
+		if (kcp[key] == nil) {
+			makeIkcpCb(key:key, context:context)
+			kcpUpdates(for:key, context:context)
 		}
-		
-		var _ = kcp[key]!.input(data: data)
-		
-		while let receivedData = try! kcp[key]!.receive() {
-			context.fireChannelRead(wrapInboundOut((key, receivedData)))
+		do {
+			_ = try data.withUnsafeReadableBytes { readableBytes in
+				_ = try kcp[key]!.input(readableBytes.baseAddress!.assumingMemoryBound(to:UInt8.self), count:readableBytes.count)
+			}
+		} catch let error {
+			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
-		
-		kcp[key]!.update(current: 0)
 	}
 	
 	// Receiving data which needs to be sent
-	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var (key, data) = unwrapOutboundIn(data)
 		if (kcp[key] == nil) {
 			makeIkcpCb(key:key, context:context)
+			kcpUpdates(for: key, context: context)
 		}
-		
-		var _ = kcp[key]!.send(buffer:&data, _len:data.count)
-		
-		kcp[key]!.update(current: 0)
-		
-		kcpCheckAck(for: key, context: context)
-		logger.debug("Sending outbound kcp segment to data handler")
+
+		do {
+			_ = try kcp[key]!.send(&data, count:data.count, assosiatedData: promise)
+		} catch let error {
+			logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
+		}
 	}
 }

@@ -1,20 +1,20 @@
 {
-  "originHash" : "2f8340ea999e2f09842785927ba9e399508b7d630d682a8e8c717f1f4f6cd8b8",
+  "originHash" : "d4ca88964029949ce3c28444ef6ee119d11c7cb0940119545c85c6ccc7c84941",
   "pins" : [
     {
       "identity" : "bedrock",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/bedrock.git",
       "state" : {
-        "revision" : "76009b9f299fb8e67736953b508df43985e21a7d"
+        "revision" : "d6f8cd9d3d89d34c7ec4cd19d840d0dbc41967f8"
       }
     },
     {
-      "identity" : "kcp-swift",
+      "identity" : "kcp-swift-core",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/bwyma1/kcp-Swift",
+      "location" : "https://github.com/tannerdsilva/kcp-swift-core",
       "state" : {
-        "revision" : "bf7f713ad832f7b49884587321a5ececd807c0c5"
+        "revision" : "c2d27e88fe1480f041aa5985701577052329aa91"
       }
     },
     {
@@ -22,8 +22,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/rawdog.git",
       "state" : {
-        "revision" : "3e748b37b1b53911500282464c9b5914d9eeccb3",
-        "version" : "19.0.2"
+        "revision" : "b249e367e35c0ea05ae7b7dc0046074b5b05c604"
       }
     },
     {

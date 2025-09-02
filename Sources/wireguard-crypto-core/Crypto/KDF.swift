@@ -3,9 +3,9 @@ import RAW_dh25519
 
 public typealias Key = RAW_dh25519.PublicKey
 
-public func wgKDFv2<T>(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> Result.Bytes32 where T:RAW_staticbuff {
-	return try data.RAW_access_staticbuff { dataBuff in
-		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff, count:MemoryLayout<T>.size)
+public func wgKDFv2<T>(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> Result.Bytes32 where T:RAW_accessible {
+	return try data.RAW_access { dataBuff in
+		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff.baseAddress!, count:dataBuff.count)
 	}
 }
 
@@ -15,9 +15,9 @@ public func wgKDFv2(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, co
 	}
 }
 
-public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> (Result.Bytes32, Result.Bytes32) where T:RAW_staticbuff {
-	return try data.RAW_access_staticbuff { dataBuff in
-		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff, count:MemoryLayout<T>.size)
+public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> (Result.Bytes32, Result.Bytes32) where T:RAW_accessible {
+	return try data.RAW_access { dataBuff in
+		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff.baseAddress!, count:dataBuff.count)
 	}
 }
 
@@ -33,9 +33,9 @@ public func wgKDFv2(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:Unsa
 	}
 }
 
-public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> (Result.Bytes32, Result.Bytes32, Result.Bytes32) where T:RAW_staticbuff {
-	return try data.RAW_access_staticbuff { dataBuff in
-		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff, count:MemoryLayout<T>.size)
+public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> (Result.Bytes32, Result.Bytes32, Result.Bytes32) where T:RAW_accessible {
+	return try data.RAW_access { dataBuff in
+		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff.baseAddress!, count:dataBuff.count)
 	}
 }
 
