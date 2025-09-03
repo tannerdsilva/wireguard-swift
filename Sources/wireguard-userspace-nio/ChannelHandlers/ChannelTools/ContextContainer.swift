@@ -8,12 +8,12 @@ public final class ContextContainer:@unchecked Sendable {
 		context = ctx
 	}
 	/// the only way to access the context is through this function, which ensures that the context is accessed in a thread-safe manner.
-	public borrowing func accessContext(_ body:(UnsafePointer<ChannelHandlerContext>) -> Void) {
+	public borrowing func accessContext<E, R>(_ body:(UnsafePointer<ChannelHandlerContext>) throws(E) -> R) throws(E) -> R where E:Swift.Error{
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
-		withUnsafePointer(to:context) {
-			body($0)
+		return try withUnsafePointer(to:context) { (ptrArg:UnsafePointer<ChannelHandlerContext>) throws(E) -> R in
+			try body(ptrArg)
 		}
 	}
 }

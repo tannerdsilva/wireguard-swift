@@ -37,13 +37,13 @@ extension PeerInfo.Live {
 
 	/// primary mechanism for storing chaining data for initiations sent outbound.
 	private struct SelfInitiated {
-		private let initiatorStaticPublicKey:PublicKey
+		private let responderStaticPublicKey:PublicKey
 		private let wireguardHandler:Unmanaged<WireguardHandler>
 		private var lastHandshakeEmissionTime:NIODeadline? = nil
 		private var initiatorChainingData:(initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? = nil
-		internal init(initiatorStaticPublicKey initiatorPub:PublicKey, handler:Unmanaged<WireguardHandler>) {
+		internal init(responderStaticPublicKey initiatorPub:PublicKey, handler:Unmanaged<WireguardHandler>) {
 			wireguardHandler = handler
-			initiatorStaticPublicKey = initiatorPub
+			responderStaticPublicKey = initiatorPub
 		}
 		fileprivate mutating func canProceedWithHandshakeEmission(context:borrowing ChannelHandlerContext, now:NIODeadline) -> Bool {
 			#if DEBUG
@@ -60,9 +60,9 @@ extension PeerInfo.Live {
 			#endif
 			initiatorChainingData = (ephemeralPrivateKey, c, h, authenticatedPayload)
 			lastHandshakeEmissionTime = now
-			_ = wireguardHandler.takeUnretainedValue().activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:initiatorStaticPublicKey, peerIndex:authenticatedPayload.payload.initiatorPeerIndex)
+			_ = wireguardHandler.takeUnretainedValue().activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:responderStaticPublicKey, initiatorPeerIndex:authenticatedPayload.payload.initiatorPeerIndex)
 		}
-		fileprivate mutating func remove(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
+		fileprivate mutating func claimInitiation(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -77,7 +77,7 @@ extension PeerInfo.Live {
 			defer {
 				initiatorChainingData = nil
 			}
-			guard wireguardHandler.takeUnretainedValue().activelyInitiatingIndicies.remove(context:context, publicKey:initiatorStaticPublicKey) == initiatorPeerIndex else {
+			guard wireguardHandler.takeUnretainedValue().activelyInitiatingIndicies.removeIfExists(context:context, publicKey:responderStaticPublicKey) == initiatorPeerIndex else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			return initiatorChainingData
@@ -88,7 +88,7 @@ extension PeerInfo.Live {
 extension PeerInfo {
 	internal final class Live {
 		private let log:Logger
-		private let wgh:Unmanaged<WireguardHandler>
+		private let wireguardHandler:Unmanaged<WireguardHandler>
 
 		// standard configuration stuff
 		internal let publicKey:PublicKey
@@ -98,7 +98,7 @@ extension PeerInfo {
 
 		// handshake initiation
 		private var selfInitiatedKeys:SelfInitiated
-		private var handshakeInitiationTask:RepeatedTask? = nil
+		private var handshakeInitiationTask:(NIODeadline, RepeatedTask)? = nil
 
 		// cryptokey rotation
 		private var rotation:Rotating<(NIODeadline, HandshakeGeometry<PeerIndex>)>
@@ -126,8 +126,8 @@ extension PeerInfo {
 			rotation = Rotating<(NIODeadline, HandshakeGeometry<PeerIndex>)>()
 
 			let um = Unmanaged.passUnretained(handler)
-			wgh = um
-			selfInitiatedKeys = SelfInitiated(initiatorStaticPublicKey:peerInfo.publicKey, handler:um)
+			wireguardHandler = um
+			selfInitiatedKeys = SelfInitiated(responderStaticPublicKey:peerInfo.publicKey, handler:um)
 		}
 		
 		internal enum SendVarsResult {
@@ -143,17 +143,6 @@ extension PeerInfo {
 				rekeyAttemptTimeNow = NIODeadline.now()
 			}
 			return (nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend, geometry:currentGeometry)
-		}
-
-		internal func getSendVarsV2() -> SendVarsResult? {
-			guard let (_, currentGeometry) = rotation.current else {
-				return .noCurrentKeys(lastRekeyAttempt:rekeyAttemptTimeNow)
-			}
-			defer {
-				rekeyAttemptTimeNow = NIODeadline.now()
-			}
-			// we have a current geometry, return it
-			return .currentKeys(nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend, geometry:currentGeometry)
 		}
 
 		internal func nSendUpdate(_ nSend:Counter, geometry:HandshakeGeometry<PeerIndex>) {
@@ -197,14 +186,54 @@ extension PeerInfo.Live {
 		return selfInitiatedKeys.canProceedWithHandshakeEmission(context:context, now:now)
 	}
 
-	internal func forgeAndSendHandshakeInitiation(context:ChannelHandlerContext, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, now:NIODeadline) throws {
+	internal func launchHandshakeTask(context:ChannelHandlerContext, now:NIODeadline, endpointOverride epOverride:Endpoint?, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		let targetEndpoint:Endpoint
+		if epOverride != nil {
+			// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
+			targetEndpoint = epOverride!
+		} else if ep != nil {
+			// use the value that came from the peer list
+			targetEndpoint = ep!
+		} else {
+			// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
+			throw WireguardHandler.UnknownPeerEndpoint()
+		}
+
+		guard rekeyAttemptTimeNow == nil || (rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > now else {
+			// a rekey attempt was made recently, do not send another handshake initiation
+			log.debug("skipping handshake initiation emission due to recent rekey attempt")
+
+			throw WireguardHandler.RekeyAttemptTooSoon()
+		}
+
+		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:.seconds(0), delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = log] task in
+			guard let self = self else { return }
+			let currentTime = NIODeadline.now()
+			guard self.rekeyAttemptTimeNow == nil || (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
+				// a rekey attempt was made recently, do not send another handshake initiation
+				l.debug("skipping handshake initiation emission due to recent rekey attempt")
+				return
+			}
+			withUnsafePointer(to:pubKey) { pubKeyPtr in
+				do {
+					let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr)
+					try cc.accessContext { contextPtr in
+						let authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
+						self.selfInitiatedKeys.installInitiation(context:contextPtr.pointee, now:currentTime, initiatorEphemeralPrivateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
+						wireguardHandler.takeUnretainedValue().writeMessage(.initiation(authenticatedPayload), to:toEP, context:contextPtr.pointee, promise:nil)
+					}
+				} catch let error {
+					self.log.error("failed to emit handshake initiation: \(error)", metadata:["error":"\(error)"])
+				}
+			}
+		}))
 		try withUnsafePointer(to:publicKey) { responderStaticPublicKeyPtr in
 			let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorStaticPrivateKey, responderStaticPublicKey:responderStaticPublicKeyPtr)
 			let authenticatedPayload = try payload.finalize(responderStaticPublicKey:responderStaticPublicKeyPtr)
-			selfInitiatedKeys.installInitiation(context:context, now:NIODeadline.now(), initiatorEphemeralPrivateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
+			selfInitiatedKeys.installInitiation(context:context, now:now, initiatorEphemeralPrivateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
 		}
 	}
 }

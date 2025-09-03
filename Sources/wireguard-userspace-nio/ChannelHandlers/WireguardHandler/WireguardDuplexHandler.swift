@@ -102,10 +102,11 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	internal let isCongested:Atomic<Bool> = .init(false)
 
+	/// used to help match inbound handshake initiation responses with their corresponding peers. 
 	internal struct ActivelyInitiating {
 		private var publicKeyInitiationIndex:[PublicKey:PeerIndex] = [:]
 		private var initiationIndexPublicKey:[PeerIndex:PublicKey] = [:]
-		internal mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, peerIndex:PeerIndex) -> PeerIndex? {
+		internal mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, initiatorPeerIndex peerIndex:PeerIndex) -> PeerIndex? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -121,7 +122,28 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 			return outgoingPeerIndex
 		}
 
-		internal mutating func remove(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
+		internal borrowing func match(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			return initiationIndexPublicKey[peerIndex]
+		}
+
+		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard let publicKey = initiationIndexPublicKey.removeValue(forKey:peerIndex) else {
+				// no existing value
+				return nil
+			}
+			guard publicKeyInitiationIndex.removeValue(forKey:publicKey) != nil else {
+				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+			}
+			return publicKey
+		}
+
+		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -171,7 +193,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		operatingState = .initialized(initialPeers)
 	}
 
-	private func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
+	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
@@ -514,6 +536,9 @@ extension WireguardHandler {
 
 	/// thrown when a handshake initiation is attempted on a peer with no documented endpoint
 	internal struct UnknownPeerEndpoint:Swift.Error {}
+	/// thrown when a rekey attempt is made before the rekey timer will allow for the next rekey event
+	internal struct RekeyAttemptTooSoon:Swift.Error {}
+	
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
