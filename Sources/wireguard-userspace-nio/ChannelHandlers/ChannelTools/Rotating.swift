@@ -1,4 +1,16 @@
 internal struct Rotating<Element> {
+	internal enum Positioned {
+		case previous(Element)
+		case current(Element)
+		case next(Element)
+		internal var element:Element {
+			switch self {
+				case .previous(let e): return e
+				case .current(let e): return e
+				case .next(let e): return e
+			}
+		}
+	}
 	internal private(set) var previous:Element?
 	internal private(set) var current:Element?
 	internal private(set) var next:Element?

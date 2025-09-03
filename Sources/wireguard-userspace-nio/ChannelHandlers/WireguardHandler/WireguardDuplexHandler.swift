@@ -73,11 +73,6 @@ extension WireguardHandler {
 	}
 }
 
-internal enum WireguardEvent {
-	case handshakeCompleted(PublicKey, PeerIndex, HandshakeGeometry<PeerIndex>)
-	case transitData(PublicKey, PeerIndex, [UInt8])
-}
-
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = (Endpoint, Message.NIO)
 	internal typealias InboundOut = (PublicKey, ByteBuffer)
@@ -106,6 +101,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal struct AutomaticallyUpdated {
 		/// initiation indicies. this variable is modified directly by the PeerIndex.
 		internal var activelyInitiatingIndicies = ActivelyInitiatingIndex()
+		internal var activeSessionIndicies = MPeerIndex()
 	}
 
 	internal var automaticallyUpdatedVariables = AutomaticallyUpdated()
@@ -113,18 +109,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	// functionally managed
 	private var peerDeltaEngine:PeerDeltaEngine!
 	private var encodeBuffer:ByteBuffer!
-	
-	private var rekeyGate = RekeyGate()
-	private var selfInitiatedIndexes:SelfInitiatedIndexes
-	
-	private var dualPeerIndex = DualPeerIndex()
-	
+		
 	// directly managed
 	private var operatingState:State
 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
-		selfInitiatedIndexes = SelfInitiatedIndexes(initiatorStaticPrivateKey: pkIn)
 		let publicKey = PublicKey(privateKey: privateKey)
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
@@ -172,7 +162,6 @@ extension WireguardHandler {
 					// when peer is removed
 					guard let self = self else { return }
 					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
-					self.dualPeerIndex.remove(publicKey:removedPublicKey)
 				})
 				operatingState = .channelEngaged
 			default:
@@ -203,6 +192,7 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		let now = NIODeadline.now()
 		var logger = log
 		// handles handshake packets, else passes them down
 		do {
@@ -247,17 +237,12 @@ extension WireguardHandler {
 					}
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
-					let outgoingGeometry = try livePeerInfo.applyPeerInitiated(geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
-					selfInitiatedIndexes.clear(publicKey:initiatorStaticPublicKey)
+					try livePeerInfo.applyPeerInitiated(context:context, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
-					dualPeerIndex.add(geometry:geometry, publicKey:initiatorStaticPublicKey)
-					if outgoingGeometry != nil {
-						dualPeerIndex.remove(geometry:outgoingGeometry!)
-					}
 					break;
 				case .response(let payload):
 					/*
@@ -267,39 +252,27 @@ extension WireguardHandler {
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
-					guard let peerPubs = automaticallyUpdatedVariables.activelyInitiatingIndicies.match(context:context, peerIndex:payload.payload.initiatorIndex) else {
+					guard let peerPub = automaticallyUpdatedVariables.activelyInitiatingIndicies.match(context:context, peerIndex:payload.payload.initiatorIndex) else {
 						logger.critical("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPubs) else {
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPub) else {
 						logger.critical("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					// guard let chainingData = livePeerInfo.
-					guard var chainingData = selfInitiatedIndexes.extract(indexM:payload.payload.initiatorIndex) else {
+					guard var chainingData = try livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:payload.payload.initiatorIndex) else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					let val = try payload.validate(c:chainingData.c, h:chainingData.h, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:chainingData.privateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
+					let val = try payload.validate(c:chainingData.c, h:chainingData.h, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:chainingData.initiatorEphemeralPrivateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
 					let geometry = HandshakeGeometry<PeerIndex>.selfInitiated(m:payload.payload.initiatorIndex, mp:payload.payload.responderIndex)
-					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:chainingData.peerPublicKey) else {
-						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPub) else {
+						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(peerPub)"])
 						return
 					}
 					livePeerInfo.updateEndpoint(endpoint)
-					let (previousOutgoing, nextOutgoing) = try livePeerInfo.applySelfInitiated(geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
-					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(chainingData.peerPublicKey)"])
-					dualPeerIndex.add(geometry:geometry, publicKey:chainingData.peerPublicKey)
-					if previousOutgoing != nil {
-						dualPeerIndex.remove(geometry:previousOutgoing!)
-					}
-					if nextOutgoing != nil {
-						dualPeerIndex.remove(geometry:nextOutgoing!)
-					}
-					while var pendingPacket = livePeerInfo.dequeuePostHandshake(context:context) {
-						logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
-						writeBytes(context:context, publicKey:chainingData.peerPublicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
-					}
+					try livePeerInfo.applySelfInitiated(context:context, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
+					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(peerPub)"])
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -309,13 +282,9 @@ extension WireguardHandler {
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
-					guard let chainingData = selfInitiatedIndexes.extract(indexM:cookiePayload.receiverIndex) else {
-						logger.error("received cookie response for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
-						return
-					}
 //					guard let peerInfo = peerDeltaEngine[
-					logger.debug("received cookie packet", metadata:["public-key_remote":"\(chainingData.peerPublicKey)"])
-					withUnsafePointer(to:chainingData.peerPublicKey) { expectedPeerPublicKey in
+					logger.debug("received cookie packet", metadata:["public-key_remote":""])
+					/*withUnsafePointer(to:peerPub) { expectedPeerPublicKey in
 						var phantomCookie:Message.Initiation.Payload.Authenticated
 						do {
 							phantomCookie = try chainingData.authenticatedPayload.payload.finalize(responderStaticPublicKey:expectedPeerPublicKey, cookie:cookiePayload)
@@ -337,12 +306,12 @@ extension WireguardHandler {
 								self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 							}
 						}
-					}
+					}*/
 					break;
 				
 				case .data(recipientIndex: let recipientIndex, counter: let counter, payload: let payload):
-					// verify that a current peer index exists for the public key already. if 
-					guard let (identifiedPublicKey, existingGeometry) = dualPeerIndex.seek(peerM:recipientIndex) else {
+					// verify that a current peer index exists for the public key already.
+					guard let identifiedPublicKey = automaticallyUpdatedVariables.activeSessionIndicies.seek(indexM:recipientIndex) else {
 						logger.error("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
@@ -350,6 +319,11 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(identifiedPublicKey)"])
 						return
 					}
+					guard let existingGeometryPositioned = livePeerInfo.geometry(forPeerM:recipientIndex) else {
+						logger.critical("could not find matching traffic for inbound data peer index m \(recipientIndex)")
+						return
+					}
+					let existingGeometry = existingGeometryPositioned.element
 					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometry)!
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
@@ -366,11 +340,11 @@ extension WireguardHandler {
 						}
 					}
 
-					if let (_, nextGeometry) = livePeerInfo.nextRotation(), nextGeometry == existingGeometry {
-						logger.trace("applying rotation for recv vars", metadata:["public-key_remote":"\(identifiedPublicKey)"])
-						if let lastGeometry = livePeerInfo.applyRotation() {
-							dualPeerIndex.remove(geometry:lastGeometry)
-						}
+					switch existingGeometryPositioned {
+						case .next(let nextGeometry):
+							_ = livePeerInfo.applyRotation()
+						default:
+							break
 					}
 
 					guard encodeBuffer.readableBytes != 0 else {
@@ -390,59 +364,7 @@ extension WireguardHandler {
 
 // swift nio write handler function
 extension WireguardHandler {
-	private func initiateHandshake(context:ChannelHandlerContext, peerPublicKey:PublicKey, endpointOverride endpoint:Endpoint?, promise:EventLoopPromise<Void>?) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-	}
-	private func beginHandshakeInitiation(context:ChannelHandlerContext, peerPublicKey:PublicKey, endpointOverride endpoint:Endpoint?, logger:Logger) throws {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		let nioNow = NIODeadline.now()
-		try withUnsafePointer(to:peerPublicKey) { expectedPeerPublicKey in
-			// endpoint logic
-			let targetEndpoint:Endpoint
-			if endpoint != nil {
-				// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
-				targetEndpoint = endpoint!
-			} else if let peerEndpoint = peerDeltaEngine.peerLookup(publicKey:expectedPeerPublicKey.pointee)?.endpoint() {
-				// use the value that came from the peer list
-				targetEndpoint = peerEndpoint
-			} else {
-				// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
-				throw UnknownPeerEndpoint()
-			}
-
-			guard rekeyGate.canRekey(publicKey:peerPublicKey, now:nioNow, delta:Self.rekeyTimeout) == true else {
-				// rekey not allowed at this time
-				logger.trace("rekey not allowed at this time. skipping handshake initiation", metadata:["public-key_remote":"\(peerPublicKey)"])
-				return
-			}
-			
-			// forge
-			let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:privateKey, responderStaticPublicKey:expectedPeerPublicKey)
-			let authenticatedPayload = try payload.finalize(responderStaticPublicKey:expectedPeerPublicKey)
-			
-			// document
-			selfInitiatedIndexes.rekey(context:context, indexM:payload.initiatorPeerIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)) { [weak self, ap = authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = targetEndpoint] timer in
-				// rekey attempt task.
-				guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
-					// recurring task should no longer be running
-					timer.cancel()
-					return
-				}
-				// write another initiation packet
-				c.accessContext { contextPointer in
-					self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
-				}
-			}
-			logger.debug("successfully forged handshake initiation message", metadata:["endpoint_remote":"\(targetEndpoint)", "public-key_remote":"\(peerPublicKey)", "index_initiator":"\(payload.initiatorPeerIndex)"])
-			writeMessage(.initiation(authenticatedPayload), to:targetEndpoint, context:context, promise:nil)
-		}
-	}
-
-	private func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) {
+	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif

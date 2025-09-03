@@ -34,7 +34,7 @@ extension Message {
 				self.timestampTag = timestampTag
 			}
 
-			public static func forge(initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, index:PeerIndex? = nil) throws -> (c:Result.Bytes32, h:Result.Bytes32, ephiPrivateKey:MemoryGuarded<PrivateKey>, payload:Payload) {
+			public static func forge(initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, responderStaticPublicKey:UnsafePointer<PublicKey>, initiatorPeerIndex index:PeerIndex? = nil) throws -> (c:Result.Bytes32, h:Result.Bytes32, ephiPrivateKey:MemoryGuarded<PrivateKey>, payload:Payload) {
 				// setup: get initiator public key
 				var initiatorStaticPublicKey = PublicKey(privateKey:initiatorStaticPrivateKey)
 
