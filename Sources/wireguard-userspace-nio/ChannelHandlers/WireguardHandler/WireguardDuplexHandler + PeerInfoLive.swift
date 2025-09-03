@@ -7,6 +7,65 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
+extension WireguardHandler {
+	/// used to help match inbound handshake initiation responses with their corresponding peers. 
+	internal struct ActivelyInitiatingIndex {
+		private var publicKeyInitiationIndex:[PublicKey:PeerIndex] = [:]
+		private var initiationIndexPublicKey:[PeerIndex:PublicKey] = [:]
+		internal mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, initiatorPeerIndex peerIndex:PeerIndex) -> PeerIndex? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard let outgoingPeerIndex = publicKeyInitiationIndex.updateValue(peerIndex, forKey:publicKey) else {
+				// no existing value
+				publicKeyInitiationIndex[publicKey] = peerIndex
+				initiationIndexPublicKey[peerIndex] = publicKey
+				return nil
+			}
+			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
+				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+			}
+			initiationIndexPublicKey[peerIndex] = publicKey
+			return outgoingPeerIndex
+		}
+
+		internal borrowing func match(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			return initiationIndexPublicKey[peerIndex]
+		}
+
+		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard let publicKey = initiationIndexPublicKey.removeValue(forKey:peerIndex) else {
+				// no existing value
+				return nil
+			}
+			guard publicKeyInitiationIndex.removeValue(forKey:publicKey) != nil else {
+				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+			}
+			return publicKey
+		}
+
+		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard let outgoingPeerIndex = publicKeyInitiationIndex.removeValue(forKey:publicKey) else {
+				// no existing value
+				return nil
+			}
+			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
+				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
+			}
+			return outgoingPeerIndex
+		}
+	}
+}
+
 extension PeerInfo.Live {
 	private struct PendingPostHandshake {
 		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>?)] = []
@@ -15,6 +74,12 @@ extension PeerInfo.Live {
 		}
 		internal mutating func dequeue() -> (data:ByteBuffer, promise:EventLoopPromise<Void>?)? {
 			return pendingWriteData.isEmpty ? nil : pendingWriteData.removeFirst()
+		}
+		internal mutating func flushAll<E>(error:E) where E:Swift.Error {
+			for (_, promise) in pendingWriteData {
+				promise?.fail(error)
+			}
+			pendingWriteData.removeAll()
 		}
 	}
 
@@ -36,7 +101,7 @@ extension PeerInfo.Live {
 	}
 
 	/// primary mechanism for storing chaining data for initiations sent outbound.
-	private struct SelfInitiated {
+	private struct CurrentSelfInitiatedInfo {
 		private let responderStaticPublicKey:PublicKey
 		private let wireguardHandler:Unmanaged<WireguardHandler>
 		private var lastHandshakeEmissionTime:NIODeadline? = nil
@@ -45,14 +110,19 @@ extension PeerInfo.Live {
 			wireguardHandler = handler
 			responderStaticPublicKey = initiatorPub
 		}
-		fileprivate mutating func canProceedWithHandshakeEmission(context:borrowing ChannelHandlerContext, now:NIODeadline) -> Bool {
+		/// calculates the amount of seconds that must be delayed before sending a handshake initiation in order to stay in conformance with the configured `WireguardHandler.rekeyTimeout`.
+		/// - returns: the amount of time to delay, or nil if no delay is required
+		fileprivate mutating func handshakeRekeyDelay(context:borrowing ChannelHandlerContext, now:NIODeadline) -> TimeAmount? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
-			guard lastHandshakeEmissionTime == nil || (lastHandshakeEmissionTime! + WireguardHandler.rekeyTimeout) < now else {
-				return false
+			guard lastHandshakeEmissionTime != nil else {
+				return nil
 			}
-			return true
+			guard (lastHandshakeEmissionTime! + WireguardHandler.rekeyTimeout) > now else {
+				return nil
+			}
+			return ((lastHandshakeEmissionTime! + WireguardHandler.rekeyTimeout) - now)
 		}
 		fileprivate mutating func installInitiation(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorEphemeralPrivateKey ephemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, authenticatedPayload:Message.Initiation.Payload.Authenticated) {
 			#if DEBUG
@@ -60,7 +130,7 @@ extension PeerInfo.Live {
 			#endif
 			initiatorChainingData = (ephemeralPrivateKey, c, h, authenticatedPayload)
 			lastHandshakeEmissionTime = now
-			_ = wireguardHandler.takeUnretainedValue().activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:responderStaticPublicKey, initiatorPeerIndex:authenticatedPayload.payload.initiatorPeerIndex)
+			_ = wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:responderStaticPublicKey, initiatorPeerIndex:authenticatedPayload.payload.initiatorPeerIndex)
 		}
 		fileprivate mutating func claimInitiation(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
 			#if DEBUG
@@ -77,7 +147,7 @@ extension PeerInfo.Live {
 			defer {
 				initiatorChainingData = nil
 			}
-			guard wireguardHandler.takeUnretainedValue().activelyInitiatingIndicies.removeIfExists(context:context, publicKey:responderStaticPublicKey) == initiatorPeerIndex else {
+			guard wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activelyInitiatingIndicies.removeIfExists(context:context, publicKey:responderStaticPublicKey) == initiatorPeerIndex else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			return initiatorChainingData
@@ -97,8 +167,13 @@ extension PeerInfo {
 		internal var handshakeInitiationTime:TAI64N? = nil
 
 		// handshake initiation
-		private var selfInitiatedKeys:SelfInitiated
-		private var handshakeInitiationTask:(NIODeadline, RepeatedTask)? = nil
+		private var selfInitiatedKeys:CurrentSelfInitiatedInfo
+		private var handshakeInitiationTask:(NIODeadline, RepeatedTask)? = nil {
+			didSet {
+				oldValue?.1.cancel()
+				postHandshakePackets.flushAll(error:)
+			}
+		}
 
 		// cryptokey rotation
 		private var rotation:Rotating<(NIODeadline, HandshakeGeometry<PeerIndex>)>
@@ -127,20 +202,16 @@ extension PeerInfo {
 
 			let um = Unmanaged.passUnretained(handler)
 			wireguardHandler = um
-			selfInitiatedKeys = SelfInitiated(responderStaticPublicKey:peerInfo.publicKey, handler:um)
+			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
 		}
 		
-		internal enum SendVarsResult {
-			case currentKeys(nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)
-			case noCurrentKeys(lastRekeyAttempt:NIODeadline?)
-		}
-		internal func getSendVars() -> (nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)? {
+		internal func getSendVars(now:NIODeadline) -> (nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)? {
 			guard let (_, currentGeometry) = rotation.current else {
 				// no active handshakes
 				return nil
 			}
 			defer {
-				rekeyAttemptTimeNow = NIODeadline.now()
+				rekeyAttemptTimeNow = now
 			}
 			return (nSend:nVars[currentGeometry]!.valueSend, tSend:tVars[currentGeometry]!.valueSend, geometry:currentGeometry)
 		}
@@ -178,18 +249,15 @@ extension PeerInfo {
 
 // MARK: Handshake Initiation
 extension PeerInfo.Live {
-	/// called to determine if a handshake can be sent at this time
-	internal func canProceedWithHandshakeEmission(context:ChannelHandlerContext, now:NIODeadline) -> Bool {
+	public struct HandshakeTaskAlreadyRunning:Swift.Error {}
+	internal func launchHandshakeInitiationTask(context:ChannelHandlerContext, now:NIODeadline, endpointOverride epOverride:Endpoint?, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		return selfInitiatedKeys.canProceedWithHandshakeEmission(context:context, now:now)
-	}
-
-	internal func launchHandshakeTask(context:ChannelHandlerContext, now:NIODeadline, endpointOverride epOverride:Endpoint?, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>) throws {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
+		guard handshakeInitiationTask == nil else {
+			log.error("handshake initiation task is already running")
+			throw HandshakeTaskAlreadyRunning()
+		}
 		let targetEndpoint:Endpoint
 		if epOverride != nil {
 			// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
@@ -201,40 +269,50 @@ extension PeerInfo.Live {
 			// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
 			throw WireguardHandler.UnknownPeerEndpoint()
 		}
-
-		guard rekeyAttemptTimeNow == nil || (rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > now else {
+		if rekeyAttemptTimeNow == nil {
+			rekeyAttemptTimeNow = now
+		}
+		guard (rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > now else {
 			// a rekey attempt was made recently, do not send another handshake initiation
-			log.debug("skipping handshake initiation emission due to recent rekey attempt")
-
+			log.debug("skipping handshake initiation emission due to recent rekey attempt", metadata:["rekey_attempt_time":"\(rekeyAttemptTimeNow)", "current_time":"\(now)"])
 			throw WireguardHandler.RekeyAttemptTooSoon()
 		}
-
-		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:.seconds(0), delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = log] task in
+		let useInitialDelay = selfInitiatedKeys.handshakeRekeyDelay(context:context, now:now) ?? .seconds(0)
+		log.trace("launching handshake initiation task to write outbound handshake message", metadata:["initial_delay":"\(useInitialDelay)"])
+		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:useInitialDelay, delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = log] _ in
 			guard let self = self else { return }
 			let currentTime = NIODeadline.now()
-			guard self.rekeyAttemptTimeNow == nil || (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
-				// a rekey attempt was made recently, do not send another handshake initiation
-				l.debug("skipping handshake initiation emission due to recent rekey attempt")
+			guard (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
+				// rekey time has passed, we can no longer attempt to make handshake initiations
+				l.debug("skipping handshake initiation emission due to recent rekey attempt outside of the recurring task")
+				
+				// cancel the recurring task
+				self.handshakeInitiationTask = nil
 				return
 			}
-			withUnsafePointer(to:pubKey) { pubKeyPtr in
-				do {
-					let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr)
-					try cc.accessContext { contextPtr in
+			do {
+				try cc.accessContext { contextPtr in
+					try withUnsafePointer(to:pubKey) { pubKeyPtr in
+						// forge the authenticated message
+						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr)
 						let authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
+						// install the resulting crypto keys in the self initiated key storage
 						self.selfInitiatedKeys.installInitiation(context:contextPtr.pointee, now:currentTime, initiatorEphemeralPrivateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
+						// write the resulting wireguard message to the remote peer
 						wireguardHandler.takeUnretainedValue().writeMessage(.initiation(authenticatedPayload), to:toEP, context:contextPtr.pointee, promise:nil)
 					}
-				} catch let error {
-					self.log.error("failed to emit handshake initiation: \(error)", metadata:["error":"\(error)"])
 				}
+			} catch let error {
+				cc.accessContext { contextPtr in
+					contextPtr.pointee.fireErrorCaught(error)
+				}
+				self.handshakeInitiationTask = nil
 			}
 		}))
-		try withUnsafePointer(to:publicKey) { responderStaticPublicKeyPtr in
-			let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorStaticPrivateKey, responderStaticPublicKey:responderStaticPublicKeyPtr)
-			let authenticatedPayload = try payload.finalize(responderStaticPublicKey:responderStaticPublicKeyPtr)
-			selfInitiatedKeys.installInitiation(context:context, now:now, initiatorEphemeralPrivateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
-		}
+	}
+
+	internal func handshakeInitiationResponse(context:ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) throws {
+		selfInitiatedKeys.claimInitiation(context: context, now: now, initiatorPeerIndex:initiatorPeerIndex)
 	}
 }
 

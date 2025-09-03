@@ -102,65 +102,13 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	internal let isCongested:Atomic<Bool> = .init(false)
 
-	/// used to help match inbound handshake initiation responses with their corresponding peers. 
-	internal struct ActivelyInitiating {
-		private var publicKeyInitiationIndex:[PublicKey:PeerIndex] = [:]
-		private var initiationIndexPublicKey:[PeerIndex:PublicKey] = [:]
-		internal mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, initiatorPeerIndex peerIndex:PeerIndex) -> PeerIndex? {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			guard let outgoingPeerIndex = publicKeyInitiationIndex.updateValue(peerIndex, forKey:publicKey) else {
-				// no existing value
-				publicKeyInitiationIndex[publicKey] = peerIndex
-				initiationIndexPublicKey[peerIndex] = publicKey
-				return nil
-			}
-			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
-				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
-			}
-			return outgoingPeerIndex
-		}
-
-		internal borrowing func match(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			return initiationIndexPublicKey[peerIndex]
-		}
-
-		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			guard let publicKey = initiationIndexPublicKey.removeValue(forKey:peerIndex) else {
-				// no existing value
-				return nil
-			}
-			guard publicKeyInitiationIndex.removeValue(forKey:publicKey) != nil else {
-				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
-			}
-			return publicKey
-		}
-
-		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			guard let outgoingPeerIndex = publicKeyInitiationIndex.removeValue(forKey:publicKey) else {
-				// no existing value
-				return nil
-			}
-			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
-				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
-			}
-			return outgoingPeerIndex
-		}
+	/// stored variables of the WireguardHandler that are automatically managed through Unmanaged instances of the WireguardHandler being stored in sub-structures.
+	internal struct AutomaticallyUpdated {
+		/// initiation indicies. this variable is modified directly by the PeerIndex.
+		internal var activelyInitiatingIndicies = ActivelyInitiatingIndex()
 	}
-	
-	/// initiation indicies. this variable is modified directly by the PeerIndex.
-	internal var activelyInitiatingIndicies = ActivelyInitiating()
 
+	internal var automaticallyUpdatedVariables = AutomaticallyUpdated()
 
 	// functionally managed
 	private var peerDeltaEngine:PeerDeltaEngine!
@@ -319,6 +267,15 @@ extension WireguardHandler {
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
+					guard let peerPubs = automaticallyUpdatedVariables.activelyInitiatingIndicies.match(context:context, peerIndex:payload.payload.initiatorIndex) else {
+						logger.critical("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
+						return
+					}
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPubs) else {
+						logger.critical("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
+						return
+					}
+					// guard let chainingData = livePeerInfo.
 					guard var chainingData = selfInitiatedIndexes.extract(indexM:payload.payload.initiatorIndex) else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
@@ -489,9 +446,11 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		let logger = log
+		var logger = log
+		let now = NIODeadline.now()
+		logger[metadataKey: "public-key_remote"] = "\(publicKey)"
 		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
-			logger.error("peer is not configured. can not write data.", metadata:["public-key_remote":"\(publicKey)"])
+			logger.error("peer is not configured. can not write data.")
 			promise?.fail(UnknownPeerEndpoint())
 			return
 		}
@@ -500,12 +459,15 @@ extension WireguardHandler {
 			promise?.fail(UnknownPeerEndpoint())
 			return
 		}
-		guard let (nSendCur, tSend, currentHandshakeGeometry) = peerInfoLive.getSendVars() else {
+		guard let (nSendCur, tSend, currentHandshakeGeometry) = peerInfoLive.getSendVars(now:now) else {
 			// need to send a handshake and then the data can be sent
 			do {
-				try beginHandshakeInitiation(context:context, peerPublicKey:publicKey, endpointOverride:ep, logger:logger)
+				try peerInfoLive.launchHandshakeInitiationTask(context:context, now:now, endpointOverride:ep, initiatorStaticPrivateKey:privateKey)
+			} catch is PeerInfo.Live.HandshakeTaskAlreadyRunning {
+				// do nothing
 			} catch let error {
-				logger.error("failed to begin handshake initiation", metadata:["error":"\(error)"])
+				logger.error("error thrown while trying to launch handshake initiation task", metadata:["error":"\(error)"])
+				context.fireErrorCaught(error)
 				promise?.fail(error)
 				return
 			}
