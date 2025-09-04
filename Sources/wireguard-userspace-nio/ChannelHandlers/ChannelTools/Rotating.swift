@@ -11,9 +11,9 @@ internal struct Rotating<Element> {
 			}
 		}
 	}
-	internal private(set) var previous:Element?
-	internal private(set) var current:Element?
-	internal private(set) var next:Element?
+	internal var previous:Element?
+	internal var current:Element?
+	internal var next:Element?
 	
 	/// initialize a rotating value with no content (`nil` assigned to all 3 stored variables)
 	internal init() {

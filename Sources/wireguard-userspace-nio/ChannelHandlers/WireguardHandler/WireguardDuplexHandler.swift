@@ -52,25 +52,6 @@ extension WireguardHandler {
 			return peers[publicKey]
 		}
 	}
-	// i think this needs some work
-	internal struct RekeyGate {
-		private var pubkeyRekeyInitTime:[PublicKey:NIODeadline] = [:]
-		internal mutating func canRekey(publicKey clientPub:PublicKey, now:NIODeadline, delta:TimeAmount) -> Bool {
-			guard let hasStartTime = pubkeyRekeyInitTime[clientPub] else {
-				// no prior rekey initiation time stored...rekey allowed.
-				pubkeyRekeyInitTime[clientPub] = now
-				return true
-			}
-
-			guard hasStartTime + delta <= now else {
-				// the initiation time + delta is further in the future than `now`...so rekey not allowed.
-				return false
-			}
-
-			pubkeyRekeyInitTime[clientPub] = now
-			return true
-		}
-	}
 }
 
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
@@ -100,11 +81,11 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// stored variables of the WireguardHandler that are automatically managed through Unmanaged instances of the WireguardHandler being stored in sub-structures.
 	internal struct AutomaticallyUpdated {
 		/// initiation indicies. this variable is modified directly by the PeerIndex.
-		internal var activelyInitiatingIndicies = ActivelyInitiatingIndex()
-		internal var activeSessionIndicies = MPeerIndex()
+		internal var activelyInitiatingIndicies:ActivelyInitiatingIndex
+		internal var activeSessionIndicies:MPeerIndex
 	}
 
-	internal var automaticallyUpdatedVariables = AutomaticallyUpdated()
+	internal var automaticallyUpdatedVariables:AutomaticallyUpdated
 
 	// functionally managed
 	private var peerDeltaEngine:PeerDeltaEngine!
@@ -116,6 +97,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
+		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:ActivelyInitiatingIndex(), activeSessionIndicies: MPeerIndex(logLevel:logLevel))
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		buildLogger[metadataKey:"public-key_self"] = "\(publicKey)"
@@ -319,12 +301,13 @@ extension WireguardHandler {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(identifiedPublicKey)"])
 						return
 					}
-					guard let existingGeometryPositioned = livePeerInfo.geometry(forPeerM:recipientIndex) else {
+					guard let existingGeometryPositioned = livePeerInfo.session(forPeerM:recipientIndex) else {
 						logger.critical("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
-					let existingGeometry = existingGeometryPositioned.element
-					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometry)!
+					let session = existingGeometryPositioned.element
+					let existingGeometry = session.geometry
+					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometryPositioned)!
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
 						return

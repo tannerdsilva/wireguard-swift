@@ -8,14 +8,21 @@ import Synchronization
 import bedrock
 
 extension WireguardHandler {
-
 	internal struct MPeerIndex {
+		private let log:Logger
 		private var peerMPublicKey:[PeerIndex:PublicKey] = [:]
 		private var publicKeyPeerM:[PublicKey:Set<PeerIndex>] = [:]
+		internal init(logLevel:Logger.Level) {
+			var logger = Logger(label: "\(String(describing:Self.self))")
+			logger.logLevel = logLevel
+			log = logger
+		}
 
 		internal mutating func add(indexM index:PeerIndex, publicKey:PublicKey) {
+			// if this peer index already exists, it must not exist 
 			let existingValue = peerMPublicKey.updateValue(publicKey, forKey:index)
 			guard existingValue == nil || existingValue! == publicKey else {
+				log.critical("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			if var hasExistingPISet = publicKeyPeerM[publicKey] {
