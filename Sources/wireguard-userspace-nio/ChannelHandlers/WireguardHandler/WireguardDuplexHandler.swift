@@ -11,7 +11,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// the type of value that is emitted by this handler to notify downstream inbound handlers that handshakes have occurred on the interface.
 	internal struct WireguardHandshakeNotification {
 		/// the start date of the handshake session as per the wireguard whitepaper
-		// internal let sessionStartDate:NIODeadline
+		internal let sessionStartDate:NIODeadline
 		/// the public key of the peer that initiated the handshake
 		internal let publicKey:PublicKey
 	}
@@ -21,9 +21,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
+	internal static let keepaliveTimeout = TimeAmount.seconds(10)
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
-	
+	internal static let rekeyAfterTime = TimeAmount.seconds(120)
+	internal static let rejectAfterTime = TimeAmount.seconds(300)
+
 	private enum State {
 		case initialized([PeerInfo])
 		case channelEngaged
@@ -61,7 +64,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
-		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
+		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:AutomaticallyUpdated.ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		buildLogger[metadataKey:"public-key_self"] = "\(publicKey)"
@@ -253,15 +256,15 @@ extension WireguardHandler {
 				case .data(recipientIndex: let recipientIndex, counter: let counter, payload: let payload):
 					// verify that a current peer index exists for the public key already.
 					guard let identifiedPublicKey = automaticallyUpdatedVariables.activeSessionIndicies.seek(indexM:recipientIndex) else {
-						logger.error("could not find matching traffic for inbound data peer index m \(recipientIndex)")
+						logger.warning("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
 					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:identifiedPublicKey) else {
-						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(identifiedPublicKey)"])
+						logger.warning("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(identifiedPublicKey)"])
 						return
 					}
 					guard let existingGeometryPositioned = livePeerInfo.session(forPeerM:recipientIndex) else {
-						logger.critical("could not find matching traffic for inbound data peer index m \(recipientIndex)")
+						logger.warning("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
 					let session = existingGeometryPositioned.element
@@ -269,6 +272,9 @@ extension WireguardHandler {
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
 						return
+					}
+					defer {
+						livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
 					}
 					encodeBuffer.clear(minimumCapacity:payload.count - MemoryLayout<Tag>.size)
 					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:payload.count - MemoryLayout<Tag>.size) { decrypted in
@@ -279,13 +285,6 @@ extension WireguardHandler {
 							try Message.Data.Payload.decrypt(transportKey:varsRecv.tRecv, counter:counter, cipherText:dataRegion, tag:tagRegion, aad:UnsafeRawBufferPointer(start:dataRegion.baseAddress!, count:0), plainText:decrypted.baseAddress!)	
 							return payload.count - MemoryLayout<Tag>.size
 						}
-					}
-
-					switch existingGeometryPositioned {
-						case .next(let nextGeometry):
-							_ = livePeerInfo.applyRotation(context:context)
-						default:
-							break
 					}
 
 					guard encodeBuffer.readableBytes != 0 else {
@@ -314,26 +313,15 @@ extension WireguardHandler {
 		logger[metadataKey: "public-key_remote"] = "\(publicKey)"
 		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
 			logger.error("peer is not configured. can not write data.")
-			promise?.fail(UnknownPeerEndpoint())
+			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
 			return
 		}
 		guard let ep = peerInfoLive.endpoint() else {
 			logger.error("trying to write data to a peer with no known endpoint.")
-			promise?.fail(UnknownPeerEndpoint())
+			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
 			return
 		}
-		guard let (nSendCur, tSend, currentHandshakeGeometry) = peerInfoLive.getSendVars(now:now) else {
-			// need to send a handshake and then the data can be sent
-			do {
-				try peerInfoLive.launchHandshakeInitiationTask(context:context, now:now, endpointOverride:ep, initiatorStaticPrivateKey:privateKey)
-			} catch is PeerInfo.Live.HandshakeTaskAlreadyRunning {
-				// do nothing
-			} catch let error {
-				logger.error("error thrown while trying to launch handshake initiation task", metadata:["error":"\(error)"])
-				context.fireErrorCaught(error)
-				promise?.fail(error)
-				return
-			}
+		guard let (nSendCur, tSend, currentHandshakeGeometry) = peerInfoLive.getSendVars(context:context, now:now, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep)) else {
 			peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
 			return
 		}
@@ -358,13 +346,6 @@ extension WireguardHandler {
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
 		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 	}
-
-	/// thrown when a handshake initiation is attempted on a peer with no documented endpoint
-	@available(*, deprecated, message: "use WireguardHandler.UnknownPeerEndpoint instead")
-	internal struct UnknownPeerEndpoint:Swift.Error {}
-	/// thrown when a rekey attempt is made before the rekey timer will allow for the next rekey event
-	@available(*, deprecated, message: "use WireguardHandler.RekeyAttemptTooSoon instead")
-	internal struct RekeyAttemptTooSoon:Swift.Error {}
 	
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		#if DEBUG

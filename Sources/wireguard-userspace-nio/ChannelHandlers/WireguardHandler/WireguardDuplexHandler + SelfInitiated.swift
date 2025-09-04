@@ -7,12 +7,12 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
-extension WireguardHandler {
+extension WireguardHandler.AutomaticallyUpdated {
 	/// used to help match inbound handshake initiation responses with their corresponding peers. 
 	internal struct ActivelyInitiatingIndex {
 		private var publicKeyInitiationIndex:[PublicKey:PeerIndex] = [:]
 		private var initiationIndexPublicKey:[PeerIndex:PublicKey] = [:]
-		internal mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, initiatorPeerIndex peerIndex:PeerIndex) -> PeerIndex? {
+		fileprivate mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, initiatorPeerIndex peerIndex:PeerIndex) -> PeerIndex? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -36,7 +36,7 @@ extension WireguardHandler {
 			return initiationIndexPublicKey[peerIndex]
 		}
 
-		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
+		fileprivate mutating func removeIfExists(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -44,13 +44,14 @@ extension WireguardHandler {
 				// no existing value
 				return nil
 			}
+			// existing value found, now must remove from opposing index
 			guard publicKeyInitiationIndex.removeValue(forKey:publicKey) != nil else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			return publicKey
 		}
 
-		internal mutating func removeIfExists(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
+		fileprivate mutating func removeIfExists(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -58,6 +59,7 @@ extension WireguardHandler {
 				// no existing value
 				return nil
 			}
+			// existing value found, now must remove from opposing index
 			guard initiationIndexPublicKey.removeValue(forKey:outgoingPeerIndex) != nil else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
