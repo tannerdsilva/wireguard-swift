@@ -35,8 +35,8 @@ extension PeerInfo {
 		private var postHandshakePackets = PendingPostHandshake()
 
 		// cryptokey rotation
-		private var rotation:Rotating<(NIODeadline, Session)>
-		
+		private var rotation:Rotating<Session>
+
 		private var rekeyAttemptTimeNow:NIODeadline? = nil
 
 		internal init(_ peerInfo:PeerInfo, handler:WireguardHandler, context:borrowing ChannelHandlerContext, logLevel:Logger.Level) {
@@ -52,7 +52,7 @@ extension PeerInfo {
 			publicKey = peerInfo.publicKey
 			ep = peerInfo.endpoint
 			persistentKeepalive = peerInfo.internalKeepAlive
-			rotation = Rotating<(NIODeadline, Session)>()
+			rotation = Rotating<Session>()
 
 			let um = Unmanaged.passUnretained(handler)
 			wireguardHandler = um
@@ -60,7 +60,7 @@ extension PeerInfo {
 		}
 		
 		internal func getSendVars(now:NIODeadline) -> (nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)? {
-			guard let (_, currentGeometry) = rotation.current else {
+			guard let currentGeometry = rotation.current else {
 				// no active handshakes
 				return nil
 			}
@@ -72,11 +72,11 @@ extension PeerInfo {
 		}
 
 		internal func nSendUpdate(_ nSend:Counter, geometry:HandshakeGeometry<PeerIndex>) {
-			guard var (startDate, currentSession) = rotation.current else {
+			guard var currentSession = rotation.current else {
 				fatalError("no active handshakes")
 			}
 			currentSession.nVar.valueSend = nSend
-			rotation.current = (startDate, currentSession)
+			rotation.current = currentSession
 		}
 		
 		internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>?) {
@@ -209,11 +209,11 @@ extension PeerInfo.Live {
 
 // MARK: Sessions
 extension PeerInfo.Live {
-	/// returns the session for the given peer index
+	/// returns the session (and its rotational position) for the given peer index
 	internal func session(forPeerM:PeerIndex) -> Rotating<Session>.Positioned? {
 		// check the current position
 		switch rotation.current {
-			case .some(let (_, session)):
+			case .some(let session):
 				guard session.geometry.m != forPeerM else {
 					return .current(session)
 				}
@@ -221,7 +221,7 @@ extension PeerInfo.Live {
 			case .none:
 				// current position does not match. check the previous position
 				switch rotation.previous {
-					case .some(let (_, session)):
+					case .some(let session):
 						guard session.geometry.m != forPeerM else {
 							return .previous(session)
 						}
@@ -229,7 +229,7 @@ extension PeerInfo.Live {
 					case .none:
 						// previous position does not match. check the next position
 						switch rotation.next {
-							case .some(let (_, session)):
+							case .some(let session):
 								guard session.geometry.m != forPeerM else {
 									return .next(session)
 								}
@@ -254,6 +254,7 @@ extension PeerInfo.Live {
 			fatalError("self initiated geometry used on peer initiated function. this is a critical internal error. \(#file):\(#line)")
 		}
 		#endif
+		
 		// generate the transmit keys
 		let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 		logger.info("transmit keys generated from peer initiated handshake")
@@ -261,12 +262,12 @@ extension PeerInfo.Live {
 		// add the new index to the active indicies
 		let wgh = wireguardHandler.takeUnretainedValue()
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
-		guard let (_, outgoingIndexValue) = rotation.apply(next:(now, Session(geometry:element, nVar:WireguardHandler.SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:WireguardHandler.SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults)))) else {
+		
+		// handle the session that falls out of the rotation
+		guard let outgoingIndexValue = rotation.apply(next:Session(geometry:element, nVar:WireguardHandler.SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:WireguardHandler.SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults), establishedDate:now)) else {
 			// no outgoing index value, return
 			return
 		}
-
-		// clean up the outgoing index value
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingIndexValue.geometry.m)
 	}
 
@@ -279,19 +280,20 @@ extension PeerInfo.Live {
 			fatalError("peer initiated geometry used on self initiated function. this is a critical internal error. \(#file):\(#line)")
 		}
 		#endif
+
 		// generate the transmit keys
 		let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
 		logger.info("transmit keys generated from self initiated handshake")
 
 		// apply the rotation of the existing sessions with the new session
-		let rotationResults = rotation.rotate(replacingNext:(now, Session(geometry:element, nVar:WireguardHandler.SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:WireguardHandler.SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults))))
+		let rotationResults = rotation.rotate(replacingNext:Session(geometry:element, nVar:WireguardHandler.SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:WireguardHandler.SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), establishedDate:now))
 		
 		// automatically update the wireguard handler as needed
 		let wgh = wireguardHandler.takeUnretainedValue()
-		if let (_, outgoingPrevious) = rotationResults.previous {
+		if let outgoingPrevious = rotationResults.previous {
 			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
 		}
-		if let (_, outgoingNext) = rotationResults.next {
+		if let outgoingNext = rotationResults.next {
 			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
 		}
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
@@ -318,7 +320,7 @@ extension PeerInfo.Live {
 		#endif
 		log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(publicKey:publicKey))
-		guard let (_, outgoingID) = rotation.rotate() else {
+		guard let outgoingID = rotation.rotate() else {
 			return nil
 		}
 		wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingID.geometry.m)
