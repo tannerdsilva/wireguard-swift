@@ -54,7 +54,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// the primary storage for the active peers that the interface will connect to.
 	private var peerDeltaEngine:PeerDeltaEngine!
 	/// the buffer used for encoding messages before sending them over the network.
-	private var encodeBuffer:ByteBuffer!
+	internal var encodeBuffer:ByteBuffer!
 	/// the current operational state of the handler.
 	private var operatingState:State
 
@@ -101,7 +101,7 @@ extension WireguardHandler {
 		switch operatingState {
 			case .initialized(let initPeers):
 				encodeBuffer = context.channel.allocator.buffer(capacity:1800)
-				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, additionHandler: { [weak self, l = log] _ in 
+				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self, l = log] _ in
 					// when peer is added
 					guard let self = self else { return }
 				}, removalHandler: { [weak self, l = log] removedPublicKey in
@@ -178,7 +178,7 @@ extension WireguardHandler {
 
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
-					try livePeerInfo.applyPeerInitiated(context:context, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
+					try livePeerInfo.applyPeerInitiated(context:context, now:now, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
@@ -212,9 +212,8 @@ extension WireguardHandler {
 						return
 					}
 					livePeerInfo.updateEndpoint(endpoint)
-					try livePeerInfo.applySelfInitiated(context:context, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
+					try livePeerInfo.applySelfInitiated(context:context, now:now, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(peerPub)"])
-					context.fireUserInboundEventTriggered(WireguardHandshakeNotification(/*sessionStartDate:now, */publicKey:peerPub))
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -266,7 +265,6 @@ extension WireguardHandler {
 						return
 					}
 					let session = existingGeometryPositioned.element
-					let existingGeometry = session.geometry
 					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometryPositioned)!
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
@@ -362,8 +360,10 @@ extension WireguardHandler {
 	}
 
 	/// thrown when a handshake initiation is attempted on a peer with no documented endpoint
+	@available(*, deprecated, message: "use WireguardHandler.UnknownPeerEndpoint instead")
 	internal struct UnknownPeerEndpoint:Swift.Error {}
 	/// thrown when a rekey attempt is made before the rekey timer will allow for the next rekey event
+	@available(*, deprecated, message: "use WireguardHandler.RekeyAttemptTooSoon instead")
 	internal struct RekeyAttemptTooSoon:Swift.Error {}
 	
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {

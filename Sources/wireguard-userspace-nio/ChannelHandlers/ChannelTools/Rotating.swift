@@ -1,4 +1,5 @@
 internal struct Rotating<Element> {
+	/// used to express a particular value that was found at a specific position.
 	internal enum Positioned {
 		case previous(Element)
 		case current(Element)
