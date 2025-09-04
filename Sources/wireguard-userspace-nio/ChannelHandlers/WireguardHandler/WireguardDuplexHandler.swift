@@ -97,7 +97,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
-		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:ActivelyInitiatingIndex(), activeSessionIndicies: MPeerIndex(logLevel:logLevel))
+		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		buildLogger[metadataKey:"public-key_self"] = "\(publicKey)"

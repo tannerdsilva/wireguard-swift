@@ -7,17 +7,22 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
-extension WireguardHandler {
+extension WireguardHandler.AutomaticallyUpdated {
+
+	/// used to track the association of Im (peer index m) and the public keys they associate with
 	internal struct MPeerIndex {
 		private let log:Logger
 		private var peerMPublicKey:[PeerIndex:PublicKey] = [:]
 		private var publicKeyPeerM:[PublicKey:Set<PeerIndex>] = [:]
+
+		/// initialize a new mpeer index structure.
 		internal init(logLevel:Logger.Level) {
 			var logger = Logger(label: "\(String(describing:Self.self))")
 			logger.logLevel = logLevel
 			log = logger
 		}
 
+		/// associate a peer index m with a public key. if the peer index m already exists, it must be associated with the same public key that was passed as an argument.
 		internal mutating func add(indexM index:PeerIndex, publicKey:PublicKey) {
 			// if this peer index already exists, it must not exist 
 			let existingValue = peerMPublicKey.updateValue(publicKey, forKey:index)
