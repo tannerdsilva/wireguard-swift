@@ -8,6 +8,14 @@ import Synchronization
 import bedrock
 
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
+	/// the type of value that is emitted by this handler to notify downstream inbound handlers that handshakes have occurred on the interface.
+	internal struct WireguardHandshakeNotification {
+		/// the start date of the handshake session as per the wireguard whitepaper
+		// internal let sessionStartDate:NIODeadline
+		/// the public key of the peer that initiated the handshake
+		internal let publicKey:PublicKey
+	}
+
 	internal typealias InboundIn = (Endpoint, Message.NIO)
 	internal typealias InboundOut = (PublicKey, ByteBuffer)
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
@@ -33,8 +41,11 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 	/// stored variables of the WireguardHandler that are automatically managed through Unmanaged instances of the WireguardHandler being stored in sub-structures.
 	internal struct AutomaticallyUpdated {
-		/// initiation indicies. this variable is modified directly by the PeerIndex.
+		/// initiation indicies.
+		/// - NOTE: this variable is modified directly by the PeerIndex.Live instances.
 		internal var activelyInitiatingIndicies:ActivelyInitiatingIndex
+		/// active session indicies.
+		/// - NOTE: this variable is modified directly by the PeerIndex.Live instances.
 		internal var activeSessionIndicies:MPeerIndex
 	}
 
@@ -112,7 +123,7 @@ extension WireguardHandler {
 		logger.trace("handler removed from NIO pipeline.")
 		operatingState = .terminated
 	}
-	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+	internal func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
@@ -203,6 +214,7 @@ extension WireguardHandler {
 					livePeerInfo.updateEndpoint(endpoint)
 					try livePeerInfo.applySelfInitiated(context:context, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(peerPub)"])
+					context.fireUserInboundEventTriggered(WireguardHandshakeNotification(/*sessionStartDate:now, */publicKey:peerPub))
 					break;
 				case .cookie(let cookiePayload):
 					/*
@@ -273,7 +285,7 @@ extension WireguardHandler {
 
 					switch existingGeometryPositioned {
 						case .next(let nextGeometry):
-							_ = livePeerInfo.applyRotation()
+							_ = livePeerInfo.applyRotation(context:context)
 						default:
 							break
 					}

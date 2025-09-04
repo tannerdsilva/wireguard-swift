@@ -279,13 +279,17 @@ extension PeerInfo.Live {
 }
 
 // MARK: Session Rotation
-extension PeerInfo.Live {		
-	internal borrowing func applyRotation() -> HandshakeGeometry<PeerIndex>? {
+extension PeerInfo.Live {
+	internal borrowing func applyRotation(context:borrowing ChannelHandlerContext) -> HandshakeGeometry<PeerIndex>? {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
 		log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
 		guard let (_, outgoingID) = rotation.rotate() else {
 			return nil
 		}
 		wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingID.geometry.m)
+		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(publicKey:publicKey))
 		return outgoingID.geometry
 	}
 }
