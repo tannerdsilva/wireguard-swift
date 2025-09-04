@@ -124,6 +124,11 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					let value = receivedData.RAW_access {
 						return EncodedUInt64(RAW_staticbuff:$0.baseAddress!.advanced(by: receivedData.count-8)).RAW_native()
 					}
+					
+					// Check if the receiver has disconnected. If so, update to match the sender
+					if(value == 0) {
+						receiveNonce[key]! = value
+					}
 					logger.info("Value: \(value), Nonce: \(receiveNonce[key]!)")
 					// Check if it's not duplicate data
 					if(value >= receiveNonce[key]!) {
@@ -199,33 +204,36 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		pendingPackets[key]!.addTail(data)
 	}
 	
-//	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
-//		switch event {
-//			case let evt as PipelineEvent:
-//				switch evt {
-//					case let .reKeyEvent(key):
-//						// Resetting everything
-//						if(kcpKillTasks[key] != nil) {
-//							kcpUpdateTasks[key]!.cancel()
-//						}
-//						ackCounter = 0
-//						kcp[key] = nil
-//						
-//						
-//						// Starting up processes again
-//						makeIkcpCb(key:key, context:context)
-//						
-//						// Sending data until snd_buf is full
-//						if(pendingPackets[key] == nil) {
-//							pendingPackets[key] = LinkedList<[UInt8]>()
-//						}
-//						packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
-//						
-//						kcpUpdates(for: key, context: context)
-//				}
-//			default:
-//				context.fireUserInboundEventTriggered(event)
-//				return
-//		}
-//	}
+	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+		switch event {
+			case let evt as WireguardHandler.WireguardHandshakeNotification:
+				print("resetting")
+				let key = evt.publicKey
+				if(sendNonce[key] == nil) {
+					sendNonce[key] = 0
+					receiveNonce[key] = 0
+				}
+				// Resetting everything
+				if(kcpKillTasks[key] != nil) {
+					kcpUpdateTasks[key]!.cancel()
+				}
+				ackCounter = 0
+				kcp[key] = nil
+				
+				
+				// Starting up processes again
+				makeIkcpCb(key:key, context:context)
+				
+				// Sending data until snd_buf is full
+				if(pendingPackets[key] == nil) {
+					pendingPackets[key] = LinkedList<[UInt8]>()
+				}
+				packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
+				
+				kcpUpdates(for: key, context: context)
+			default:
+				context.fireUserInboundEventTriggered(event)
+				return
+		}
+	}
 }

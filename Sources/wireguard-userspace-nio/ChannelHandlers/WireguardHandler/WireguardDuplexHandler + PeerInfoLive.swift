@@ -285,11 +285,11 @@ extension PeerInfo.Live {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
+		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(publicKey:publicKey))
 		guard let (_, outgoingID) = rotation.rotate() else {
 			return nil
 		}
 		wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingID.geometry.m)
-		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(publicKey:publicKey))
 		return outgoingID.geometry
 	}
 }

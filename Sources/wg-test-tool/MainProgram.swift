@@ -15,10 +15,11 @@ struct CLI:AsyncParsableCommand {
 		subcommands:[
 			GenerateKeys.self,
 			ComputeSharedKey.self,
-            Initiator.self,
-            Responder.self,
+			Initiator.self,
+			Responder.self,
 			TestPerformance.self,
-			MessageInterface.self
+			MessageInterface.self,
+			SendData.self
 		]
 	)
 
@@ -53,10 +54,10 @@ struct CLI:AsyncParsableCommand {
 		}
 	}
 
-    struct Initiator:AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            subcommands: []
-        )
+	struct Initiator:AsyncParsableCommand {
+		static let configuration = CommandConfiguration(
+			subcommands: []
+		)
 
 		@Argument(help: "The IP address of the responder.")
 		var ipAddress:String
@@ -70,7 +71,7 @@ struct CLI:AsyncParsableCommand {
 		func run() async throws {
 			var cliLogger = Logger(label: "wg-test-tool.initiator")
 			cliLogger.logLevel = .trace
-            let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
+			let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
 			let interface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:peers, logLevel:.trace)
 			Task {
 				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
@@ -83,26 +84,26 @@ struct CLI:AsyncParsableCommand {
 			let lifecycle = ServiceGroup(configuration:sg)
 			try await lifecycle.run()
 		}
-    }
-    
-    struct Responder:ParsableCommand {
-        static let configuration = CommandConfiguration(
-            subcommands: [
-                Listen.self
-            ]
-        )
-        
-        struct Listen:ParsableCommand {
-            static let configuration = CommandConfiguration(
+	}
+	
+	struct Responder:ParsableCommand {
+		static let configuration = CommandConfiguration(
+			subcommands: [
+				Listen.self
+			]
+		)
+		
+		struct Listen:ParsableCommand {
+			static let configuration = CommandConfiguration(
 				abstract: "Start the WireGuard client."
 			)
 
-            func run() throws {
-                print("Starting WireGuard...")
-                
-            }
-        }
-    }
+			func run() throws {
+				print("Starting WireGuard...")
+				
+			}
+		}
+	}
 	
 	struct TestPerformance:AsyncParsableCommand {
 		static let configuration = CommandConfiguration(
@@ -187,14 +188,13 @@ struct CLI:AsyncParsableCommand {
 					while true {
 						if let input = readLine(strippingNewline: true) {
 							let messageBytes: [UInt8] = Array(input.utf8)
-							cliLogger.info("Channel initialized. Sending handshake initiation message...")
 							try await myInterface.write(publicKey: respondersPublicKey, data: messageBytes)
 						}
 					}
 				}
 				
 				foo.addTask {
-					cliLogger.info("Channel initialized. Reading data...")
+					cliLogger.info("Reading data...")
 					for try await (key, incomingData) in myInterface {
 						// ANSI escape codes
 						let green = "\u{001B}[0;32m"
@@ -206,6 +206,63 @@ struct CLI:AsyncParsableCommand {
 			})
 		}
 	}
+	
+	struct SendData:AsyncParsableCommand {
+		static let configuration = CommandConfiguration(
+			abstract: "Message interface using WireGaurd."
+		)
+		
+		@Argument(help: "The IP address of the responder.")
+		var ipAddress:String
+		@Argument(help: "The port number that the responder is listening on.")
+		var port:Int
+		@Argument(help: "The port number that the I am is listening on.")
+		var myPort:Int
+		@Argument(help:"The private key that the initiator will use to forge an initial handshake.")
+		var myPrivateKey:MemoryGuarded<RAW_dh25519.PrivateKey>
+		@Argument(help:"The public key that the responder is expected to be operating with.")
+		var respondersPublicKey:PublicKey
+		
+		func run() async throws {
+			let cliLogger = Logger(label: "wg-test-tool.initiator")
+			
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let myPeers = [PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30))]
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: myPort)
+				
+				foo.addTask {
+					try await myInterface.run()
+				}
+				
+				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
+				try await myInterface.waitForChannelInit()
+				
+				foo.addTask {
+					while true {
+						if let input = readLine(strippingNewline: true), let number = Int(input) {
+							var payload = [UInt8](repeating: 0, count: number)
+//							for i in 0..<250 {
+//								payload[i] = UInt8(i%250)
+//							}
+							try await myInterface.write(publicKey: respondersPublicKey, data: payload)
+							}
+						else {
+							print("Invalid input, not an integer.")
+						}
+					}
+				}
+				
+				foo.addTask {
+					cliLogger.info("Channel initialized. Reading data...")
+					for try await (key, incomingData) in myInterface {
+						// ANSI escape codes
+						let green = "\u{001B}[0;32m"
+						let reset = "\u{001B}[0;0m"
+						// Print green text, then reset back to normal
+						print("\(green)From peer \(key): \(incomingData.count))\(reset)")
+					}
+				}
+			})
+		}
+	}
 }
-
-// Create client and server struct with subcommands
