@@ -91,8 +91,13 @@ extension PeerInfo.Live {
 	internal struct CurrentSelfInitiatedInfo {
 		private let responderStaticPublicKey:PublicKey
 		private let wireguardHandler:Unmanaged<WireguardHandler>
+
+		/// current time that is updated every time a new handshake initiation is emitted to the peer.
 		private var lastHandshakeEmissionTime:NIODeadline? = nil
+		/// the chaining data related to the current initiation handshake that is in-flight.
 		private var initiatorChainingData:(initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? = nil
+		
+		/// initialize a new instance.
 		internal init(responderStaticPublicKey initiatorPub:PublicKey, handler:Unmanaged<WireguardHandler>) {
 			wireguardHandler = handler
 			responderStaticPublicKey = initiatorPub

@@ -15,9 +15,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	/// access the m value
 	internal var m:AugmentedType {
 		switch self {
-			case .selfInitiated(m:let m, mp:let mp):
+			case .selfInitiated(m:let m, mp:_):
 			return m
-			case .peerInitiated(m:let m, mp:let mp):
+			case .peerInitiated(m:let m, mp:_):
 			return m
 		}
 	}
@@ -25,9 +25,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	/// access the m prime value
 	internal var mp:AugmentedType {
 		switch self {
-			case .selfInitiated(m:let m, mp:let mp):
+			case .selfInitiated(m:_, mp:let mp):
 			return mp
-			case .peerInitiated(m:let m, mp:let mp):
+			case .peerInitiated(m:_, mp:let mp):
 			return mp
 		}
 	}
@@ -36,9 +36,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	@available(*, deprecated, message:"use m or mp values instead")
 	internal var selfValueLegacy:AugmentedType {
 		switch self {
-			case .selfInitiated(m:let m, mp:let mp):
+			case .selfInitiated(m:let m, mp:_):
 			return m
-			case .peerInitiated(m:let m, mp:let mp):
+			case .peerInitiated(m:_, mp:let mp):
 			return mp
 		}
 	}
@@ -47,9 +47,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	@available(*, deprecated, message:"use m or mp values instead")
 	internal var peerValueLegacy:AugmentedType {
 		switch self {
-			case .selfInitiated(m:let m, mp:let mp):
+			case .selfInitiated(m:let m, mp:_):
 			return m
-			case .peerInitiated(m:let m, mp:let mp):
+			case .peerInitiated(m:_, mp:let mp):
 			return mp
 		}
 	}

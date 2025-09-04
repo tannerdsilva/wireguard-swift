@@ -8,9 +8,13 @@ import Synchronization
 import bedrock
 
 extension PeerInfo.Live {
+	/// represents a wireguard tunnel connection with a unique set of transit keys.
 	internal struct Session {
+		/// the handshake geometry that was used to initiate the session
 		internal let geometry:HandshakeGeometry<PeerIndex>
+		/// the n variable that is used for the session's send/receive counters and sliding windows.
 		internal var nVar:WireguardHandler.SendReceive<Counter, SlidingWindow<Counter>>
+		/// the t variable that is used for the session's transmit/receive keys.
 		internal var tVar:WireguardHandler.SendReceive<Result.Bytes32, Result.Bytes32>
 	}
 }
@@ -37,5 +41,4 @@ extension WireguardHandler {
 			valueRecv = inputTuple.1
 		}
 	}
-
 }

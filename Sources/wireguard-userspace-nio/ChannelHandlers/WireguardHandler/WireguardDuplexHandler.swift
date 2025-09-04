@@ -7,53 +7,6 @@ import wireguard_crypto_core
 import Synchronization
 import bedrock
 
-// tools
-extension WireguardHandler {
-	private struct PeerDeltaEngine {
-		internal typealias PeerAdditionHandler = (PublicKey) -> Void
-		internal typealias PeerRemovalHandler = (PublicKey) -> Void
-
-		private let additionHandler:PeerAdditionHandler
-		private let removalHandler:PeerRemovalHandler
-		private var peers:[PublicKey:PeerInfo.Live] {
-			didSet {
-				let keyDelta = Delta<PublicKey>(start:oldValue.keys, end:peers.keys)
-				// handle the peers that were only at the start
-				for removedPeer in keyDelta.exclusiveStart {
-					removalHandler(removedPeer)
-				}
-				// handle the peers that were only at the end
-				for newPeer in keyDelta.exclusiveEnd {
-					additionHandler(newPeer)
-				}
-			}
-		}
-		
-		internal init(context:ChannelHandlerContext, initiallyConfigured:[PeerInfo], handler:WireguardHandler, additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) {
-			peers = [:]
-			additionHandler = ahIn
-			removalHandler = rhIn
-			var buildPeers = [PublicKey:PeerInfo.Live]()
-			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:.debug)
-			}
-			peers = buildPeers
-		}
-		
-		internal mutating func setPeers(_ newPeers:[PeerInfo], handler:WireguardHandler, context:ChannelHandlerContext) {
-			var buildPeers = [PublicKey:PeerInfo.Live]()
-			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:.debug)
-			}
-			peers = buildPeers
-		}
-		
-		fileprivate borrowing func peerLookup(publicKey:PublicKey) -> PeerInfo.Live? {
-			return peers[publicKey]
-		}
-	}
-}
-
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = (Endpoint, Message.NIO)
 	internal typealias InboundOut = (PublicKey, ByteBuffer)
@@ -85,13 +38,13 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		internal var activeSessionIndicies:MPeerIndex
 	}
 
+	/// NOTE: do not touch - the live peer instances will mutate these for you.
 	internal var automaticallyUpdatedVariables:AutomaticallyUpdated
-
-	// functionally managed
+	/// the primary storage for the active peers that the interface will connect to.
 	private var peerDeltaEngine:PeerDeltaEngine!
+	/// the buffer used for encoding messages before sending them over the network.
 	private var encodeBuffer:ByteBuffer!
-		
-	// directly managed
+	/// the current operational state of the handler.
 	private var operatingState:State
 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
@@ -211,12 +164,7 @@ extension WireguardHandler {
 					}
 					
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
-					if let initiationTime = livePeerInfo.handshakeInitiationTime {
-						guard timestamp > initiationTime else {
-							logger.notice("dropping packet due to old timestamp value", metadata:["timestamp_value":"\(timestamp)"])
-							return
-						}
-					}
+
 					livePeerInfo.updateEndpoint(endpoint)
 					livePeerInfo.handshakeInitiationTime = timestamp
 					try livePeerInfo.applyPeerInitiated(context:context, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
