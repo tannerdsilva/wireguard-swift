@@ -110,7 +110,6 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					}
 					_ = pendingPackets[key]!.popFront()
 					ackCounter += chunks
-					logger.info("\(kcp[key]!.snd_una)")
 				} else {
 					break
 				}
@@ -129,12 +128,10 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					if(value == 0) {
 						receiveNonce[key]! = value
 					}
-					logger.info("Value: \(value), Nonce: \(receiveNonce[key]!)")
 					// Check if it's not duplicate data
 					if(value >= receiveNonce[key]!) {
 						// Remove the first 4 bytes from the array
 						receivedData = Array(receivedData.dropLast(8))
-						logger.info("Received KCP Data")
 						c.accessContext { contextPointer in
 							contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
 						}
