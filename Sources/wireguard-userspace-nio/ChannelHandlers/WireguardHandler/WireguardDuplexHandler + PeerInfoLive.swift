@@ -98,39 +98,6 @@ extension PeerInfo {
 			return .sendImmediately(SendValues(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
 		}
 
-		internal func getSendVars(context:ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> (nSend:Counter, tSend:Result.Bytes32, session:Session)? {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			rekeyAttemptTimeNow = now
-			guard let currentRotation = rotation.current else {
-				// there is no current rotation so we need to initiate a handshake
-				try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
-				return nil
-			}
-			return (nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation)
-		}
-
-		internal func nSendUpdate(context:ChannelHandlerContext, now:NIODeadline, _ nSend:Counter, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			guard var currentSession = rotation.current else {
-				fatalError("no active handshakes")
-			}
-			switch currentSession.geometry {
-				case .selfInitiated(m:let m, mp:let mp):
-					// check for the passive rehandshake threshold
-					if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
-						try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
-					}
-				default:
-					break
-			}
-			currentSession.nVar.valueSend = nSend
-			rotation.current = currentSession
-		}
-
 		internal func updateSendValues(context:borrowing ChannelHandlerContext, now:NIODeadline, _ sendValues:SendValues, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -308,7 +275,7 @@ extension PeerInfo.Live {
 	}
 }
 
-// MARK: Sessions
+// MARK: Accessing Sessions
 extension PeerInfo.Live {
 	/// returns the session (and its rotational position) for the given peer index
 	internal func session(forPeerM:PeerIndex) -> Rotating<Session>.Positioned? {
@@ -344,7 +311,7 @@ extension PeerInfo.Live {
 	}
 }
 
-// MARK: Transit Key Apply
+// MARK: Handshake Apply
 extension PeerInfo.Live {
 	/// called when a peer initiated handshake is received and a response is going to be sent out. the provided c value pointer is used to derive the handshake keys.
 	internal func applyPeerInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {

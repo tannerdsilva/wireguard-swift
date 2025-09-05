@@ -60,7 +60,7 @@ extension WireguardHandler {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
-			var logger = log
+			let logger = log
 			logger.trace("setting peers.", metadata:["peer_count":"\(newPeers.count)"])
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in newPeers {

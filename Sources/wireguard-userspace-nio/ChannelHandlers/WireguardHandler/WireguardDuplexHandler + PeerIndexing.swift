@@ -11,8 +11,11 @@ extension WireguardHandler.AutomaticallyUpdated {
 
 	/// used to track the association of Im (peer index m) and the public keys they associate with
 	internal struct MPeerIndex {
+		/// the logger that will be used to produce output for the work completed by this structure
 		private let log:Logger
+		/// the dictionary that maps a given m peer index with the corresponding public key of the remote peer
 		private var peerMPublicKey:[PeerIndex:PublicKey] = [:]
+		/// the dictionary that maps a given public key with the corresponding m peer indices
 		private var publicKeyPeerM:[PublicKey:Set<PeerIndex>] = [:]
 
 		/// initialize a new mpeer index structure.
