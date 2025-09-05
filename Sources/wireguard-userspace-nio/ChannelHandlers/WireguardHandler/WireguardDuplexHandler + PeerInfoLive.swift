@@ -67,6 +67,9 @@ extension PeerInfo {
 		}
 
 		internal func getSendVars(context:ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> (nSend:Counter, tSend:Result.Bytes32, session:Session)? {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
 			rekeyAttemptTimeNow = now
 			guard let currentRotation = rotation.current else {
 				// there is no current rotation so we need to initiate a handshake
@@ -77,6 +80,9 @@ extension PeerInfo {
 		}
 
 		internal func nSendUpdate(context:ChannelHandlerContext, now:NIODeadline, _ nSend:Counter, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
 			guard var currentSession = rotation.current else {
 				fatalError("no active handshakes")
 			}
