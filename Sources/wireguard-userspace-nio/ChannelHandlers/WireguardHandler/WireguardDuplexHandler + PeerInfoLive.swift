@@ -27,7 +27,6 @@ extension PeerInfo {
 		}
 		private var ap:SocketAddress?
 		internal var persistentKeepalive:TimeAmount?
-		internal var handshakeInitiationTime:TAI64N? = nil
 
 		// handshake initiation
 		private var selfInitiatedKeys:CurrentSelfInitiatedInfo
@@ -67,28 +66,28 @@ extension PeerInfo {
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
 		}
 
-		internal func getSendVars(context:ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> (nSend:Counter, tSend:Result.Bytes32, geometry:HandshakeGeometry<PeerIndex>)? {
+		internal func getSendVars(context:ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> (nSend:Counter, tSend:Result.Bytes32, session:Session)? {
 			rekeyAttemptTimeNow = now
 			guard let currentRotation = rotation.current else {
 				// there is no current rotation so we need to initiate a handshake
 				try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
 				return nil
 			}
-			switch currentRotation.geometry {
+			return (nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation)
+		}
+
+		internal func nSendUpdate(context:ChannelHandlerContext, now:NIODeadline, _ nSend:Counter, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
+			guard var currentSession = rotation.current else {
+				fatalError("no active handshakes")
+			}
+			switch currentSession.geometry {
 				case .selfInitiated(m:let m, mp:let mp):
 					// check for the passive rehandshake threshold
-					if currentRotation.establishedDate + WireguardHandler.rekeyAfterTime <= now {
+					if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
 						try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
 					}
 				default:
 					break
-			}
-			return (nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, geometry:currentRotation.geometry)
-		}
-
-		internal func nSendUpdate(_ nSend:Counter, geometry:HandshakeGeometry<PeerIndex>) {
-			guard var currentSession = rotation.current else {
-				fatalError("no active handshakes")
 			}
 			currentSession.nVar.valueSend = nSend
 			rotation.current = currentSession

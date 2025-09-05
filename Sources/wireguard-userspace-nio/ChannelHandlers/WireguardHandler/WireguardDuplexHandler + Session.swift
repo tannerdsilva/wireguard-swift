@@ -17,6 +17,6 @@ extension PeerInfo.Live {
 		/// the t variable that is used for the session's transmit/receive keys.
 		internal var tVar:SendReceive<Result.Bytes32, Result.Bytes32>
 		/// as defined by the wireguard whitepaper, this is the date that the handshake session was established (the moment the transit keys were computed)
-		internal var establishedDate:NIODeadline
+		internal let establishedDate:NIODeadline
 	}
 }

@@ -180,7 +180,6 @@ extension WireguardHandler {
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
 
 					livePeerInfo.updateEndpoint(endpoint)
-					livePeerInfo.handshakeInitiationTime = timestamp
 					try livePeerInfo.applyPeerInitiated(context:context, now:now, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
@@ -334,7 +333,7 @@ extension WireguardHandler {
 			logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
 			encodeBuffer.clear(minimumCapacity:forgedLength)
 			try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
-				return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.mp, nonce:&nSend, transportKey:tSend, plainText:&payload, output:bufferPtr.baseAddress!)
+				return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.geometry.mp, nonce:&nSend, transportKey:tSend, plainText:&payload, output:bufferPtr.baseAddress!)
 			}
 		} catch let error {
 			logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
@@ -342,7 +341,7 @@ extension WireguardHandler {
 			promise?.fail(error)
 			return
 		}
-		peerInfoLive.nSendUpdate(nSend, geometry:currentHandshakeGeometry)
+		peerInfoLive.nSendUpdate(context:context, now:now, nSend, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
 		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 	}
