@@ -178,7 +178,6 @@ extension WireguardHandler {
 					}
 					
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
-
 					livePeerInfo.updateEndpoint(endpoint)
 					try livePeerInfo.applyPeerInitiated(context:context, now:now, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
@@ -320,30 +319,34 @@ extension WireguardHandler {
 			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
 			return
 		}
-		guard let (nSendCur, tSend, currentHandshakeGeometry) = peerInfoLive.getSendVars(context:context, now:now, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep)) else {
-			peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
-			return
+		switch peerInfoLive.getSendStrategy(context:context, now:now, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep)) {
+			case .queueForInitiatingHandshake:
+				fallthrough
+			case .queueWhileAwaitingKeyRotation:
+				peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
+				return
+			case .sendImmediately(var sendValues):
+				do {
+					var forgedLength = 0
+					forgedLength += MemoryLayout<Message.Data.Header>.size
+					forgedLength += MemoryLayout<Tag>.size
+					forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
+					logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
+					encodeBuffer.clear(minimumCapacity:forgedLength)
+					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
+						return try Message.Data.Payload.forge(receiverIndex:sendValues.session.geometry.mp, nonce:&sendValues.nSend, transportKey:sendValues.tSend, plainText:&payload, output:bufferPtr.baseAddress!)
+					}
+				} catch let error {
+					logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
+					context.fireErrorCaught(error)
+					promise?.fail(error)
+					return
+				}
+				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
+				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
+				context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+				break
 		}
-		var nSend = nSendCur
-		do {
-			var forgedLength = 0
-			forgedLength += MemoryLayout<Message.Data.Header>.size
-			forgedLength += MemoryLayout<Tag>.size
-			forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
-			logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
-			encodeBuffer.clear(minimumCapacity:forgedLength)
-			try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
-				return try Message.Data.Payload.forge(receiverIndex:currentHandshakeGeometry.geometry.mp, nonce:&nSend, transportKey:tSend, plainText:&payload, output:bufferPtr.baseAddress!)
-			}
-		} catch let error {
-			logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
-			context.fireErrorCaught(error)
-			promise?.fail(error)
-			return
-		}
-		peerInfoLive.nSendUpdate(context:context, now:now, nSend, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
-		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
-		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 	}
 	
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {

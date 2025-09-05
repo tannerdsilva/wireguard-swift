@@ -66,6 +66,38 @@ extension PeerInfo {
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
 		}
 
+		internal struct SendValues {
+			internal var nSend:Counter
+			internal let tSend:Result.Bytes32
+			internal let session:Session
+		}
+
+		internal enum SendStrategy {
+			/// returned when there is a current session that has not crossed its timeout threshold
+			case sendImmediately(SendValues)
+			case queueForInitiatingHandshake
+			case queueWhileAwaitingKeyRotation
+		}
+
+		internal func getSendStrategy(context:borrowing ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> SendStrategy {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			rekeyAttemptTimeNow = now
+			guard let currentRotation = rotation.current else {
+				switch rotation.next {
+					case .some(_):
+						// there is a next session, so we are waiting for key rotation to complete
+						return .queueWhileAwaitingKeyRotation
+					case .none:
+						// there is no current session or next session, so we need to initiate a handshake
+						try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+						return .queueForInitiatingHandshake
+				}
+			}
+			return .sendImmediately(SendValues(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
+		}
+
 		internal func getSendVars(context:ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> (nSend:Counter, tSend:Result.Bytes32, session:Session)? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -96,6 +128,29 @@ extension PeerInfo {
 					break
 			}
 			currentSession.nVar.valueSend = nSend
+			rotation.current = currentSession
+		}
+
+		internal func updateSendValues(context:borrowing ChannelHandlerContext, now:NIODeadline, _ sendValues:SendValues, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			guard var currentSession = rotation.current else {
+				fatalError("no active handshakes")
+			}
+			guard currentSession.geometry.m == sendValues.session.geometry.m else {
+				fatalError("updating nSend on a session that is not current")
+			}
+			switch currentSession.geometry {
+				case .selfInitiated(m:let m, mp:let mp):
+					// check for the passive rehandshake threshold
+					if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
+						try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+					}
+				default:
+					break
+			}
+			currentSession.nVar.valueSend = sendValues.nSend
 			rotation.current = currentSession
 		}
 		
