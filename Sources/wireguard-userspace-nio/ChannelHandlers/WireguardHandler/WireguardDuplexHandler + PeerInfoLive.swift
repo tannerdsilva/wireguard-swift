@@ -8,7 +8,7 @@ import Synchronization
 import bedrock
 
 extension PeerInfo {
-	internal final class Live {
+	internal final class Live:@unchecked Sendable {
 		private let log:Logger
 		private let wireguardHandler:Unmanaged<WireguardHandler>
 
@@ -75,7 +75,9 @@ extension PeerInfo {
 		internal enum SendStrategy {
 			/// returned when there is a current session that has not crossed its timeout threshold
 			case sendImmediately(SendValues)
+			/// returned when there is no current session and a handshake initiation is actively taking place
 			case queueForInitiatingHandshake
+			/// returned when there is no current session but there is a next session awaiting a key rotation into the current one
 			case queueWhileAwaitingKeyRotation
 		}
 
@@ -84,16 +86,26 @@ extension PeerInfo {
 			context.eventLoop.assertInEventLoop()
 			#endif
 			rekeyAttemptTimeNow = now
-			guard let currentRotation = rotation.current else {
+			func guardCaught() -> SendStrategy {
 				switch rotation.next {
-					case .some(_):
-						// there is a next session, so we are waiting for key rotation to complete
+					case .some(let nextSesh):
+						guard nextSesh.establishedDate + WireguardHandler.rejectAfterTime > now else {
+							// the next session has expired, we need to initiate a new handshake
+							try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+							return .queueForInitiatingHandshake
+						}
 						return .queueWhileAwaitingKeyRotation
 					case .none:
 						// there is no current session or next session, so we need to initiate a handshake
-						try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+						try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
 						return .queueForInitiatingHandshake
 				}
+			}
+			guard let currentRotation = rotation.current else {
+				return guardCaught()
+			}
+			guard currentRotation.establishedDate + WireguardHandler.rejectAfterTime > now else {
+				return guardCaught()
 			}
 			return .sendImmediately(SendValues(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
 		}
@@ -112,7 +124,7 @@ extension PeerInfo {
 				case .selfInitiated(m:let m, mp:let mp):
 					// check for the passive rehandshake threshold
 					if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
-						try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:initiationValues.endpointOverride, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+						try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
 					}
 				default:
 					break
@@ -128,17 +140,17 @@ extension PeerInfo {
 			postHandshakePackets.queue(data:data, promise:promise)
 		}
 
-		internal borrowing func getRecvVars(geometry inputPositionExplicit:Rotating<Session>.Positioned) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
-			switch inputPositionExplicit {
-				case .current(let element):
-					return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
-				case .previous(let element):
-					return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
-				case .next(let element):
-					return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
+		/// called to retrieve the receive variables for a specific session.
+		internal borrowing func getRecvVars(geometry inputPositionExplicit:Rotating<Session>.Positioned, now:NIODeadline) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
+			let element = inputPositionExplicit.element
+			guard element.establishedDate + WireguardHandler.rejectAfterTime > now else {
+				log.debug("unable to use session because it has expired", metadata:["session_id":"\(element.geometry)"])
+				return nil
 			}
+			return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
 		}
 
+		/// called after bytes have been received. updates various counters and schedules any tasks as needed.
 		internal borrowing func nRecvUpdate(context:borrowing ChannelHandlerContext, now:NIODeadline, _ newValue:SlidingWindow<Counter>, geometry inputPositionExplicit:Rotating<Session>.Positioned, mStaticPrivateKey ourStaticPrivateKey:borrowing MemoryGuarded<PrivateKey>) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -149,7 +161,7 @@ extension PeerInfo {
 						case .selfInitiated(m:_, mp:_):
 							// passive rehandshake evaluation
 							if (element.establishedDate + (WireguardHandler.rejectAfterTime - WireguardHandler.keepaliveTimeout - WireguardHandler.rekeyTimeout)) <= now && handshakeInitiationTask == nil {
-								try? launchHandshakeInitiationTask(context:context, now:now, endpointOverride:nil, initiatorStaticPrivateKey:ourStaticPrivateKey)
+								try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:ourStaticPrivateKey)
 							}
 						case .peerInitiated(m:_, mp:_):
 							// passive handshakes cannot be sent in the responder role
@@ -169,14 +181,12 @@ extension PeerInfo {
 	}
 }
 
-// MARK: Handshake Initiation
+// MARK: Send Initiation
 extension PeerInfo.Live {
 	/// thrown when a handshake initiation task is already running, not yet timed out, but another is attempted to be launched
 	internal struct HandshakeTaskAlreadyRunning:Swift.Error {}
-
 	/// thrown when no endpoint is known for the remote peer
 	internal struct UnknownPeerEndpoint:Swift.Error {}
-
 	/// thrown when a rekey attempt is made too soon after the previous attempt
 	internal struct RekeyAttemptTooSoon:Swift.Error {}
 
@@ -190,7 +200,7 @@ extension PeerInfo.Live {
 	/// 	- `HandshakeTaskAlreadyRunning` if a handshake initiation task is already running
 	/// 	- `UnknownPeerEndpoint` if no endpoint is known for the remote peer
 	/// 	- `RekeyAttemptTooSoon` if a rekey attempt is made too soon after the previous attempt
-	internal func launchHandshakeInitiationTask(context:ChannelHandlerContext, now:NIODeadline, endpointOverride epOverride:Endpoint?, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>) throws {
+	internal func launchHandshakeInitiationTask(context:ChannelHandlerContext, now:NIODeadline, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -202,22 +212,15 @@ extension PeerInfo.Live {
 		}
 		// determine which endpoint to use for initiating a connection with the peer
 		let targetEndpoint:Endpoint
-		if epOverride != nil {
-			// use the value that came from OutboundIn. do not document this endpoint until it is discovered in the response to this initiation.
-			targetEndpoint = epOverride!
-			logger[metadataKey:"endpoint_remote"] = "\(targetEndpoint)"
-			logger.trace("overriding stored endpoint for handshake initiation")
-		} else if ep != nil {
-			// use the value that came from the peer list
-			targetEndpoint = ep!
-			logger[metadataKey:"endpoint_remote"] = "\(targetEndpoint)"
-			logger.trace("using stored endpoint for handshake initiation")
-		} else {
+		guard ep != nil else {
 			// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
 			logger.warning("cannot launch handshake initiation task because no endpoint is known for the remote peer")
 			throw UnknownPeerEndpoint()
 		}
-
+		// use the value that came from the peer list
+		targetEndpoint = ep!
+		logger[metadataKey:"endpoint_remote"] = "\(targetEndpoint)"
+		logger.trace("using stored endpoint for handshake initiation")
 		guard (rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > now else {
 			// a rekey attempt was made recently, do not send another handshake initiation
 			logger.debug("skipping handshake initiation emission due to recent rekey attempt", metadata:["rekey_attempt_time":"\(String(describing:rekeyAttemptTimeNow))", "current_time":"\(now)"])
@@ -270,7 +273,7 @@ extension PeerInfo.Live {
 	}
 
 	/// extracts a pending handshake initiation from memory so it can be processed and upgraded to a full session.
-	internal func handshakeInitiationResponse(context:ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
+	internal borrowing func handshakeInitiationResponse(context:ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
 		return selfInitiatedKeys.claimInitiation(context: context, now: now, initiatorPeerIndex:initiatorPeerIndex)
 	}
 }
@@ -278,7 +281,7 @@ extension PeerInfo.Live {
 // MARK: Accessing Sessions
 extension PeerInfo.Live {
 	/// returns the session (and its rotational position) for the given peer index
-	internal func session(forPeerM:PeerIndex) -> Rotating<Session>.Positioned? {
+	internal borrowing func session(forPeerM:PeerIndex) -> Rotating<Session>.Positioned? {
 		// check the current position
 		switch rotation.current {
 			case .some(let session):
@@ -385,6 +388,7 @@ extension PeerInfo.Live {
 
 // MARK: Session Rotation
 extension PeerInfo.Live {
+	/// executes a rotational transformation on the current operating trio of cryptographic keys
 	fileprivate borrowing func applyRotation(context:borrowing ChannelHandlerContext, now:NIODeadline) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()

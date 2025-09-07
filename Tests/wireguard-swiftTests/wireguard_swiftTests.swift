@@ -126,11 +126,11 @@ extension WireguardSwiftTests {
 	)
 	struct LiveSocketTests {
 		
-		let myPublicKey: PublicKey
-		let myPrivateKey: MemoryGuarded<PrivateKey>
+		let myPublicKey:PublicKey
+		let myPrivateKey:MemoryGuarded<PrivateKey>
 		
-		let peerPublicKey: PublicKey
-		let peerPrivateKey: MemoryGuarded<PrivateKey>
+		let peerPublicKey:PublicKey
+		let peerPrivateKey:MemoryGuarded<PrivateKey>
 
 		let cliLogger = Logger(label: "wg-test-tool.initiator")
 		
@@ -146,7 +146,7 @@ extension WireguardSwiftTests {
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
 				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
-				
+
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
 				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 

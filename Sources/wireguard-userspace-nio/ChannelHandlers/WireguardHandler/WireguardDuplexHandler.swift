@@ -266,7 +266,7 @@ extension WireguardHandler {
 						return
 					}
 					let session = existingGeometryPositioned.element
-					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometryPositioned)!
+					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometryPositioned, now:now)!
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
 						return
