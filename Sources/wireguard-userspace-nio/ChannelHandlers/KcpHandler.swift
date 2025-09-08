@@ -30,7 +30,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	// task for updating for acks
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
-	private let kcpUpdateTime: TimeAmount = .milliseconds(30)
+	private let kcpUpdateTime: TimeAmount = .milliseconds(100)
 
 	// task for killing ikcp when inactive
 	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
@@ -56,27 +56,25 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
-		kcp[key]!.setNoDelay(1, interval: 30, resend: 1, nc: 0)
+		kcp[key]!.setNoDelay(1, interval:100, resend:1, nc:0)
 	}
 
 	private func kcpUpdates(for key:PublicKey, context:ChannelHandlerContext) {
 		guard kcpUpdateTasks[key] == nil else { return }
 		kcpStartTimers[key] = 0
 		
-		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
-			[weak self, c = ContextContainer(context:context)] _ in
+		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) { [weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
-			
 			self.kcp[key]!.update(current:iclock()) { buffer, promise in
 				let rawPointer = UnsafeRawBufferPointer(buffer)
 				let byteBuffer = ByteBuffer(bytes: rawPointer)
 				c.accessContext { contextPointer in
 					contextPointer.pointee.write(self.wrapOutboundOut((key, byteBuffer)), promise:promise)
 				}
-			 }
+			}
 
 			// Sending data until snd_buf is full
-			if(pendingPackets[key] != nil) {
+			if (pendingPackets[key] != nil) {
 				while true {
 					// Next packet to be sent
 					let nextPacketIterator = packetIterators[key]!.nextIterator()!

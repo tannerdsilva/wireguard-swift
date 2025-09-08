@@ -97,7 +97,7 @@ extension PeerInfo.Live {
 		/// current time that is updated every time a new handshake initiation is emitted to the peer.
 		private var lastHandshakeEmissionTime:NIODeadline? = nil
 		/// the chaining data related to the current initiation handshake that is in-flight.
-		private var initiatorChainingData:(initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? = nil
+		private var initiatorChainingData:(initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated, handshakeBegin:NIODeadline)? = nil
 		
 		/// initialize a new instance.
 		internal init(responderStaticPublicKey initiatorPub:PublicKey, handler:Unmanaged<WireguardHandler>) {
@@ -132,7 +132,7 @@ extension PeerInfo.Live {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
-			initiatorChainingData = (ephemeralPrivateKey, c, h, authenticatedPayload)
+			initiatorChainingData = (ephemeralPrivateKey, c, h, authenticatedPayload, now)
 			lastHandshakeEmissionTime = now
 			_ = wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:responderStaticPublicKey, initiatorPeerIndex:authenticatedPayload.payload.initiatorPeerIndex)
 		}
@@ -143,7 +143,7 @@ extension PeerInfo.Live {
 		/// 	- now: the current time
 		/// 	- initiatorPeerIndex: the initiator's peer index
 		/// - returns: the cryptokey-set that was used for the initiation, or nil if the claim was invalid
-		internal mutating func claimInitiation(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
+		internal mutating func claimInitiation(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated, handshakeBegin:NIODeadline)? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
