@@ -103,7 +103,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
-							PacketHandler(mtu:1500, logLevel:l.logLevel),
+							PacketHandler(mtu:1500, logLevel:.debug),
 							wgh,
 							KcpHandler(logLevel:l.logLevel),
 							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),

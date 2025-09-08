@@ -333,6 +333,7 @@ extension WireguardHandler {
 					forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
 					logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
 					encodeBuffer.clear(minimumCapacity:forgedLength)
+					logger.critical("writing \(forgedLength) bytes out...")
 					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
 						return try Message.Data.Payload.forge(receiverIndex:sendValues.session.geometry.mp, nonce:&sendValues.nSend, transportKey:sendValues.tSend, plainText:&payload, output:bufferPtr.baseAddress!)
 					}

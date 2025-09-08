@@ -259,6 +259,7 @@ extension PeerInfo.Live {
 						encBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:encodedLength) { (ptr:UnsafeMutableRawBufferPointer) -> Int in
 							return ptr.baseAddress!.distance(to:handshakeInitiationMessage.RAW_encode(dest:ptr.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 						}
+						l.critical("SENDING HANDSHAKE")
 						contextPtr.pointee.writeAndFlush(wireguardHandler.takeUnretainedValue().wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer)), promise:nil)
 					}
 				}
