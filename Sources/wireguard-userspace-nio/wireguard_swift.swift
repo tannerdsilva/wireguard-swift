@@ -59,7 +59,7 @@ public struct PeerInfo:Sendable {
 }
 
 /// primary wireguard interface. this is how connections will be made.
-public final actor WGInterface<TransactableDataType>:Sendable, Service where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
+public final actor WGInterface<TransactableDataType>:Sendable where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
 	public enum State {
 		case initialized
 		case engaging
@@ -73,7 +73,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
+	private var inboundData:NIOAsyncChannel<(PublicKey, TransactableDataType), (PublicKey, TransactableDataType)>!
 	private let listeningPort:Int
 	private let wgh:WireguardHandler
 
@@ -91,102 +91,59 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	public func waitForChannelInit() async throws {
 		_ = try await bootstrappedFuture.result()!.get()
 	}
-	
+
+	public typealias InterfaceHandler<E> = @Sendable (NIOAsyncChannelInboundStream<(PublicKey, TransactableDataType)>.AsyncIterator, NIOAsyncChannelOutboundWriter<(PublicKey, TransactableDataType)>) async throws(E) -> Void where E:Swift.Error
+
 	/// Starts the WireGuard interface
-	public func run() async throws {
+	public func run<E>(_ handler:@escaping InterfaceHandler<E>) async throws where E:Swift.Error {
 		switch state {
 			case .initialized:
 				state = .engaging
-				
-				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
-				let bootstrap = DatagramBootstrap(group: group)
-					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
-						channel.pipeline.addHandlers([
-							PacketHandler(mtu:1500, logLevel:l.logLevel),
-							wgh,
-							KcpHandler(logLevel:l.logLevel),
-							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
-							dhh
-						])
-					}
-				let channel = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort).get()
-				try bootstrappedFuture.setSuccess(())
-				state = .engaged(channel)
-				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
-				do {
-					try await withTaskCancellationHandler {
-						try await withGracefulShutdownHandler {
-							try await channel.closeFuture.get()
-						} onGracefulShutdown: { [c = channel, l = logger] in
-							_ = c.close()
-							l.debug("invoking graceful shutdown of wireguard nio interface")
+				try await withThrowingTaskGroup(of:Void.self, body: { [h = handler] tg in
+					let bootstrap = DatagramBootstrap(group: group)
+						.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
+						.channelInitializer { [wgh = wgh, l = logger] channel in
+							channel.pipeline.addHandlers([
+								PacketHandler(mtu:1500, logLevel:l.logLevel),
+								wgh,
+								KcpHandler(logLevel:l.logLevel),
+								SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000)
+							])
 						}
-					} onCancel: { [c = channel, l = logger] in
-						_ = c.close()
-						l.debug("invoking cancellation of wireguard nio interface")
+					let asyncChannel:NIOAsyncChannel<(PublicKey, TransactableDataType), (PublicKey, TransactableDataType)> = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort, channelInitializer: { channel in
+						return channel.eventLoop.makeSucceededFuture(try! NIOAsyncChannel<(PublicKey, TransactableDataType), (PublicKey, TransactableDataType)>(wrappingChannelSynchronously: channel))
+					})
+					let channel = asyncChannel.channel
+					self.inboundData = asyncChannel
+					state = .engaged(channel)
+					tg.addTask { [h = h] in
+						try await asyncChannel.executeThenClose { inbound, outbound in
+							try await h(inbound.makeAsyncIterator(), outbound)
+						}
 					}
-				} catch let error {
-					inboundData.finish(throwing: error)
-					throw error
-				}
-				inboundData.finish()
-				state = .terminated
+					try bootstrappedFuture.setSuccess(())
+					logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
+					do {
+						try await withTaskCancellationHandler {
+							try await withGracefulShutdownHandler {
+								try await channel.closeFuture.get()
+							} onGracefulShutdown: { [c = channel, l = logger] in
+								_ = c.close()
+								l.debug("invoking graceful shutdown of wireguard nio interface")
+							}
+						} onCancel: { [c = channel, l = logger] in
+							_ = c.close()
+							l.debug("invoking cancellation of wireguard nio interface")
+						}
+					} catch let error {
+						throw error
+					}
+					state = .terminated
+				})
 			case .engaged(_), .engaging, .terminated:
 				throw InvalidInterfaceStateError()
 		}
 
 		logger.info("server closed successfully.")
-	}
-
-	public func asyncWrite(publicKey: PublicKey, data:[UInt8]) async throws {
-		switch state {
-			case .engaged(let channel):
-				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
-				try await myWritePromise.futureResult.get()
-			default:
-				throw InvalidInterfaceStateError()
-		}
-	}
-	
-	public func write(publicKey: PublicKey, data:[UInt8]) throws {
-		switch state {
-			case .engaged(let channel):
-				channel.pipeline.writeAndFlush((publicKey, data), promise:nil)
-			default:
-				throw InvalidInterfaceStateError()
-		}
-	}
-}
-
-
-extension WGInterface:AsyncSequence {
-	public struct AsyncIterator:AsyncIteratorProtocol {
-		private let inboundDataOut:FIFO<(PublicKey, TransactableDataType), Swift.Error>.AsyncConsumerExplicit
-		
-		internal init(inboundData:FIFO<(PublicKey, TransactableDataType), Swift.Error>) {
-			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
-		}
-		
-		public func next() async throws -> (PublicKey, TransactableDataType)? {
-			switch await inboundDataOut.next() {
-				case .element(let element):
-					return element
-				case .capped(let result):
-					switch result {
-						case .success(_):
-							return nil
-						case .failure(let error):
-							throw error
-					}
-				case .wouldBlock:
-					fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
-			}
-		}
-	}
-	
-	nonisolated public func makeAsyncIterator() -> AsyncIterator {
-		return AsyncIterator(inboundData:inboundData)
 	}
 }

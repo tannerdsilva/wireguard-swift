@@ -37,3 +37,9 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 		handoff.yield(unwrapInboundIn(data))
 	}
 }
+
+// internal final class DataHandoffHandlerV2<TransactableDataType>:ChannelInboundHandler, Sendable where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
+// 	internal typealias InboundIn = (PublicKey, TransactableDataType)
+// 	internal typealias InboundOut = Never
+
+// 	private let asyncChannel:NIOAsyncChannelInboundStream
