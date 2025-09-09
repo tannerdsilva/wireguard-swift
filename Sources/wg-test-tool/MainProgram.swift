@@ -184,7 +184,6 @@ struct CLI:AsyncParsableCommand {
 		
 		func run() async throws {
 			let cliLogger = Logger(label: "wg-test-tool.initiator")
-			
 			@Sendable func output(input: (PublicKey, [UInt8])) {
 				let (key, incomingData) = input
 				// ANSI escape codes
@@ -208,9 +207,9 @@ struct CLI:AsyncParsableCommand {
 				foo.addTask {
 					while true {
 						if let input = readLine(strippingNewline: true), let number = Int(input) {
-							var payload = [UInt8](repeating: 0, count: number)
+							let payload = [UInt8](repeating: 0, count: number)
 							try await myInterface.write(publicKey: respondersPublicKey, data: payload)
-							}
+						}
 						else {
 							print("Invalid input, not an integer.")
 						}

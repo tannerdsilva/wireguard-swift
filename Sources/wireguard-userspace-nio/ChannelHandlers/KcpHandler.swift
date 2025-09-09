@@ -70,8 +70,9 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			self.kcp[key]!.update(current:iclock()) { buffer, promise in
 				let rawPointer = UnsafeRawBufferPointer(buffer)
 				let byteBuffer = ByteBuffer(bytes: rawPointer)
+				logger.trace("Sending kcp segment", metadata: ["size": "\(buffer.count) bytes"])
 				c.accessContext { contextPointer in
-					contextPointer.pointee.write(self.wrapOutboundOut((key, byteBuffer)), promise:promise)
+					contextPointer.pointee.writeAndFlush(self.wrapOutboundOut((key, byteBuffer)), promise:promise)
 				}
 			 }
 
@@ -86,6 +87,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					do {
 						var data = node.1
 						// Successfully send a packet and then move iterator to next
+						logger.debug("Calling kcp send", metadata:["size":"\(data.count)"])
 						let sent = try kcp[key]!.send(&data, count:data.count, assosiatedData: nil)
 						if(sent == 0) { break }
 						packetIterators[key]! = nextPacketIterator
@@ -132,6 +134,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					if(value >= receiveNonce[key]!) {
 						// Remove the first 4 bytes from the array
 						receivedData = Array(receivedData.dropLast(8))
+						logger.debug("Compiled kcp message. Passing to splicer.", metadata: ["size": "\(receivedData.count) bytes"])
 						c.accessContext { contextPointer in
 							contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
 						}
@@ -170,6 +173,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		var bytes: [UInt8] = data.getBytes(at: data.readerIndex, length: data.readableBytes)!
 		
 		do {
+			logger.trace("Received kcp segment", metadata: ["size": "\(bytes.count) bytes"])
 			_ = try kcp[key]!.input(bytes, count: bytes.count)
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
@@ -198,6 +202,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			pendingPackets[key] = LinkedList<[UInt8]>()
 			packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
 		}
+		logger.debug("Adding to pending kcp queue", metadata: ["size": "\(data.count) bytes"])
 		pendingPackets[key]!.addTail(data)
 	}
 	

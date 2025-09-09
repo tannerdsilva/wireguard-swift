@@ -76,7 +76,6 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
 	
 	private let listeningPort:Int
 	private let wgh:WireguardHandler
@@ -132,10 +131,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 						l.debug("invoking cancellation of wireguard nio interface")
 					}
 				} catch let error {
-					inboundData.finish(throwing: error)
 					throw error
 				}
-				inboundData.finish()
 				state = .terminated
 			case .engaged(_), .engaging, .terminated:
 				throw InvalidInterfaceStateError()
@@ -162,36 +159,5 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 			default:
 				throw InvalidInterfaceStateError()
 		}
-	}
-}
-
-
-extension WGInterface:AsyncSequence {
-	public struct AsyncIterator:AsyncIteratorProtocol {
-		private let inboundDataOut:FIFO<(PublicKey, TransactableDataType), Swift.Error>.AsyncConsumerExplicit
-		
-		internal init(inboundData:FIFO<(PublicKey, TransactableDataType), Swift.Error>) {
-			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
-		}
-		
-		public func next() async throws -> (PublicKey, TransactableDataType)? {
-			switch await inboundDataOut.next() {
-				case .element(let element):
-					return element
-				case .capped(let result):
-					switch result {
-						case .success(_):
-							return nil
-						case .failure(let error):
-							throw error
-					}
-				case .wouldBlock:
-					fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
-			}
-		}
-	}
-	
-	nonisolated public func makeAsyncIterator() -> AsyncIterator {
-		return AsyncIterator(inboundData:inboundData)
 	}
 }

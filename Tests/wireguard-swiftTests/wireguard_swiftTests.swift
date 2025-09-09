@@ -132,7 +132,7 @@ extension WireguardSwiftTests {
 		let peerPublicKey:PublicKey
 		let peerPrivateKey:MemoryGuarded<PrivateKey>
 
-		let cliLogger = Logger(label: "wg-test-tool.initiator")
+		var cliLogger = Logger(label: "wg-test-tool.initiator")
 		
 		init() throws {
 			(myPublicKey, myPrivateKey) = try dhGenerate()
@@ -301,6 +301,7 @@ extension WireguardSwiftTests {
 				}
 				
 				while(await tracker.count != 999) {}
+				#expect(await tracker.count == 999)
 				
 				foo.cancelAll()
 				try await foo.waitForAll()
