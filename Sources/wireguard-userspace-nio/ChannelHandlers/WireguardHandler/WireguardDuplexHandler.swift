@@ -100,16 +100,16 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
-		var logger = log
+		let logger = log
 		switch operatingState {
 			case .initialized(let initPeers):
 				encodeBuffer = context.channel.allocator.buffer(capacity:1800)
-				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self, l = log] _ in
+				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self] _ in
 					// when peer is added
-					guard let self = self else { return }
+					guard let _ = self else { return }
 				}, removalHandler: { [weak self, l = log] removedPublicKey in
 					// when peer is removed
-					guard let self = self else { return }
+					guard let _ = self else { return }
 					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
 				})
 				operatingState = .channelEngaged
@@ -122,7 +122,7 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
-		var logger = log
+		let logger = log
 		logger.trace("handler removed from NIO pipeline.")
 		operatingState = .terminated
 	}
@@ -130,7 +130,7 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
-		var logger = log
+		let logger = log
 		logger.trace("user inbound event triggered")
 	}
 }
@@ -162,7 +162,7 @@ extension WireguardHandler {
 						} catch Message.Initiation.Payload.Authenticated.Error.mac1Invalid {
 							logger.error("received invalid handshake initiation packet. ignoring.")
 							return
-						} catch let error {
+						} catch {
 							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
 							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
@@ -171,7 +171,7 @@ extension WireguardHandler {
 					}
 					
 					let responderPeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
-					var (c, h, initiatorStaticPublicKey, timestamp) = try payload.validate(responderStaticPrivateKey: privateKey)
+					var (c, h, initiatorStaticPublicKey, _) = try payload.validate(responderStaticPrivateKey: privateKey)
 					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:initiatorStaticPublicKey) else {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
 						return
@@ -202,11 +202,11 @@ extension WireguardHandler {
 						logger.critical("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					guard var chainingData = try livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:payload.payload.initiatorIndex) else {
+					guard var chainingData = livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:payload.payload.initiatorIndex) else {
 						logger.error("received handshake response for unknown peer index \(payload.payload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					let val = try payload.validate(c:chainingData.c, h:chainingData.h, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:chainingData.initiatorEphemeralPrivateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
+					let _ = try payload.validate(c:chainingData.c, h:chainingData.h, initiatorStaticPrivateKey:privateKey, initiatorEphemeralPrivateKey:chainingData.initiatorEphemeralPrivateKey, preSharedKey:Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed()))
 					let geometry = HandshakeGeometry<PeerIndex>.selfInitiated(m:payload.payload.initiatorIndex, mp:payload.payload.responderIndex)
 					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPub) else {
 						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(peerPub)"])

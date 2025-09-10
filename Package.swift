@@ -16,13 +16,10 @@ let package = Package(
 	dependencies:[
 //		.package(name:"rawdog", path:"../rawdog"),
 		.package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"b249e367e35c0ea05ae7b7dc0046074b5b05c604"),
-		.package(url:"https://github.com/apple/swift-log.git", "1.6.3"..<"2.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
-		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"efe28c6567b98917cfd539f115797dc92aac6226"),
-//		.package(name: "bedrock", path: "../bedrock"),
+		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"b6626ac8ecee31975093e01427e10f4cc299409a"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
 		.package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
-//		.package(name:"kcp-swift-core", path:"../kcp-swift-core")
 		.package(url:"https://github.com/tannerdsilva/kcp-swift-core", revision: "611c49a4c7d2888dcba8ffe0cfd6027e9be03054")
 	],
 	targets: [

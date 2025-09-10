@@ -74,7 +74,7 @@ extension Message {
 			
 			public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
 				var dest = header.typeHeader.RAW_encode(dest:dest)
-				dest = header.receiverIndex.RAW_encode(dest:dest)
+				dest = header.recipientIndex.RAW_encode(dest:dest)
 				dest = header.counter.RAW_encode(dest:dest)
 				dest = data.RAW_encode(dest:dest)
 				dest = tag.RAW_encode(dest:dest)
@@ -124,7 +124,7 @@ extension Message {
 				// step 3: msg.packet := AEAD(Tm, Nm, P, e)
 				let outputDelta = buildHeader.RAW_encode(dest:output.assumingMemoryBound(to:UInt8.self))
 				let tagStart = outputDelta + paddedPlainText.count
-				let tagAssociatedData = UnsafeMutableRawPointer(tagStart).assumingMemoryBound(to:Tag.self)
+				_ = UnsafeMutableRawPointer(tagStart).assumingMemoryBound(to:Tag.self)
 				try transportKey.RAW_access_staticbuff { tsKeyPtr in
 					try aeadEncryptV3(plaintext:paddedPlainText, key:UnsafeRawBufferPointer(start:tsKeyPtr, count:MemoryLayout<Result.Bytes32>.size), counter:nonce.RAW_native(), cipherText:outputDelta, aad:UnsafeRawBufferPointer(start:outputDelta, count:0), tag:tagStart)
 				}

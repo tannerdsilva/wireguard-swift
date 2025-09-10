@@ -16,7 +16,7 @@ extension Message:RAW_encodable {
                 payload.RAW_encode(count: &count)
             case .cookie(let payload):
                 payload.RAW_encode(count: &count)
-            case .data(let payload):
+            case .data(_):
                 fatalError("do not use RAW_encodable protocol on Message.Data")
         }
     }
@@ -29,7 +29,7 @@ extension Message:RAW_encodable {
 				return payload.RAW_encode(dest:dest)
 			case .cookie(let payload):
 				return payload.RAW_encode(dest:dest)
-			case .data(let payload):
+			case .data(_):
 				fatalError("do not use RAW_encodable protocol on Message.Data")
 		}
 		

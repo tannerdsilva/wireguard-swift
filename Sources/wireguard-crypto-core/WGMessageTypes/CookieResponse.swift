@@ -37,9 +37,9 @@ extension Message {
 				let T:Result.Bytes16
 				switch endpoint {
 					case .v4(let v4ep):
-						T = try wgMACv2(key:r, data:v4ep)
+						T = try wgMAC(key:r, data:v4ep)
 					case .v6(let v6ep):
-						T = try wgMACv2(key:r, data:v6ep)
+						T = try wgMAC(key:r, data:v6ep)
 				}
 				let nonce = try generateSecureRandomBytes(as:Nonce.self)
 				let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad:m)

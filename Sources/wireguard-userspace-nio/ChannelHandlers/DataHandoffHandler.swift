@@ -22,17 +22,17 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 		log = buildLogger
 	}
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		var logger = log
+		let logger = log
 		logger.trace("handler added to NIO pipeline.")
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
-		var logger = log
+		let logger = log
 		logger.trace("handler removed from NIO pipeline.")
 	}
 
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-		var logger = log
+		let logger = log
 		logger.trace("handing off data to FIFO")
 		handoff.yield(unwrapInboundIn(data))
 	}

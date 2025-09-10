@@ -57,7 +57,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
 		if(kcp[key] != nil) {
 			// Copy rtt values to next kcp_cb
-			var oldcb = kcp[key]!
+			let oldcb = kcp[key]!
 			var newcb = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
 			newcb.rx_rttval = oldcb.rx_rttval
 			newcb.rx_srtt = oldcb.rx_srtt

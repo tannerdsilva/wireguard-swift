@@ -102,7 +102,7 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					context.fireErrorCaught(Error.mtuExceeded)
 					return
 				}
-				let modeByte = envelope.data.readInteger(as:UInt8.self)!
+				_ = envelope.data.readInteger(as:UInt8.self)!
 				guard envelope.data.readInteger(as:UInt8.self)! == 0, envelope.data.readInteger(as:UInt8.self)! == 0, envelope.data.readInteger(as:UInt8.self)! == 0 else {
 					logger.error("invalid packet format: reserved bytes not zeroed", metadata:["byte1":"\(envelope.data.readInteger(as:UInt8.self)!)", "byte2":"\(envelope.data.readInteger(as:UInt8.self)!)", "byte3":"\(envelope.data.readInteger(as:UInt8.self)!)"])
 					return

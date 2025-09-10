@@ -102,7 +102,7 @@ extension WireguardSwiftTests {
 			var responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
 			
 			// Pre-computing HASH(LABEL-COOKIE || Spub)
-			var hasher = try! WGHasherV2<RAW_xchachapoly.Key>()
+			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
 			try! hasher.update(responderStaticPublicKey)
 			let precomputedCookieKey = try! hasher.finish()

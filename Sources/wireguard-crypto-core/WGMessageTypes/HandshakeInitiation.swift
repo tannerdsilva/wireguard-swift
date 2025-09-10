@@ -56,7 +56,7 @@ extension Message {
 						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 
 						// step 4: generate ephemeral keys
-						var ephiPrivate = try MemoryGuarded<PrivateKey>.new()
+						let ephiPrivate = try MemoryGuarded<PrivateKey>.new()
 						return try PublicKey(privateKey:ephiPrivate).RAW_access_staticbuff { ephiPublicPtr in
 
 							// step 5: c = KDF^1(c, e.Public)
@@ -118,7 +118,7 @@ extension Message {
 					var hasher = try WGHasher<Result.Bytes32>()
 					try hasher.update([UInt8]("mac1----".utf8))
 					try hasher.update(responderStaticPublicKey)
-					let mac1 = try wgMACv2(key:try hasher.finish(), data:selfPtr.pointee)
+					let mac1 = try wgMAC(key:try hasher.finish(), data:selfPtr.pointee)
 					
 					// step 15: msg.mac2 := 0^16
 					let mac2:Result.Bytes16
@@ -129,7 +129,7 @@ extension Message {
 						try hasher.update(responderStaticPublicKey)
 						let key = try hasher.finish()
 						let cookieMsg = try xaeadDecrypt(key:key, nonce: cookie!.nonce, cipherText: cookie!.cookieMsg, aad: mac1, tag: cookie!.cookieTag)
-						mac2 = try wgMACv2(key:cookieMsg, data:MSGb(payload:selfPtr.pointee, msgMac1: mac1))
+						mac2 = try wgMAC(key:cookieMsg, data:MSGb(payload:selfPtr.pointee, msgMac1: mac1))
 					} else {
 						mac2 = Result.Bytes16(RAW_staticbuff:Result.Bytes16.RAW_staticbuff_zeroed())
 					}
@@ -166,7 +166,7 @@ extension Message.Initiation.Payload {
 				var hasher = try WGHasher<Result.Bytes32>()
 				try hasher.update([UInt8]("mac1----".utf8))
 				try hasher.update(responderStaticPublicKey)
-				let mac1 = try wgMACv2(key:try hasher.finish(), data:selfPtr.pointer(to:\.payload)!.pointee)
+				let mac1 = try wgMAC(key:try hasher.finish(), data:selfPtr.pointer(to:\.payload)!.pointee)
 				guard mac1 == selfPtr.pointer(to:\.msgMac1)!.pointee else {
 					throw Error.mac1Invalid
 				}
@@ -174,11 +174,11 @@ extension Message.Initiation.Payload {
 				let T:Result.Bytes16
 				switch endpoint {
 					case .v4(let v4ep):
-						T = try wgMACv2(key:R, data:v4ep)
+						T = try wgMAC(key:R, data:v4ep)
 					case .v6(let v6ep):
-						T = try wgMACv2(key:R, data:v6ep)
+						T = try wgMAC(key:R, data:v6ep)
 				}
-				let mac2 = try wgMACv2(key:T, data:MSGb(payload:selfPtr.pointer(to:\.payload)!.pointee, msgMac1:mac1))
+				let mac2 = try wgMAC(key:T, data:MSGb(payload:selfPtr.pointer(to:\.payload)!.pointee, msgMac1:mac1))
 				guard mac2 == selfPtr.pointer(to:\.msgMac2)!.pointee else {
 					throw Error.mac2Invalid
 				}
@@ -206,7 +206,7 @@ extension Message.Initiation.Payload {
 						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
 
 						// step 3.5 - store the initiators ephemeral key
-						var initiatorEphemeralPublicKey = selfPtr.pointer(to:\.payload.ephemeral)!.pointee
+						let initiatorEphemeralPublicKey = selfPtr.pointer(to:\.payload.ephemeral)!.pointee
 					
 						// step 5: c = KDF^1(c, initiatorEphemeralPublicKey)
 						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:initiatorEphemeralPublicKey)
@@ -222,7 +222,7 @@ extension Message.Initiation.Payload {
 						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:responderStaticPrivateKey, publicKey:initiatorEphemeralPublicKey))
 
 						// step 8: decrypt the msg.static to determine the initStaticPublicKey
-						var initStaticPublicKey = try aeadDecryptV2(as:PublicKey.self, key:k, counter:0, cipherText:selfPtr.pointer(to:\.payload.staticRegion)!.pointee, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, tag:selfPtr.pointer(to:\.payload.staticTag)!.pointee)
+						let initStaticPublicKey = try aeadDecryptV2(as:PublicKey.self, key:k, counter:0, cipherText:selfPtr.pointer(to:\.payload.staticRegion)!.pointee, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, tag:selfPtr.pointer(to:\.payload.staticTag)!.pointee)
 					
 						// step 9: h = hash(h || msg.static)
 						hasher = try WGHasher<Result.Bytes32>()
@@ -248,7 +248,7 @@ extension Message.Initiation.Payload {
 						hasher = try WGHasher<Result.Bytes32>()
 						try hasher.update([UInt8]("mac1----".utf8))
 						try hasher.update(responderStaticPublicKey)
-						let mac1 = try wgMACv2(key:try hasher.finish(), data:selfPtr.pointer(to:\.payload)!.pointee)
+						let mac1 = try wgMAC(key:try hasher.finish(), data:selfPtr.pointer(to:\.payload)!.pointee)
 						guard mac1 == selfPtr.pointer(to:\.msgMac1)!.pointee else {
 							throw Error.mac1Invalid
 						}
