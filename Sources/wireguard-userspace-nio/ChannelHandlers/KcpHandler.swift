@@ -55,7 +55,17 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	private func makeIkcpCb(key:PublicKey, context:ChannelHandlerContext) {
-		kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
+		if(kcp[key] != nil) {
+			// Copy rtt values to next kcp_cb
+			var oldcb = kcp[key]!
+			var newcb = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
+			newcb.rx_rttval = oldcb.rx_rttval
+			newcb.rx_srtt = oldcb.rx_srtt
+			newcb.rx_rto = oldcb.rx_rto
+			kcp[key] = newcb
+		} else {
+			kcp[key] = ikcp_cb<EventLoopPromise<Void>>(conv: 0)
+		}
 		kcp[key]!.setNoDelay(1, interval: 30, resend: 1, nc: 0)
 	}
 
@@ -67,7 +77,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			
-			self.kcp[key]!.update(current:iclock()) { buffer, promise in
+			self.kcp[key]!.flush(current:iclock()) { buffer, promise in
 				let rawPointer = UnsafeRawBufferPointer(buffer)
 				let byteBuffer = ByteBuffer(bytes: rawPointer)
 				logger.trace("Sending kcp segment", metadata: ["size": "\(buffer.count) bytes"])
@@ -170,7 +180,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			sendNonce[key] = 0
 			receiveNonce[key] = 0
 		}
-		var bytes: [UInt8] = data.getBytes(at: data.readerIndex, length: data.readableBytes)!
+		let bytes: [UInt8] = data.getBytes(at: data.readerIndex, length: data.readableBytes)!
 		
 		do {
 			logger.trace("Received kcp segment", metadata: ["size": "\(bytes.count) bytes"])
@@ -209,7 +219,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
 		switch event {
 			case let evt as WireguardHandler.WireguardHandshakeNotification:
-				print("resetting")
+				logger.debug("Resetting kcp", metadata: ["public-key_remote":"\(evt.publicKey)"])
 				let key = evt.publicKey
 				if(sendNonce[key] == nil) {
 					sendNonce[key] = 0

@@ -67,21 +67,18 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		case terminated
 	}
 	public struct InvalidInterfaceStateError:Swift.Error {}
-	
-	public typealias OutputFunction = @Sendable ((PublicKey, TransactableDataType)) -> Void
-	private let handleFunction:OutputFunction
 
 	private let logger:Logger
 	private let bootstrappedFuture:Future<Void, Swift.Error> = Future<Void, Swift.Error>()
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	
+	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
 	private let listeningPort:Int
 	private let wgh:WireguardHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, handleFunction: @escaping OutputFunction, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -89,7 +86,6 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.debug)
-		self.handleFunction = handleFunction
 	}
 
 	public func waitForChannelInit() async throws {
@@ -102,7 +98,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 			case .initialized:
 				state = .engaging
 				
-				let dhh = DataHandoffHandler<TransactableDataType>(outputFunction:handleFunction, logLevel:logger.logLevel)
+				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
@@ -131,8 +127,10 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 						l.debug("invoking cancellation of wireguard nio interface")
 					}
 				} catch let error {
+					inboundData.finish(throwing: error)
 					throw error
 				}
+				inboundData.finish()
 				state = .terminated
 			case .engaged(_), .engaging, .terminated:
 				throw InvalidInterfaceStateError()
@@ -159,5 +157,36 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 			default:
 				throw InvalidInterfaceStateError()
 		}
+	}
+}
+
+
+extension WGInterface:AsyncSequence {
+	public struct AsyncIterator:AsyncIteratorProtocol {
+		private let inboundDataOut:FIFO<(PublicKey, TransactableDataType), Swift.Error>.AsyncConsumerExplicit
+		
+		internal init(inboundData:FIFO<(PublicKey, TransactableDataType), Swift.Error>) {
+			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
+		}
+		
+		public func next() async throws -> (PublicKey, TransactableDataType)? {
+			switch await inboundDataOut.next() {
+				case .element(let element):
+					return element
+				case .capped(let result):
+					switch result {
+						case .success(_):
+							return nil
+						case .failure(let error):
+							throw error
+					}
+				case .wouldBlock:
+					fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
+			}
+		}
+	}
+	
+	nonisolated public func makeAsyncIterator() -> AsyncIterator {
+		return AsyncIterator(inboundData:inboundData)
 	}
 }

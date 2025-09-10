@@ -11,29 +11,29 @@ internal final class DataHandoffHandler<TransactableDataType>:ChannelInboundHand
 	internal typealias InboundOut = Never
 
 	/// the FIFO that will be used to hand off data to the end-user
-	private let handoff:WGInterface<TransactableDataType>.OutputFunction
+	private let handoff:FIFO<(PublicKey, TransactableDataType), Swift.Error>
 
 	private let log:Logger
 
-	internal init(outputFunction: @escaping WGInterface<TransactableDataType>.OutputFunction, logLevel:Logger.Level) {
-		handoff = outputFunction
+	internal init(handoff hoFIFO:FIFO<(PublicKey, TransactableDataType), Swift.Error>, logLevel:Logger.Level) {
+		handoff = hoFIFO
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		log = buildLogger
 	}
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		let logger = log
+		var logger = log
 		logger.trace("handler added to NIO pipeline.")
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
-		let logger = log
+		var logger = log
 		logger.trace("handler removed from NIO pipeline.")
 	}
 
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-		let logger = log
+		var logger = log
 		logger.trace("handing off data to FIFO")
-		handoff(unwrapInboundIn(data))
+		handoff.yield(unwrapInboundIn(data))
 	}
 }

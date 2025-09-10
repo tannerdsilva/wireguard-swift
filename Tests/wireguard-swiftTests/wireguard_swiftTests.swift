@@ -132,37 +132,23 @@ extension WireguardSwiftTests {
 		let peerPublicKey:PublicKey
 		let peerPrivateKey:MemoryGuarded<PrivateKey>
 
-		var cliLogger = Logger(label: "wg-test-tool.initiator")
+		let cliLogger = Logger(label: "wg-test-tool.initiator")
 		
 		init() throws {
 			(myPublicKey, myPrivateKey) = try dhGenerate()
 			(peerPublicKey, peerPrivateKey) = try dhGenerate()
 		}
 		
-		actor RecTracker {
-			private(set) var count = 0
-			func add() { count += 1 }
-			func getCount() -> Int { return count }
-		}
-		
 		@Test func sendSingleString() async throws {
 			let stringToSend = "Hello, world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			
-			let tracker = RecTracker()
-			
-			@Sendable func output(input: (PublicKey, [UInt8])) {
-				let (key, incomingData) = input
-				#expect(key == myPublicKey)
-				#expect(incomingData == messageBytes)
-				Task { await tracker.add() }
-			}
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, handleFunction:output, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
 
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, handleFunction:output, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -180,11 +166,14 @@ extension WireguardSwiftTests {
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
 				try await myInterface.write(publicKey: peerPublicKey, data: messageBytes)
 				
-				while(await tracker.count != 1) {}
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
+				cliLogger.info("Channel initialized. Reading data...")
+				for try await (key, incomingData) in peerInterface {
+					#expect(key == myPublicKey)
+					#expect(incomingData == messageBytes)
+					foo.cancelAll()
+					try await foo.waitForAll()
+					return
+				}
 			})
 		}
 
@@ -192,36 +181,21 @@ extension WireguardSwiftTests {
 		@Test func sendMultipleSmallMessages() async throws {
 			let payloadSize: Int = 10_000
 			
-			var tempPayload = [UInt8](repeating: 0, count: payloadSize)
+			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
-				tempPayload[i] = UInt8(i%256)
+				payload[i] = UInt8(i%256)
 			}
-			let payload = tempPayload
-			let payload2 = tempPayload
-			
-			let tracker = RecTracker()
-			
-			@Sendable func output(input: (PublicKey, [UInt8])) {
-				let (key, incomingData) = input
-				var count: Int = 0
-				Task { count = await tracker.getCount() }
-				if(count == 0) {
-					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-					#expect(key == myPublicKey)
-					#expect(incomingData == payload)
-				} else {
-					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-					#expect(key == myPublicKey)
-					#expect(incomingData == payload2)
-				}
-				Task { await tracker.add() }
+			var payload2 = [UInt8](repeating: 0, count: payloadSize)
+			for i in 0..<payloadSize {
+				payload2[i] = UInt8(i%256)
 			}
+			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, handleFunction:output, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
-
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, handleFunction:output, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -242,11 +216,21 @@ extension WireguardSwiftTests {
 				cliLogger.info("Sending second data packet...")
 				try await myInterface.write(publicKey: peerPublicKey, data: payload2)
 				
-				while(await tracker.count != 2) {}
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
+				cliLogger.info("Channel initialized. Reading data...")
+				var count = 0
+				for try await (key, incomingData) in peerInterface {
+					if(count == 0) {
+						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+						#expect(key == myPublicKey)
+						#expect(incomingData == payload)
+						count += 1
+					} else {
+						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+						#expect(key == myPublicKey)
+						#expect(incomingData == payload2)
+						foo.cancelAll()
+					}
+				}
 			})
 		}
 		
@@ -257,30 +241,17 @@ extension WireguardSwiftTests {
 				payload[i] = UInt8(i%256)
 			}
 			
-			var tempPayloads:[[UInt8]] = []
+			var payloads:[[UInt8]] = []
 			for _ in 0..<1_000 {
-				tempPayloads.append(payload)
+				payloads.append(payload)
 			}
 			
-			let payloads = tempPayloads
-			
-			let tracker = RecTracker()
-			
-			@Sendable func output(input: (PublicKey, [UInt8])) {
-				let (key, incomingData) = input
-				var count: Int = 0
-				Task { count = await tracker.getCount() }
-				cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-				#expect(key == myPublicKey)
-				#expect(incomingData == payloads[count])
-				Task { await tracker.add() }
-			}
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, handleFunction:output, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
-
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, handleFunction:output, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -300,34 +271,31 @@ extension WireguardSwiftTests {
 					try await myInterface.write(publicKey: peerPublicKey, data: payload)
 				}
 				
-				while(await tracker.count != 999) {}
-				#expect(await tracker.count == 999)
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
+				cliLogger.info("Channel initialized. Reading data...")
+				var count = 0
+				for try await (key, incomingData) in peerInterface {
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(key == myPublicKey)
+					#expect(incomingData == payloads[count])
+					count += 1
+					if (count == 999) {
+						foo.cancelAll()
+					}
+				}
 			})
 		}
 
 		@Test func sendSingleLargeMessage() async throws {
 			let payloadSize: Int = 1_000_000_000
 			
-			let payload = [UInt8](repeating: 0, count: payloadSize)
+			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
-			let tracker = RecTracker()
-			
-			@Sendable func output(input: (PublicKey, [UInt8])) {
-				let (key, incomingData) = input
-				#expect(key == myPublicKey)
-				#expect(incomingData == payload)
-				Task { await tracker.add() }
-			}
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, handleFunction:output, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
-
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, handleFunction:output, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -345,47 +313,34 @@ extension WireguardSwiftTests {
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
 				try await myInterface.write(publicKey: peerPublicKey, data: payload)
 				
-				while(await tracker.count != 1) {}
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
+				cliLogger.info("Channel initialized. Reading data...")
+				for try await (key, incomingData) in peerInterface {
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(key == myPublicKey)
+					#expect(incomingData == payload)
+					foo.cancelAll()
+				}
 			})
 		}
 				
 		@Test func sendMultipleLargeMessages() async throws {
 			let payloadSize: Int = 20_000_000
 			
-			var tempPayload = [UInt8](repeating: 0, count: payloadSize)
+			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
-				tempPayload[i] = UInt8(i%256)
+				payload[i] = UInt8(i%256)
 			}
-			let payload = tempPayload
-			let payload2 = tempPayload
-			
-			let tracker = RecTracker()
-			
-			@Sendable func output(input: (PublicKey, [UInt8])) {
-				let (key, incomingData) = input
-				var count: Int = 0
-				Task { count = await tracker.getCount() }
-				if(count == 0) {
-					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-					#expect(key == myPublicKey)
-					#expect(incomingData == payload)
-				} else {
-					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-					#expect(key == myPublicKey)
-					#expect(incomingData == payload2)
-				}
-				Task { await tracker.add() }
+			var payload2 = [UInt8](repeating: 0, count: payloadSize)
+			for i in 0..<payloadSize {
+				payload2[i] = UInt8((i+5)%256)
 			}
-			_ = try await withThrowingTaskGroup(body: { foo in
+			
+			_ = try await withThrowingTaskGroup(of:Void.self, returning:Void.self) { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, handleFunction:output, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
-
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, handleFunction:output, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -406,12 +361,22 @@ extension WireguardSwiftTests {
 				cliLogger.info("Sending second data packet...")
 				try await myInterface.write(publicKey: peerPublicKey, data: payload2)
 				
-				while(await tracker.count != 2) {}
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
-			})
+				cliLogger.info("Channel initialized. Reading data...")
+				var count = 0
+				for try await (key, incomingData) in peerInterface {
+					if(count == 0) {
+						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+						#expect(key == myPublicKey)
+						#expect(incomingData == payload)
+						count += 1
+					} else {
+						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+						#expect(key == myPublicKey)
+						#expect(incomingData == payload2)
+						foo.cancelAll()
+					}
+				}
+			}
 		}
 	}
 }

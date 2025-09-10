@@ -23,7 +23,7 @@ let package = Package(
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
 		.package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
 //		.package(name:"kcp-swift-core", path:"../kcp-swift-core")
-		.package(url:"https://github.com/tannerdsilva/kcp-swift-core", revision: "5b5e9a68392dfbaca1b12212ba46138c06c3e9f3")
+		.package(url:"https://github.com/tannerdsilva/kcp-swift-core", revision: "611c49a4c7d2888dcba8ffe0cfd6027e9be03054")
 	],
 	targets: [
 		.executableTarget(
