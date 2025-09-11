@@ -175,6 +175,7 @@ extension PeerInfo {
 						fatalError("using \"next\" session slot with unexpected geometry type (self initiated). this is a critical internal error. \(#file):\(#line)")
 					}
 					rotation.next!.nVar.valueRecv = newValue
+					context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, peerIndex:element.geometry.mp))
 					applyRotation(context:context, now:now)
 			}
 		}
@@ -373,7 +374,7 @@ extension PeerInfo.Live {
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
 
 		// fire the handshake information to the channel
-		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey))
+		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, peerIndex: element.m))
 
 		// flush any pending data
 		while var (pendingPacket) = postHandshakePackets.dequeue() {
@@ -394,7 +395,6 @@ extension PeerInfo.Live {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
-		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey))
 		guard let outgoingID = rotation.rotate() else {
 			return
 		}
