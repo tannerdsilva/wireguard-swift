@@ -31,10 +31,6 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private var kcpUpdateTasks: [PublicKey: RepeatedTask] = [:]
 	private var kcpStartTimers: [PublicKey: UInt32] = [:]
 	private let kcpUpdateTime: TimeAmount = .milliseconds(30)
-
-	// task for killing ikcp when inactive
-	private var kcpKillTasks:[PublicKey:Scheduled<Void>] = [:]
-	private let kcpKillTime:TimeAmount = .seconds(300)
 	
 	// Variables for preventing duplicate receives
 	private var sendNonce:[PublicKey:UInt64] = [:]
@@ -120,6 +116,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 							packetIterators[key] = pendingPackets[key]!.makeLoopingIterator()
 						}
 					}
+					logger.debug("Removed pending packet")
 					_ = pendingPackets[key]!.popFront()
 					ackCounter += chunks
 				} else {
@@ -154,19 +151,6 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			}
 		}
 		kcpUpdateTasks[key] = task
-	}
-	
-	private func reset(key:PublicKey, context:ChannelHandlerContext) {
-		if (kcpKillTasks[key] == nil) {
-			kcpKillTasks[key] = context.eventLoop.scheduleTask(in:kcpKillTime) { [weak self] in
-				self!.kcp[key] = nil
-			}
-		} else {
-			kcpKillTasks[key]!.cancel()
-			kcpKillTasks[key] = context.eventLoop.scheduleTask(in:kcpKillTime) { [weak self] in
-				self!.kcp[key] = nil
-			}
-		}
 	}
 	
 	// Receiving kcp segment
@@ -226,17 +210,16 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 					receiveNonce[key] = 0
 				}
 				// Resetting everything
-				if(kcpKillTasks[key] != nil) {
+				if(kcpUpdateTasks[key] != nil) {
 					kcpUpdateTasks[key]!.cancel()
 				}
+				kcpUpdateTasks[key] = nil
 				ackCounter = 0
-				kcp[key] = nil
-				
 				
 				// Starting up processes again
 				makeIkcpCb(key:key, context:context)
 				
-				// Sending data until snd_buf is full
+				// Create pending packets if needed and reset the iterator
 				if(pendingPackets[key] == nil) {
 					pendingPackets[key] = LinkedList<[UInt8]>()
 				}
