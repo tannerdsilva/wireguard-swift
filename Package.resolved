@@ -1,5 +1,5 @@
 {
-  "originHash" : "7e57e1504873bf4a113cb19d253f514ceed1a9025a617acd5dc8c3d1fb4f49d6",
+  "originHash" : "31a48f3adabc7f3779cabffd512937424468f54d7d9850d7dbd3a7afdf80f5c3",
   "pins" : [
     {
       "identity" : "bedrock",
@@ -7,6 +7,14 @@
       "location" : "https://github.com/tannerdsilva/bedrock.git",
       "state" : {
         "revision" : "b6626ac8ecee31975093e01427e10f4cc299409a"
+      }
+    },
+    {
+      "identity" : "kcp-swift-core",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tannerdsilva/kcp-swift-core",
+      "state" : {
+        "revision" : "ff50e43075fe8a0226490ff4190d873e197e3f39"
       }
     },
     {

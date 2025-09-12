@@ -110,8 +110,10 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 			
 			rcvLoop: while true {
 				do {
-					let receivedData = try controlBlocks[controlBlocks.count-1].receive()
-
+					var mutateControlBlock = controlBlocks[controlBlocks.count-1]
+					let receivedData = try mutateControlBlock.receive()
+					controlBlocks[controlBlocks.count-1] = mutateControlBlock
+					
 					logger.debug("Compiled kcp message. Passing to splicer.", metadata: ["size": "\(receivedData.count) bytes"])
 					c.accessContext { contextPointer in
 						contextPointer.pointee.fireChannelRead(wrapIn((key, receivedData)))
