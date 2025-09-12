@@ -85,11 +85,11 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 			if(remove && i != 0) {
 				// Removes the cb if it's inactive and old
 				controlBlocks.remove(at: i)
-				logger.debug("Removed old cb")
+				logger.info("Removed old cb. Cb count: \(controlBlocks.count)")
 			} else if (remove && NIODeadline.now() >= deadline!) {
 				controlBlocks.remove(at: i)
 				updateTask!.cancel()
-				logger.debug("Removed last cb")
+				logger.info("Removed last cb due to timout")
 			}
 		}
 	}
@@ -162,15 +162,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 		
 		do {
 			logger.trace("Received kcp segment", metadata: ["size": "\(bytes.count) bytes"])
-			if bytes.count <= 32 {
-				print(bytes)
-			} else {
-				let prefixArray = Array(bytes.prefix(32))
-				print(prefixArray, "…") // add ellipsis to show it's truncated
-			}
-			if(bytes.count != 128) {
-				try kcp[key]!.input(data:bytes)
-			}
+			try kcp[key]!.input(data:bytes)
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -194,12 +186,11 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 			case let evt as WireguardHandler.WireguardHandshakeNotification:
 				logger.debug("Resetting kcp", metadata: ["public-key_remote":"\(evt.publicKey)"])
 				// Need to figure out how to make this into a conversation id
-				print("Peers index \(evt.peerIndex)")
 				let key = evt.publicKey
 				if (kcp[key] == nil) {
 					kcp[key] = KCPBlocks(key: key, context: context, wrapOut: wrapOutboundOut, wrapIn: wrapInboundOut, logLevel: logger.logLevel)
 				} else {
-					kcp[key]!.makeIkcpCb(context: context)
+					kcp[key]!.makeIkcpCb(context: context, id: evt.peerIndex.RAW_native())
 				}
 			default:
 				context.fireUserInboundEventTriggered(event)
