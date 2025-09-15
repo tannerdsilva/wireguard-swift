@@ -13,6 +13,8 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 	let key:PublicKey
 	// newest at index 0
 	var controlBlocks:[ikcp_cb<EventLoopPromise<Void>>] = []
+	var oldBlocks:[ikcp_cb<EventLoopPromise<Void>>] = []
+	var oldBlockDeadlines:[NIODeadline] = []
 	var updateTask:RepeatedTask?
 	let kcpUpdateTime: TimeAmount = .milliseconds(30)
 	
@@ -70,6 +72,21 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 				continue
 			}
 		}
+		for i in 0..<oldBlocks.count {
+			do {
+				try oldBlocks[i].input(data, count: data.count)
+			} catch {
+				continue
+			}
+		}
+		// Control block deletion logic
+		for i in 0..<oldBlocks.count {
+			if(NIODeadline.now() >= oldBlockDeadlines[i]) {
+				oldBlocks.remove(at: i)
+				oldBlockDeadlines.remove(at: i)
+				logger.info("Removed old cb. Old cb count: \(oldBlocks.count)")
+			}
+		}
 	}
 	
 	func flush(context:ContextContainer) {
@@ -82,10 +99,12 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 					contextPointer.pointee.writeAndFlush(wrapOut((key, byteBuffer)), promise:promise)
 				}
 			 }
+			// Control block swapping logic
 			if(remove && i != 0) {
 				// Removes the cb if it's inactive and old
-				controlBlocks.remove(at: i)
-				logger.info("Removed old cb. Cb count: \(controlBlocks.count)")
+				oldBlocks.append(controlBlocks.remove(at: i))
+				oldBlockDeadlines.append(.now() + .seconds(100))
+				logger.info("Moved control block to old control blocks")
 			} else if (remove && NIODeadline.now() >= deadline!) {
 				controlBlocks.remove(at: i)
 				updateTask!.cancel()

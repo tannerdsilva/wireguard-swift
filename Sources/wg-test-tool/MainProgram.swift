@@ -241,9 +241,6 @@ struct CLI:AsyncParsableCommand {
 					while true {
 						if let input = readLine(strippingNewline: true), let number = Int(input) {
 							var payload = [UInt8](repeating: 0, count: number)
-//							for i in 0..<250 {
-//								payload[i] = UInt8(i%250)
-//							}
 							try await myInterface.write(publicKey: respondersPublicKey, data: payload)
 							}
 						else {
