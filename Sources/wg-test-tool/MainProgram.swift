@@ -115,19 +115,19 @@ struct CLI:AsyncParsableCommand {
 
 			let (myPublicKey, myPrivateKey) = try dhGenerate()
 			let (peerPublicKey, peerPrivateKey) = try dhGenerate()
-			let payloadSize: Int = 2_000_000
+			let payloadSize: Int = 1_000_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
-			for i in 0..<payloadSize {
-				payload[i] = UInt8(i%256)
-			}
+			// for i in 0..<payloadSize {
+			// 	payload[i] = UInt8(i%256)
+			// }
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.critical, listeningPort: 36001)
 				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.trace, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.critical, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -241,9 +241,6 @@ struct CLI:AsyncParsableCommand {
 					while true {
 						if let input = readLine(strippingNewline: true), let number = Int(input) {
 							var payload = [UInt8](repeating: 0, count: number)
-//							for i in 0..<250 {
-//								payload[i] = UInt8(i%250)
-//							}
 							try await myInterface.write(publicKey: respondersPublicKey, data: payload)
 							}
 						else {

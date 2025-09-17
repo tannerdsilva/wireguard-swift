@@ -13,7 +13,7 @@ extension WireguardHandler {
 		/// the type of handler that is used for peer additions
 		internal typealias PeerAdditionHandler = (PublicKey) -> Void
 		/// the type of handler that is used for peer removals
-		internal typealias PeerRemovalHandler = (PublicKey) -> Void
+		internal typealias PeerRemovalHandler = (PublicKey, PeerInfo.Live) -> Void
 
 		/// the logger that will be used to produce output for the work completed by this engine
 		private let log:Logger
@@ -30,7 +30,7 @@ extension WireguardHandler {
 				// handle the peers that were only at the start
 				for removedPeer in keyDelta.exclusiveStart {
 					log.trace("removing peer from delta engine", metadata:["public-key_removed":"\(removedPeer)"])
-					removalHandler(removedPeer)
+					removalHandler(removedPeer, oldValue[removedPeer]!)
 				}
 				// handle the peers that were only at the end
 				for newPeer in keyDelta.exclusiveEnd {

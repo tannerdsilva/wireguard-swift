@@ -6,18 +6,13 @@ import Logging
 
 extension Array {
 	func split(intoChunksOf chunkSize: Int) -> [[Element]] {
-		guard chunkSize > 0 else { return [self] }   // safety guard
-
+		guard chunkSize > 0 else { return [self] }	// safety guard
 		var chunks: [[Element]] = []
 		var startIndex = 0
-
 		while startIndex < self.count {
-			
 			let endIndex = Swift.min(startIndex + chunkSize, self.count)
-			
 			let chunk = Array(self[startIndex..<endIndex])
 			chunks.append(chunk)
-			
 			startIndex += chunkSize
 		}
 		return chunks
@@ -26,7 +21,7 @@ extension Array {
 
 @RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-fileprivate struct EncodedUInt32:Sendable {}
+internal struct EncodedUInt32:Sendable {}
 
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {

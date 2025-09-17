@@ -14,8 +14,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		internal let sessionStartDate:NIODeadline
 		/// the public key of the peer that initiated the handshake
 		internal let publicKey:PublicKey
-		/// the peer index of the peer that initiated the handshake
-		internal let peerIndex:PeerIndex
+		/// the geometry of the handshake that was completed
+		internal let geometry:HandshakeGeometry<PeerIndex>
 	}
 
 	internal typealias InboundIn = (Endpoint, Message.NIO)
@@ -109,10 +109,11 @@ extension WireguardHandler {
 				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self] _ in
 					// when peer is added
 					guard let _ = self else { return }
-				}, removalHandler: { [weak self, l = log] removedPublicKey in
+				}, removalHandler: { [weak self, l = log] removedPublicKey, peerInfo in
 					// when peer is removed
 					guard let _ = self else { return }
 					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
+					peerInfo.close()
 				})
 				operatingState = .channelEngaged
 			default:
@@ -127,6 +128,7 @@ extension WireguardHandler {
 		let logger = log
 		logger.trace("handler removed from NIO pipeline.")
 		operatingState = .terminated
+		peerDeltaEngine.setPeers(context:context, [], handler:self)
 	}
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
 		#if DEBUG
@@ -188,6 +190,7 @@ extension WireguardHandler {
 					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
 					break;
+			
 				case .response(let payload):
 					/*
 					peers role: responder
@@ -218,6 +221,7 @@ extension WireguardHandler {
 					try livePeerInfo.applySelfInitiated(context:context, now:now, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(peerPub)"])
 					break;
+					
 				case .cookie(let cookiePayload):
 					/*
 					peers role: responder
@@ -263,11 +267,11 @@ extension WireguardHandler {
 						logger.warning("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(identifiedPublicKey)"])
 						return
 					}
+					// load the cryptokeys that correspond to this peer index.
 					guard let existingGeometryPositioned = livePeerInfo.session(forPeerM:recipientIndex) else {
 						logger.warning("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
-					let session = existingGeometryPositioned.element
 					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometryPositioned, now:now)!
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
@@ -276,6 +280,13 @@ extension WireguardHandler {
 					defer {
 						livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
 					}
+
+					guard encodeBuffer.readableBytes != 0 else {
+						// keepalive packet
+						logger.debug("received keepalive packet", metadata:["public-key_remote":"\(identifiedPublicKey)"])
+						return
+					}
+
 					encodeBuffer.clear(minimumCapacity:payload.count - MemoryLayout<Tag>.size)
 					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:payload.count - MemoryLayout<Tag>.size) { decrypted in
 						return try payload.withUnsafeBytes { dataBuffer in
@@ -285,12 +296,6 @@ extension WireguardHandler {
 							try Message.Data.Payload.decrypt(transportKey:varsRecv.tRecv, counter:counter, cipherText:dataRegion, tag:tagRegion, aad:UnsafeRawBufferPointer(start:dataRegion.baseAddress!, count:0), plainText:decrypted.baseAddress!)	
 							return payload.count - MemoryLayout<Tag>.size
 						}
-					}
-
-					guard encodeBuffer.readableBytes != 0 else {
-						// keepalive packet
-						logger.debug("received keepalive packet", metadata:["public-key_remote":"\(identifiedPublicKey)"])
-						return
 					}
 
 					context.fireChannelRead(wrapInboundOut((identifiedPublicKey, encodeBuffer)))
@@ -304,6 +309,7 @@ extension WireguardHandler {
 
 // swift nio write handler function
 extension WireguardHandler {
+	/// applies an immediate encryption and writing of the given payload to the given public key.
 	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()

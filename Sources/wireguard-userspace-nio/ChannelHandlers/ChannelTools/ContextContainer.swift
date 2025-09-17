@@ -4,9 +4,13 @@ import NIO
 public final class ContextContainer:@unchecked Sendable {
 	/// the context that the container instance is holding.
 	private let context:ChannelHandlerContext
+	
+	/// initializes a context container with the given context.
+	/// - parameter ctx: the context to be held by this container.
 	public init(context ctx:ChannelHandlerContext) {
 		context = ctx
 	}
+	
 	/// the only way to access the context is through this function, which ensures that the context is accessed in a thread-safe manner.
 	public borrowing func accessContext<E, R>(_ body:(UnsafePointer<ChannelHandlerContext>) throws(E) -> R) throws(E) -> R where E:Swift.Error{
 		#if DEBUG
