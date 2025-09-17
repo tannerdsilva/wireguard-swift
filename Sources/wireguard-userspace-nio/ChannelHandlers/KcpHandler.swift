@@ -207,7 +207,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 				if (kcp[key] == nil) {
 					kcp[key] = KCPBlocks(key: key, context: context, wrapOut: wrapOutboundOut, wrapIn: wrapInboundOut, logLevel: logger.logLevel)
 				} else {
-					kcp[key]!.makeIkcpCb(context: context, id: evt.peerIndex.RAW_native())
+					kcp[key]!.makeIkcpCb(context: context, id: evt.geometry.initiator.RAW_native())
 				}
 			default:
 				context.fireUserInboundEventTriggered(event)

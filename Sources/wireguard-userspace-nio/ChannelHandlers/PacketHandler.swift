@@ -43,11 +43,16 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	}
 
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		log.debug("handler added to NIO pipeline.")
+		log.debug("handler added to NIO pipeline.", metadata:["mtu":"\(datagramMTU)"])
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		log.debug("handler removed from NIO pipeline.")
+	}
+
+	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+		log.debug("user inbound event triggered.", metadata:["event_type":"\(String(describing:type(of:event)))"])
+		context.fireUserInboundEventTriggered(event)
 	}
 	
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {

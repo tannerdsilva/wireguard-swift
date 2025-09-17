@@ -175,7 +175,7 @@ extension PeerInfo {
 						fatalError("using \"next\" session slot with unexpected geometry type (self initiated). this is a critical internal error. \(#file):\(#line)")
 					}
 					rotation.next!.nVar.valueRecv = newValue
-					context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, peerIndex:element.geometry.mp))
+					context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
 					applyRotation(context:context, now:now)
 			}
 		}
@@ -374,7 +374,7 @@ extension PeerInfo.Live {
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
 
 		// fire the handshake information to the channel
-		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, peerIndex: element.m))
+		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))
 
 		// flush any pending data
 		while var (pendingPacket) = postHandshakePackets.dequeue() {

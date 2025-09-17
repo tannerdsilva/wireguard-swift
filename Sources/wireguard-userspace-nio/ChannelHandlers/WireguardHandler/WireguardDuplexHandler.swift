@@ -14,8 +14,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		internal let sessionStartDate:NIODeadline
 		/// the public key of the peer that initiated the handshake
 		internal let publicKey:PublicKey
-		/// the peer index of the peer that initiated the handshake
-		internal let peerIndex:PeerIndex
+		/// the geometry of the handshake that was completed
+		internal let geometry:HandshakeGeometry<PeerIndex>
 	}
 
 	internal typealias InboundIn = (Endpoint, Message.NIO)

@@ -31,6 +31,25 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 			return mp
 		}
 	}
+
+	/// access the value of the initiator of the handshake
+	internal var initiator:AugmentedType {
+		switch self {
+			case .selfInitiated(m:let m, mp:_):
+			return m
+			case .peerInitiated(m:_, mp:let mp):
+			return mp
+		}
+	}
+
+	internal var responder:AugmentedType {
+		switch self {
+			case .selfInitiated(m:_, mp:let mp):
+			return mp
+			case .peerInitiated(m:let m, mp:_):
+			return m
+		}
+	}
 	
 	/// access the value of self, also known as `m`
 	@available(*, deprecated, message:"use m or mp values instead")
