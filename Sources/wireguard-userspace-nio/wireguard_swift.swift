@@ -18,7 +18,7 @@ extension Endpoint {
 			case .v6(_):
 				self = .v6(V6(address:AddressV6(socketAddress.ipAddress!)!, port:Port(RAW_native:UInt16(socketAddress.port!))))
 			default:
-				throw POSIXError(.ENOTSUP)
+				throw POSIXError(.EINVAL)
 		}
 	}
 }
@@ -27,9 +27,9 @@ extension SocketAddress {
 	public init(_ endpoint:Endpoint) {
 		switch endpoint {
 			case .v4(let v4ep):
-				self = SocketAddress(bedrock_ip.sockaddr_in(v4ep.address, port: v4ep.port.RAW_native()))
+				self = SocketAddress(v4ep.address.sockaddr_in(port: v4ep.port.RAW_native()))
 			case .v6(let v6ep):
-				self = SocketAddress(bedrock_ip.sockaddr_in6(v6ep.address, port:v6ep.port.RAW_native()))
+				self = SocketAddress(v6ep.address.sockaddr_in6(port: v6ep.port.RAW_native()))
 		}
 	}
 }

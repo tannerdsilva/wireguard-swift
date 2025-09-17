@@ -1,12 +1,12 @@
 {
-  "originHash" : "31a48f3adabc7f3779cabffd512937424468f54d7d9850d7dbd3a7afdf80f5c3",
+  "originHash" : "6b88ecdc04259f4b296aa11af81cefc0afbf86c310b18a0e53e6221b23a29600",
   "pins" : [
     {
       "identity" : "bedrock",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/bedrock.git",
       "state" : {
-        "revision" : "b6626ac8ecee31975093e01427e10f4cc299409a"
+        "revision" : "a361f873093ef8e7dafbb6fc87403e9293b2bc24"
       }
     },
     {
@@ -22,7 +22,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/rawdog.git",
       "state" : {
-        "revision" : "b249e367e35c0ea05ae7b7dc0046074b5b05c604"
+        "revision" : "788af42b4d2a24276cfe35be44d2564ae6240020"
       }
     },
     {

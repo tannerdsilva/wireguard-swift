@@ -15,9 +15,9 @@ let package = Package(
 	],
 	dependencies:[
 //		.package(name:"rawdog", path:"../rawdog"),
-		.package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"b249e367e35c0ea05ae7b7dc0046074b5b05c604"),
+		.package(url:"https://github.com/tannerdsilva/rawdog.git", revision:"788af42b4d2a24276cfe35be44d2564ae6240020"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
-		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"b6626ac8ecee31975093e01427e10f4cc299409a"),
+		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"a361f873093ef8e7dafbb6fc87403e9293b2bc24"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
 		.package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
 //		.package(name: "kcp-swift-core", path: "../kcp-swift-core")
