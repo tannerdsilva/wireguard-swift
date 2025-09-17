@@ -92,7 +92,7 @@ extension PeerInfo.Live {
 	/// primary mechanism for storing chaining data for initiations sent outbound.
 	internal struct CurrentSelfInitiatedInfo {
 		private let responderStaticPublicKey:PublicKey
-		private let wireguardHandler:Unmanaged<WireguardHandler>
+		private let wireguardHandler:WireguardHandler
 
 		/// current time that is updated every time a new handshake initiation is emitted to the peer.
 		private var lastHandshakeEmissionTime:NIODeadline? = nil
@@ -100,7 +100,7 @@ extension PeerInfo.Live {
 		private var initiatorChainingData:(initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? = nil
 		
 		/// initialize a new instance.
-		internal init(responderStaticPublicKey initiatorPub:PublicKey, handler:Unmanaged<WireguardHandler>) {
+		internal init(responderStaticPublicKey initiatorPub:PublicKey, handler:WireguardHandler) {
 			wireguardHandler = handler
 			responderStaticPublicKey = initiatorPub
 		}
@@ -134,7 +134,7 @@ extension PeerInfo.Live {
 			#endif
 			initiatorChainingData = (ephemeralPrivateKey, c, h, authenticatedPayload)
 			lastHandshakeEmissionTime = now
-			_ = wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:responderStaticPublicKey, initiatorPeerIndex:authenticatedPayload.payload.initiatorPeerIndex)
+			_ = wireguardHandler.automaticallyUpdatedVariables.activelyInitiatingIndicies.setActivelyInitiating(context:context, publicKey:responderStaticPublicKey, initiatorPeerIndex:authenticatedPayload.payload.initiatorPeerIndex)
 		}
 
 		/// called when a self-initiated handshake receives a response from the remote peer. this function validates that the responding peer index matches the expected value, and provides the cryptokey-set that was used for the initiation.
@@ -158,7 +158,7 @@ extension PeerInfo.Live {
 			defer {
 				initiatorChainingData = nil
 			}
-			guard wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activelyInitiatingIndicies.removeIfExists(context:context, publicKey:responderStaticPublicKey) == initiatorPeerIndex else {
+			guard wireguardHandler.automaticallyUpdatedVariables.activelyInitiatingIndicies.removeIfExists(context:context, publicKey:responderStaticPublicKey) == initiatorPeerIndex else {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			return initiatorChainingData

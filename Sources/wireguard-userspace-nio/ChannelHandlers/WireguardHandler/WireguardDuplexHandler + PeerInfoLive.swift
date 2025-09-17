@@ -10,7 +10,7 @@ import bedrock
 extension PeerInfo {
 	internal final class Live:@unchecked Sendable {
 		private let log:Logger
-		private let wireguardHandler:Unmanaged<WireguardHandler>
+		private let wireguardHandler:WireguardHandler
 
 		// standard configuration stuff
 		/// the public key of the remote peer
@@ -61,9 +61,13 @@ extension PeerInfo {
 			persistentKeepalive = peerInfo.internalKeepAlive
 			rotation = Rotating<Session>()
 
-			let um = Unmanaged.passUnretained(handler)
+			let um = handler
 			wireguardHandler = um
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
+		}
+		
+		internal func close() {
+			handshakeInitiationTask = nil
 		}
 
 		internal struct SendValues {
@@ -255,12 +259,12 @@ extension PeerInfo.Live {
 						let handshakeInitiationMessage:Message = .initiation(authenticatedPayload)
 						var encodedLength = 0
 						handshakeInitiationMessage.RAW_encode(count:&encodedLength)
-						var encBuffer = wireguardHandler.takeUnretainedValue().encodeBuffer!
+						var encBuffer = wireguardHandler.encodeBuffer!
 						encBuffer.clear(minimumCapacity:encodedLength)
 						encBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:encodedLength) { (ptr:UnsafeMutableRawBufferPointer) -> Int in
 							return ptr.baseAddress!.distance(to:handshakeInitiationMessage.RAW_encode(dest:ptr.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 						}
-						contextPtr.pointee.writeAndFlush(wireguardHandler.takeUnretainedValue().wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer)), promise:nil)
+						contextPtr.pointee.writeAndFlush(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer)), promise:nil)
 					}
 				}
 			} catch let error {
@@ -332,7 +336,7 @@ extension PeerInfo.Live {
 		logger.info("transmit keys generated from peer initiated handshake")
 
 		// add the new index to the active indicies
-		let wgh = wireguardHandler.takeUnretainedValue()
+		let wgh = wireguardHandler
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
 		
 		// handle the session that falls out of the rotation
@@ -364,7 +368,7 @@ extension PeerInfo.Live {
 		let rotationResults = rotation.rotate(replacingNext:Session(geometry:element, nVar:SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), establishedDate:now))
 		
 		// automatically update the wireguard handler as needed
-		let wgh = wireguardHandler.takeUnretainedValue()
+		let wgh = wireguardHandler
 		if let outgoingPrevious = rotationResults.previous {
 			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
 		}
@@ -398,7 +402,7 @@ extension PeerInfo.Live {
 		guard let outgoingID = rotation.rotate() else {
 			return
 		}
-		wireguardHandler.takeUnretainedValue().automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingID.geometry.m)
+		wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingID.geometry.m)
 	}
 }
 

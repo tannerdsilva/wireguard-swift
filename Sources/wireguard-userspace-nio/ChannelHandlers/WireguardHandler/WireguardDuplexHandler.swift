@@ -127,6 +127,7 @@ extension WireguardHandler {
 		let logger = log
 		logger.trace("handler removed from NIO pipeline.")
 		operatingState = .terminated
+		peerDeltaEngine.setPeers(context:context, [], handler:self)
 	}
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
 		#if DEBUG
