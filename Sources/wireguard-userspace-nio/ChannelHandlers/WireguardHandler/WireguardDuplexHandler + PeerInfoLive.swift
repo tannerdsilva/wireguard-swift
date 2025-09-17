@@ -175,7 +175,7 @@ extension PeerInfo {
 						fatalError("using \"next\" session slot with unexpected geometry type (self initiated). this is a critical internal error. \(#file):\(#line)")
 					}
 					rotation.next!.nVar.valueRecv = newValue
-					context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, peerIndex:element.geometry.mp))
+					context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
 					applyRotation(context:context, now:now)
 			}
 		}
@@ -215,7 +215,7 @@ extension PeerInfo.Live {
 		let targetEndpoint:Endpoint
 		guard ep != nil else {
 			// fail because no endpoint is known. this is a user error so no need to `fireErrorCaught`.
-			logger.warning("cannot launch handshake initiation task because no endpoint is known for the remote peer")
+			logger.warning("cannot launch handshake initiation task because no endpoint is known for the remote peer.")
 			throw UnknownPeerEndpoint()
 		}
 		// use the value that came from the peer list
@@ -235,11 +235,11 @@ extension PeerInfo.Live {
 			let currentTime = NIODeadline.now()
 			guard (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
 				// rekey time has passed, we can no longer attempt to make handshake initiations
-				l.debug("skipping handshake initiation emission due to recent rekey attempt outside of the recurring task")
+				l.debug("skipping handshake initiation emission due to recent rekey attempt outside of the recurring task.")
 				
 				// cancel the recurring task
 				self.handshakeInitiationTask = nil
-				return
+				throw RekeyAttemptTimeExceeded()
 			}
 			do {
 				try cc.accessContext { contextPtr in
@@ -374,7 +374,7 @@ extension PeerInfo.Live {
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
 
 		// fire the handshake information to the channel
-		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, peerIndex: element.m))
+		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))
 
 		// flush any pending data
 		while var (pendingPacket) = postHandshakePackets.dequeue() {

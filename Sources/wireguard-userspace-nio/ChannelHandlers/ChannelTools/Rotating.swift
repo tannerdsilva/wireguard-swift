@@ -1,9 +1,13 @@
 internal struct Rotating<Element> {
 	/// used to express a particular value that was found at a specific position.
 	internal enum Positioned {
+		/// the previous element in the rotation
 		case previous(Element)
+		/// the current element in the rotation
 		case current(Element)
+		/// the next element in the rotation
 		case next(Element)
+		/// access the element stored in this positioned instance
 		internal var element:Element {
 			switch self {
 				case .previous(let e): return e
@@ -12,8 +16,12 @@ internal struct Rotating<Element> {
 			}
 		}
 	}
+
+	/// the element stored in the previous position
 	internal var previous:Element?
+	/// the element stored in the current position
 	internal var current:Element?
+	/// the element stored in the next position
 	internal var next:Element?
 	
 	/// initialize a rotating value with no content (`nil` assigned to all 3 stored variables)
@@ -68,7 +76,7 @@ internal struct Rotating<Element> {
 	/// rotates the trio of stored instances. previous is assigned the current value. current is assigned the next value. next value is assigned nil.
 	/// - parameters:
 	/// 	- replacingNext: the element to assign to the `next` position prior to the rotation transformation is applied.
-	/// - returns: the previous (outgoing) instance that was replaced with the current value.
+	/// - returns: a tuple containing the previous (outgoing) instance that was replaced with the current value, and the next instance that was assigned to the `next` position prior to the rotation/transformation being applied.
 	internal mutating func rotate(replacingNext nextCurrent:Element) -> (previous:Element?, next:Element?) {
 		defer {
 			previous = current

@@ -236,9 +236,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		logger.trace("handler removed from NIO pipeline.")
-	}
-
-	
+	}	
 	
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
@@ -282,7 +280,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 				if (kcp[key] == nil) {
 					kcp[key] = KCPBlocks(key: key, context: context, wrapOut: wrapOutboundOut, wrapIn: wrapInboundOut, logLevel: logger.logLevel)
 				}
-				kcp[key]!.makeIkcpCb(context: context, id: evt.peerIndex.RAW_native())
+				kcp[key]!.makeIkcpCb(context: context, id: evt.geometry.initiator.RAW_native())
 				for var msg in pendingMessages[key] ?? [] {
 					do {
 						try kcp[key]!.send(data:&msg.data, promise: msg.promise)
