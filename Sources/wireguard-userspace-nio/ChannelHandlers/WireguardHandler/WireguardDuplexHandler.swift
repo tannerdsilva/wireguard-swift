@@ -109,10 +109,11 @@ extension WireguardHandler {
 				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self] _ in
 					// when peer is added
 					guard let _ = self else { return }
-				}, removalHandler: { [weak self, l = log] removedPublicKey in
+				}, removalHandler: { [weak self, l = log] removedPublicKey, peerInfo in
 					// when peer is removed
 					guard let _ = self else { return }
 					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
+					peerInfo.close()
 				})
 				operatingState = .channelEngaged
 			default:
