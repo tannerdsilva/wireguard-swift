@@ -166,9 +166,7 @@ internal final class KcpHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		logger.trace("handler removed from NIO pipeline.")
-	}
-
-	
+	}	
 	
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
