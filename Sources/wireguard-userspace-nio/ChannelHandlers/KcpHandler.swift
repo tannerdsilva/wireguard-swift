@@ -8,6 +8,8 @@ import wireguard_crypto_core
 enum KCPError: Error {
 	/// The connection has been declared dead (max retransmits hit).
 	case deadLink
+	/// There are no control blocks active
+	case noControlBlocks
 }
 
 @RAW_staticbuff(bytes:8)
@@ -88,12 +90,15 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 			}
 		}
 		// Control block deletion logic
-		for i in 0..<oldBlocks.count {
+		var i = 0
+		while i < oldBlocks.count {
 			if(NIODeadline.now() >= oldBlockDeadlines[i]) {
 				oldBlocks.remove(at: i)
 				oldBlockDeadlines.remove(at: i)
 				logger.info("Removed old cb. Old cb count: \(oldBlocks.count)")
+				continue
 			}
+			i += 1
 		}
 		
 		// Check acks for promises
@@ -196,9 +201,10 @@ fileprivate class KCPBlocks: @unchecked Sendable {
 			
 			rcvLoop: while true {
 				do {
-					var mutateControlBlock = controlBlocks[controlBlocks.count-1]
-					let receivedData = try mutateControlBlock.receive()
-					controlBlocks[controlBlocks.count-1] = mutateControlBlock
+					if(controlBlocks.isEmpty) {
+						throw KCPError.noControlBlocks
+					}
+					let receivedData = try controlBlocks[controlBlocks.count-1].receive()
 					
 					logger.debug("Compiled kcp message. Passing to splicer.", metadata: ["size": "\(receivedData.count) bytes"])
 					c.accessContext { contextPointer in
