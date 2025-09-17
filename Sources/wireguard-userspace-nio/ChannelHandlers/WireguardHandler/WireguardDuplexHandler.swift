@@ -24,9 +24,9 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
 	internal static let keepaliveTimeout = TimeAmount.seconds(10)
-	internal static let rekeyTimeout = TimeAmount.seconds(5)
+	internal static let rekeyTimeout = TimeAmount.seconds(2)
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
-	internal static let rekeyAfterTime = TimeAmount.seconds(120)
+	internal static let rekeyAfterTime = TimeAmount.seconds(10)
 	internal static let rejectAfterTime = TimeAmount.seconds(300)
 
 	private enum State {

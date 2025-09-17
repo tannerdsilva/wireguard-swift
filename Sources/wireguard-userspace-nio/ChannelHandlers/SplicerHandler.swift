@@ -26,7 +26,7 @@ extension Array {
 
 @RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-fileprivate struct EncodedUInt32:Sendable {}
+internal struct EncodedUInt32:Sendable {}
 
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
