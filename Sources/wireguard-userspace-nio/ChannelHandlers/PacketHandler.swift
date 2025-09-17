@@ -29,7 +29,10 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 		case mtuExceeded
 	}
 	
+	/// the type of data that this handler will receive from upstream in the inbound pipeline. this is a datagram packet with an associated remote address.
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
+
+	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
 	private let log:Logger
@@ -51,7 +54,7 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	}
 
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
-		log.debug("user inbound event triggered.", metadata:["event_type":"\(String(describing:type(of:event)))"])
+		log.trace("user inbound event triggered. this handler is not user configurable in this way, so the passed event instance will be passed downstream...", metadata:["event_instance_type":"\(String(describing:type(of:event)))"])
 		context.fireUserInboundEventTriggered(event)
 	}
 	

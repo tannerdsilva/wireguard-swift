@@ -42,34 +42,13 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 		}
 	}
 
+	/// access the value of the responder of the handshake
 	internal var responder:AugmentedType {
 		switch self {
 			case .selfInitiated(m:_, mp:let mp):
 			return mp
 			case .peerInitiated(m:let m, mp:_):
 			return m
-		}
-	}
-	
-	/// access the value of self, also known as `m`
-	@available(*, deprecated, message:"use m or mp values instead")
-	internal var selfValueLegacy:AugmentedType {
-		switch self {
-			case .selfInitiated(m:let m, mp:_):
-			return m
-			case .peerInitiated(m:_, mp:let mp):
-			return mp
-		}
-	}
-	
-	/// access the value of the remote peer, also known as `mp`
-	@available(*, deprecated, message:"use m or mp values instead")
-	internal var peerValueLegacy:AugmentedType {
-		switch self {
-			case .selfInitiated(m:let m, mp:_):
-			return m
-			case .peerInitiated(m:_, mp:let mp):
-			return mp
 		}
 	}
 }
