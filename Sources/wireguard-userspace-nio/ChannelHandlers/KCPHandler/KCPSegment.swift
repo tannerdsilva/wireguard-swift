@@ -17,13 +17,13 @@ internal struct KCPSegment:Sendable {
 		/// the fragment number of this segment
 		internal let fragmentID:UInt8
 		/// the receive window size.
-		internal let receiveWindowSize:UInt16
+		internal var receiveWindowSize:UInt16
 		/// the current timestamp of this segment. used for rtt calculations.
-		internal let timestamp:UInt32
+		internal var timestamp:UInt32
 		/// the sequence number of this segment
-		internal let sequenceNumberCurrent:UInt32
-		/// the next sequence number expected to be received
-		internal let sequenceNumberNextExpected:UInt32
+		internal var sequenceNumber:UInt32
+		/// the earliest unacknowledged segment
+		internal var una:UInt32
 		/// the length of the data carried in this segment
 		internal let dataLength:UInt32
 		/// resend timestamp. the time to retransmit if no ACK is received
@@ -37,6 +37,20 @@ internal struct KCPSegment:Sendable {
 
 		// not sure which of these stored instance varaibles should be `var` vs `let`, I would like to make a conclusive decision on this when the timing is right.
 
+		internal init(conv:UInt32, cmd:Command, frg:UInt8, sn: UInt32, len:UInt32) {
+			conversationID = conv
+			command = cmd
+			fragmentID = frg
+			receiveWindowSize = 0
+			timestamp = 0
+			sequenceNumber = sn
+			una = 0
+			dataLength = len
+			resendts = 0
+			rto = 0
+			fastack = 0
+			xmit = 0
+		}
 		/// decode a kcp segment header from a byte buffer. the bytes will be read from the buffer.
 		internal init?(decode buffer:inout ByteBuffer) {
 			// read the conversation id
@@ -76,13 +90,13 @@ internal struct KCPSegment:Sendable {
 			guard let snParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
 				return nil
 			}
-			sequenceNumberCurrent = snParsed
+			sequenceNumber = snParsed
 
 			// read the next expected sequence number
 			guard let unaParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
 				return nil
 			}
-			sequenceNumberNextExpected = unaParsed
+			una = unaParsed
 
 			// read the data length
 			guard let lenParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
@@ -121,8 +135,8 @@ internal struct KCPSegment:Sendable {
 			buffer.writeInteger(fragmentID, as:UInt8.self)
 			buffer.writeInteger(receiveWindowSize, endianness:.big, as:UInt16.self)
 			buffer.writeInteger(timestamp, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(sequenceNumberCurrent, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(sequenceNumberNextExpected, endianness:.big, as:UInt32.self)
+			buffer.writeInteger(sequenceNumber, endianness:.big, as:UInt32.self)
+			buffer.writeInteger(una, endianness:.big, as:UInt32.self)
 			buffer.writeInteger(dataLength, endianness:.big, as:UInt32.self)
 			buffer.writeInteger(resendts, endianness:.big, as:UInt32.self)
 			buffer.writeInteger(rto, endianness:.big, as:UInt32.self)
