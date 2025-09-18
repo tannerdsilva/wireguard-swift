@@ -19,10 +19,6 @@ extension Array {
 	}
 }
 
-@RAW_staticbuff(bytes:4)
-@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-internal struct EncodedUInt32:Sendable {}
-
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = (PublicKey, [UInt8]) // From kcp handler, needs to be stitched together
