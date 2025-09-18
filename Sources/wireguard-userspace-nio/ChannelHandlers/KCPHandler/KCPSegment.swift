@@ -2,14 +2,14 @@ import struct NIO.ByteBuffer
 import struct NIO.ByteBufferView
 
 /// a kcp segment packet that will be encoded and decoded to/from the wire.
-internal struct KCPSegment {
+internal struct KCPSegment:Sendable {
 	/// the header of the kcp segment
 	internal var header:Header
 	/// the data payload of the kcp segment (can be zero length)
 	internal var data:ByteBufferView
 
 	/// the header section of the kcp segment
-	internal struct Header {
+	internal struct Header:Sendable {
 		/// the conversation ID that this segment belongs to
 		internal let conversationID:UInt32
 		/// the command signal that this segment is carrying
