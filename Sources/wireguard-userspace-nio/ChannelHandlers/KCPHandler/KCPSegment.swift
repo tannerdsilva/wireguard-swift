@@ -13,7 +13,7 @@ internal struct KCPSegment:Sendable {
 		/// the conversation ID that this segment belongs to
 		internal let conversationID:UInt32
 		/// the command signal that this segment is carrying
-		internal let command:Command
+		internal var command:Command
 		/// the fragment number of this segment
 		internal let fragmentID:UInt8
 		/// the receive window size.
