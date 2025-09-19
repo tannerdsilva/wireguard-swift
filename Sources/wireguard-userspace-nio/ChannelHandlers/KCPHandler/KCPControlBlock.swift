@@ -21,9 +21,13 @@ public enum InputError:Swift.Error {
 	case invalidCMD
 }
 
+public enum FatalBlockError:Swift.Error {
+	case deadLink
+}
+
 public func iclock() -> UInt32 {
 	let now = DispatchTime.now().uptimeNanoseconds
-	return UInt32(now / 1_000_000)  // nanoseconds → milliseconds
+	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
 }
 @inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
 	return a > b ? a : b
@@ -32,7 +36,7 @@ public func iclock() -> UInt32 {
 	return min(max(value, lower), upper)
 }
 @inline(__always) private func itimeDiff(later a:UInt32, earlier b:UInt32) -> Int32 {
-    return Int32(bitPattern: a &- b)
+  return Int32(bitPattern: a &- b)
 }
 
 let IKCP_RTO_NDL:UInt32 = 30
@@ -58,7 +62,7 @@ let IKCP_PROBE_INIT:UInt32 = 7000
 let IKCP_PROBE_LIMIT:UInt32 = 120000
 let IKCP_FASTACK_LIMIT:UInt32 = 5
 
-internal struct KCPControlBlock {
+internal final class KCPControlBlock {
 	/// conversation id
 	var conv:UInt32
 	/// maximum transmission unit: the largest udp packet accepted
@@ -170,7 +174,7 @@ internal struct KCPControlBlock {
 	// KCP Send
 	// - Segments a ByteBuffer and puts the fragmented ByteBuffer into snd_buf with the appropriate write/ack promise at the last fragment.
 	@available(*, noasync)
-	public mutating func send(_ inputBuffer:ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>?) throws(SendError) -> Int {
+	public func send(_ inputBuffer:ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>?) throws(SendError) -> Int {
 		let len = inputBuffer.readableBytes
 		guard mss > 0 else {
 			writePromise?.fail(SendError.mssValueError)
@@ -220,7 +224,7 @@ internal struct KCPControlBlock {
 	}
 
 	@available(*, noasync)
-	internal mutating func updateAck(rtt: Int32) {
+	internal func updateAck(rtt: Int32) {
 		if rx_srtt == 0 {
 			rx_srtt = rtt
 			rx_rttval = rtt / 2
@@ -242,7 +246,7 @@ internal struct KCPControlBlock {
 	}
 	
 	/// Syncs `send_una` up to sync with the current contents of the `snd_buf`
-	internal mutating func shrinkBuff() {
+	internal func shrinkBuff() {
 		if let node = snd_buf.front {
 			snd_una = node.value!.data.header.sequenceNumber
 		} else {
@@ -251,12 +255,13 @@ internal struct KCPControlBlock {
 	}
 
 	/// Acknowledges a specific segment sn and removes if from the `snd_buff`
-	internal mutating func parseAck(sn:UInt32) {
+	internal func parseAck(sn:UInt32) {
 		guard itimeDiff(later:sn, earlier:snd_una) >= 0 && itimeDiff(later:sn, earlier:snd_nxt) < 0 else {
 			return
 		}
 		segLoop: for (curNode, seg) in snd_buf.makeIterator() {
 			guard seg.data.header.sequenceNumber != sn else {
+				curNode.value!.ackPromise?.succeed()
 				snd_buf.remove(curNode)
 				break segLoop
 			}
@@ -267,9 +272,10 @@ internal struct KCPControlBlock {
 	}
 	
 	@available(*, noasync)
-	internal mutating func parseUna(una: UInt32) {
+	internal func parseUna(una: UInt32) {
 		segLoop: for (curNode, seg) in snd_buf.makeIterator() {
 			if itimeDiff(later:una, earlier:seg.data.header.sequenceNumber) > 0 {
+				curNode.value!.ackPromise?.succeed()
 				snd_buf.remove(curNode)
 			} else {
 				break segLoop
@@ -278,7 +284,7 @@ internal struct KCPControlBlock {
 	}
 	
 	@available(*, noasync)
-	internal mutating func parseFastAck(sn: UInt32, ts: UInt32) {
+	internal func parseFastAck(sn: UInt32, ts: UInt32) {
 		guard itimeDiff(later:sn, earlier:snd_una) >= 0 && itimeDiff(later:sn, earlier:snd_nxt) < 0 else {
 			return
 		}
@@ -299,7 +305,7 @@ internal struct KCPControlBlock {
 	}
 	
 	@available(*, noasync)
-	internal mutating func ackPush(sn: UInt32, ts: UInt32) {
+	internal func ackPush(sn: UInt32, ts: UInt32) {
 		let newSize = ackcount + 1
 		if newSize > ackblock {
 			var newBlock:UInt32 = 8
@@ -344,7 +350,7 @@ internal struct KCPControlBlock {
 	// - Filters segments by the segment command
 	// - Update snd_wnd, parseUna, and shrinkbuff for ALL segments
 	@available(*, noasync)
-	public mutating func input(_ inputBuffer:inout ByteBuffer) throws(InputError) {
+	public func input(_ inputBuffer:inout ByteBuffer) throws(InputError) {
 		let count = inputBuffer.readableBytes
 		let prevUna = snd_una
 		var maxAck:UInt32 = 0
@@ -424,41 +430,114 @@ internal struct KCPControlBlock {
 		if gotAck {
 			parseFastAck(sn:maxAck, ts:latestTS)
 		}
-		if itimeDiff(later:snd_una, earlier:prevUna) > 0 {
-			if cwnd < rmt_wnd {
-				let mss = self.mss
-				if cwnd < ssthresh {
-					cwnd &+= 1
-					incr &+= mss
-				} else {
-					if incr < mss {
-						incr = mss
-					}
-					incr &+= (mss * mss) / incr + (mss / 16)
-					if ((cwnd &+ 1) &* mss <= incr) {
-						cwnd = (incr &+ mss &- 1) / (mss > 0 ? mss : 1)
-					}
-				}
-				
-				if cwnd > rmt_wnd {
-					cwnd = rmt_wnd
-					incr = rmt_wnd &* mss
-				}
+	}
+
+	// KCP ParseData
+	// - Called by input
+	// - Parses an individual PUSH segment
+	// - If it's a new segment, puts the segment into the rcv_buf in the correct order
+	// - Moves any segments it can (sequentially) into the receive queue
+	@available(*, noasync)
+	internal func parseData(_ newseg: KCPSegment) {
+		let sn = newseg.header.sequenceNumber
+		var isDuplicate = false
+		guard itimeDiff(later:sn, earlier:rcv_nxt &+ rcv_wnd) < 0, itimeDiff(later:sn, earlier:rcv_nxt) >= 0 else {
+			return
+		}
+		
+		var insertAfterNode:LinkedList<KCPSegment>.Node? = nil
+		segLoop: for (curNode, seg) in rcv_buf.makeReverseIterator() {
+			guard seg.header.sequenceNumber != sn else {
+				isDuplicate = true
+				break segLoop
+			}
+			guard itimeDiff(later:sn, earlier:seg.header.sequenceNumber) <= 0 else {
+				insertAfterNode = curNode
+				break segLoop
 			}
 		}
+		if isDuplicate == false {
+			if let anchor = insertAfterNode {
+				rcv_buf.insert(newseg, after:anchor)
+			} else {
+				rcv_buf.add(newseg)
+			}
+		}
+		while let firstNode = rcv_buf.front, firstNode.value!.header.sequenceNumber == rcv_nxt && rcv_queue.count < rcv_wnd {
+			rcv_buf.remove(firstNode)
+			rcv_queue.addTail(firstNode)
+			rcv_nxt &+= 1
+		}
 	}
+
+	// KCP Receive
+	// - 
+	
+	// @available(*, noasync)
+	// public func receive(_ ptr:UnsafeMutableRawPointer?, len:Int) throws(ReceiveError) -> Int {
+	// 	guard rcv_queue.isEmpty == false else {
+	// 		throw ReceiveError.receiveQueueEmpty
+	// 	}
+	// 	let isPeek:Bool = (len < 0)
+	// 	let absLen = isPeek ? -len : len
+		
+	// 	let peekSize = try peekSize()
+	// 	guard peekSize <= absLen else {
+	// 		throw ReceiveError.lengthTooSmall
+	// 	}
+	// 	var recover:Bool = false
+	// 	if rcv_queue.count >= rcv_wnd {
+	// 		recover = true
+	// 	}
+	// 	var copied = 0
+	// 	nodeLoop: for (node, seg) in rcv_queue.makeIterator() {
+	// 		if let buf = ptr, seg.len > 0 {
+	// 			buf.advanced(by:copied).assumingMemoryBound(to:UInt8.self).update(from:seg.data, count:Int(seg.len))
+	// 		}
+	// 		copied += Int(seg.len)
+	// 		if isPeek == false {
+	// 			rcv_queue.remove(node)
+	// 		}
+	// 		guard seg.frg != 0 else {
+	// 			break nodeLoop
+	// 		}
+	// 	}
+		
+	// 	#if DEBUG
+	// 	guard copied == peekSize else {
+	// 		fatalError("copied is not the same as peeksize. this is unexpected")
+	// 	}
+	// 	#endif
+		
+	// 	for (node, seg) in rcv_buf.makeIterator() {
+	// 		if seg.sn == rcv_nxt && rcv_buf.count < rcv_wnd {
+	// 			rcv_buf.remove(node)
+				
+	// 			rcv_queue.addTail(node)
+				
+	// 			rcv_nxt += 1
+	// 		} else {
+	// 			break
+	// 		}
+	// 	}
+		
+	// 	if rcv_queue.count < rcv_wnd && recover == true {
+	// 		probe |= IKCP_ASK_TELL
+	// 	}
+	// 	return copied
+	// }
 
 	// KCP Flush
 	// - Sends any pending ACKs
 	// - Sends any pending Probes
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
-	public mutating func flush(current:UInt32, byteBuffer:inout ByteBuffer) -> Bool {
+	public func flush(current:UInt32, byteBuffer:inout ByteBuffer) -> Bool {
 		self.current = current
 		
 		let wnd = wndUnused()
-		// Create  a basic segment for acks
-		var header = KCPSegment.Header(conv: conv, cmd: KCPSegment.Command(rawValue: IKCP_CMD_ACK)!, frg: 0, sn: 0, len: 0)
+		// Create a basic segment for acks
+		let header = KCPSegment.Header(conv: conv, cmd: KCPSegment.Command(rawValue: IKCP_CMD_ACK)!, frg: 0, sn: 0, len: 0)
 		var seg = KCPSegment(header: header, data: ByteBufferView())
 		seg.header.receiveWindowSize = wnd
 		seg.header.una = rcv_nxt
@@ -468,9 +547,12 @@ internal struct KCPControlBlock {
 		for i in 0..<ackcount {
 			
 			ackGet(p:Int(i), sn:&seg.header.sequenceNumber, ts:&seg.header.timestamp)
-			byteBuffer.clear()
+			// Check if we need to output data
+			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
+				// OUTPUT HERE -------------------------
+				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
+			}
 			seg.encode(to: &byteBuffer)
-			// OUTPUT HERE -------------------------
 		}
 		ackcount = 0
 				
@@ -499,15 +581,20 @@ internal struct KCPControlBlock {
 		if (probe & IKCP_ASK_SEND) != 0 {
 			seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WASK)!
 			byteBuffer.clear()
+			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
+				// OUTPUT HERE -------------------------
+				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
+			}
 			seg.encode(to: &byteBuffer)
-			// OUTPUT HERE -------------------------
 		}
 		// If send_probe has been received, send tell_probe
 		if (probe & IKCP_ASK_TELL) != 0 {
 			seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WINS)!
-			byteBuffer.clear()
+			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
+				// OUTPUT HERE -------------------------
+				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
+			}
 			seg.encode(to: &byteBuffer)
-			// OUTPUT HERE -------------------------
 		}
 		probe = 0
 				
@@ -542,17 +629,30 @@ internal struct KCPControlBlock {
 				node.value!.data.header.una = rcv_nxt	
 				node.value!.data.header.receiveWindowSize = wnd			
 
-				byteBuffer.clear()
+				if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) + Int(node.value!.data.header.dataLength) > mtu) {
+					// OUTPUT HERE -------------------------
+					byteBuffer.clear(minimumCapacity: Int(mtu))
+				}
 				node.value!.data.encode(to: &byteBuffer)
-				// OUTPUT HERE -------------------------
+
 				
 				// Dead link occured. Wipe send queue
 				if node.value!.data.header.xmit >= dead_link {
+					for (node, _) in snd_buf.makeIterator() {
+						node.value!.ackPromise?.fail(FatalBlockError.deadLink)
+					}
 					snd_buf.clear()
+					// Set inactive to true so it can be cleared later
+					break
 				}
 			}
 		}
-		
+
+		if(byteBuffer.readableBytes != 0) {
+			// OUTPUT HERE -------------------------
+			byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
+		}
+
 		if(inactiveA && inactiveB) {
 			return true
 		} else {

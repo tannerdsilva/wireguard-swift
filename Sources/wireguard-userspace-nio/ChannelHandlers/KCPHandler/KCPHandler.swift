@@ -13,9 +13,6 @@ internal final class KcpHandlerV2:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias OutboundOut = (PublicKey, ByteBuffer)
 	
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
-			
-	private var pendingOutgoing:[PublicKey:[(data: [UInt8], promise: EventLoopPromise<Void>?)]] = [:]
-	private var pendingIncoming:[PublicKey:[[UInt8]]] = [:]
 	
     private let ourKey:PublicKey
 	private let logger:Logger
@@ -42,7 +39,6 @@ internal final class KcpHandlerV2:ChannelDuplexHandler, @unchecked Sendable {
 
         // let bytes: [UInt8] = data.getBytes(at: data.readerIndex, length: data.readableBytes)!
 		// if (kcp[key] == nil) {
-		// 	pendingIncoming[key, default: []].append(data)
 		// 	return
 		// }
 	}
