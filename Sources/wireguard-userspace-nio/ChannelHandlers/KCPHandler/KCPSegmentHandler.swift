@@ -109,7 +109,7 @@ extension KCPSegment.Handler {
 			promise?.fail(error)
 			return
 		}
-		logger.trace("writing kcp segment to next handler in pipeline...", metadata:["data_length":"\(decodedOutbound.segment.header.dataLength)", "public-key_remote":"\(decodedOutbound.publicKey)", "kcp_conversation_id":"\(decodedOutbound.segment.header.conversationID)", "kcp_command":"\(decodedOutbound.segment.header.command)", "kcp_sequence_number":"\(decodedOutbound.segment.header.sequenceNumberCurrent)"])
+		logger.trace("writing kcp segment to next handler in pipeline...", metadata:["data_length":"\(decodedOutbound.segment.header.dataLength)", "public-key_remote":"\(decodedOutbound.publicKey)", "kcp_conversation_id":"\(decodedOutbound.segment.header.conversationID)", "kcp_command":"\(decodedOutbound.segment.header.command)", "kcp_sequence_number":"\(decodedOutbound.segment.header.sequenceNumber)"])
 		encodeBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 		decodedOutbound.segment.encode(to:&encodeBuffer)
 		context.write(wrapOutboundOut(KCPSegment.PipelineEncoded(publicKey:decodedOutbound.publicKey, buffer:encodeBuffer)), promise:promise)

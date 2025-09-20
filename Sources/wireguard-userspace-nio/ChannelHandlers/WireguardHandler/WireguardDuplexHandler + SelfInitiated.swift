@@ -73,6 +73,9 @@ extension PeerInfo.Live {
 	internal struct PendingPostHandshake {
 		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>?)] = []
 		/// insert data into the write queue with a corresponding write promise.
+		/// - parameters:
+		/// 	- data: the data to queue for writing
+		/// 	- promise: the write promise that should be notified when the data is written, or nil if no notification is required
 		internal mutating func queue(data:ByteBuffer, promise:EventLoopPromise<Void>?) {
 			pendingWriteData.append((data:data, promise:promise))
 		}
@@ -120,7 +123,7 @@ extension PeerInfo.Live {
 			return ((lastHandshakeEmissionTime! + WireguardHandler.rekeyTimeout) - now)
 		}
 
-		/// journals a new self-initiated message. this is called after a handshake is generated and before it is emitted.
+		/// journals a new self-initiated message. this is called after a handshake initiation is generated and before it is emitted.
 		/// - parameters:
 		/// 	- context: the channel handler context
 		/// 	- now: the current time
@@ -142,7 +145,7 @@ extension PeerInfo.Live {
 		/// 	- context: the channel handler context
 		/// 	- now: the current time
 		/// 	- initiatorPeerIndex: the initiator's peer index
-		/// - returns: the cryptokey-set that was used for the initiation, or nil if the claim was invalid
+		/// - returns: the cryptokey set that was used for the initiation, or nil if the claim was invalid
 		internal mutating func claimInitiation(context:borrowing ChannelHandlerContext, now:NIODeadline, initiatorPeerIndex:PeerIndex) -> (initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, c:Result.Bytes32, h:Result.Bytes32, initiationPacket:Message.Initiation.Payload.Authenticated)? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
