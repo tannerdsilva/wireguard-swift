@@ -95,6 +95,8 @@ extension PeerInfo.Live {
 	/// primary mechanism for storing chaining data for initiations sent outbound.
 	internal struct CurrentSelfInitiatedInfo {
 		private let responderStaticPublicKey:PublicKey
+
+		/// the wireguard channel handler that is handling the interaction with the channel.
 		private let wireguardHandler:WireguardHandler
 
 		/// current time that is updated every time a new handshake initiation is emitted to the peer.

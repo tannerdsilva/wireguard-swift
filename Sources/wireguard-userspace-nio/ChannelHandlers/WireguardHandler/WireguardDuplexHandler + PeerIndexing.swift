@@ -62,6 +62,8 @@ extension WireguardHandler.AutomaticallyUpdated {
 			_ = publicKeyPeerM.updateValue(hasExistingPISet, forKey:hasExistingPublicKey)
 			log.trace("removed peer index m association.", metadata:["public-key_remote":"\(hasExistingPublicKey)", "peer-index-m":"\(index)"])
 		}
+
+		/// seek for the public key that is associated with a given peer index m, if it exists.
 		internal borrowing func seek(indexM index:PeerIndex) -> PublicKey? {
 			return peerMPublicKey[index]
 		}

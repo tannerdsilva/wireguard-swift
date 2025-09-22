@@ -8,7 +8,9 @@ import Synchronization
 import bedrock
 
 extension PeerInfo {
+	/// used to represent and store all live information about a peer that is needed for active communication on the socket.
 	internal final class Live:@unchecked Sendable {
+		/// the logger that the live peer info instance uses
 		private let log:Logger
 		private let wireguardHandler:WireguardHandler
 
@@ -57,11 +59,11 @@ extension PeerInfo {
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
 			buildLogger.trace("created live peer info instance.")
 		}
-		
-		internal func close() {
+				
+		deinit {
 			handshakeInitiationTask = nil
+			log.trace("instance deinitialized.")
 		}
-
 	}
 }
 
@@ -69,9 +71,13 @@ extension PeerInfo {
 extension PeerInfo.Live {
 	/// used to express the strategy for sending data to a peer. data can be sent to a peer in one of three ways, and this enum expresses which way should be used.
 	internal enum SendStrategy {
+		/// the values that should be used to send the data immediately
 		internal struct Values {
+			/// the n value to use for sending
 			internal var nSend:Counter
+			/// the t value to use for sending
 			internal let tSend:Result.Bytes32
+			/// the session data that should be used for sending
 			internal let session:Session
 		}
 		/// returned when there is a current session that has not crossed its timeout threshold.
@@ -82,6 +88,7 @@ extension PeerInfo.Live {
 		case queueWhileAwaitingKeyRotation
 	}
 
+	/// called when it is time to transmit data to the remote peer but the transit keys to use for this transmission are not yet known.
 	internal func getSendStrategy(context:borrowing ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> SendStrategy {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -162,6 +169,8 @@ extension PeerInfo.Live {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		var logger = log
+		logger.trace("updating nRecv value for session", metadata:["session_id":"\(inputPositionExplicit.element.geometry)"])
 		switch inputPositionExplicit {
 			case .current(let element):
 				switch element.geometry {
@@ -299,7 +308,9 @@ extension PeerInfo.Live {
 // MARK: Accessing Sessions
 extension PeerInfo.Live {
 	/// returns the session (and its rotational position) for the given peer index
-	/// - parameter peerM: the peer index m value to search for
+	/// - parameters
+	/// 	- peerM: the peer index m value to search for
+	/// - returns: the positioned session if found, otherwise nil
 	internal borrowing func session(forPeerM peerM:PeerIndex) -> Rotating<Session>.Positioned? {
 		// check the current position
 		switch rotation.current {
@@ -347,7 +358,7 @@ extension PeerInfo.Live {
 		
 		// generate the transmit keys
 		let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
-		logger.info("transmit keys generated from peer initiated handshake")
+		logger.debug("transmit keys generated from peer initiated handshake")
 
 		// add the new index to the active indicies
 		let wgh = wireguardHandler
@@ -376,20 +387,19 @@ extension PeerInfo.Live {
 
 		// generate the transmit keys
 		let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
-		logger.info("transmit keys generated from self initiated handshake")
+		logger.debug("transmit keys generated from self initiated handshake")
 
 		// apply the rotation of the existing sessions with the new session
 		let rotationResults = rotation.rotate(replacingNext:Session(geometry:element, nVar:SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), establishedDate:now))
 		
 		// automatically update the wireguard handler as needed
-		let wgh = wireguardHandler
 		if let outgoingPrevious = rotationResults.previous {
-			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
+			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
 		}
 		if let outgoingNext = rotationResults.next {
-			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
+			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
 		}
-		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
+		wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
 
 		// fire the handshake information to the channel
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))
@@ -397,7 +407,7 @@ extension PeerInfo.Live {
 		// flush any pending data
 		while var (pendingPacket) = postHandshakePackets.dequeue() {
 			logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(publicKey)"])
-			wgh.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
+			wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
 		}
 		
 		// cancel the scheduled handshake initiation task

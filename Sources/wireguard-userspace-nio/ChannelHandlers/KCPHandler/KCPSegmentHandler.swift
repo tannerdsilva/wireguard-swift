@@ -48,6 +48,10 @@ extension KCPSegment {
 			log = buildLogger
 			dataMTU = mtu
 		}
+
+		deinit {
+			log.trace("instance deinitialized.")
+		}
 	}
 }
 

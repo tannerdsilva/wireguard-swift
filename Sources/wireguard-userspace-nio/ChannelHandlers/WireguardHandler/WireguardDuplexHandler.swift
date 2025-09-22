@@ -109,11 +109,10 @@ extension WireguardHandler {
 				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self] _ in
 					// when peer is added
 					guard let _ = self else { return }
-				}, removalHandler: { [weak self, l = log] removedPublicKey, peerInfo in
+				}, removalHandler: { [weak self, l = log] removedPublicKey, _ in
 					// when peer is removed
 					guard let _ = self else { return }
 					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
-					peerInfo.close()
 				})
 				operatingState = .channelEngaged
 			default:
@@ -230,18 +229,29 @@ extension WireguardHandler {
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
-//					guard let peerInfo = peerDeltaEngine[
+					guard let peerPub = automaticallyUpdatedVariables.activelyInitiatingIndicies.match(context:context, peerIndex:cookiePayload.receiverIndex) else {
+						logger.critical("received cookie packet for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPub) else {
+						logger.critical("received cookie packet for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
+					guard let chainingData = livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:cookiePayload.receiverIndex) else {
+						logger.error("received cookie packet for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
 					logger.debug("received cookie packet", metadata:["public-key_remote":""])
-					/*withUnsafePointer(to:peerPub) { expectedPeerPublicKey in
+					withUnsafePointer(to:peerPub) { expectedPeerPublicKey in
 						var phantomCookie:Message.Initiation.Payload.Authenticated
 						do {
-							phantomCookie = try chainingData.authenticatedPayload.payload.finalize(responderStaticPublicKey:expectedPeerPublicKey, cookie:cookiePayload)
+							phantomCookie = try chainingData.initiationPacket.payload.finalize(responderStaticPublicKey:expectedPeerPublicKey, cookie:cookiePayload)
 //							selfInitiatedInfo.initiatorPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
 						} catch {
 //							logger.error("failed to validate cookie and create msgMac2")
 //							return
 						}
-						let nioNow = NIODeadline.now()
+						/*let nioNow = NIODeadline.now()
 						selfInitiatedIndexes.rekey(context:context, indexM:cookiePayload.receiverIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)) { [weak self, ap = chainingData.authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = endpoint] timer in
 							// rekey attempt task.
 							guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
@@ -253,8 +263,8 @@ extension WireguardHandler {
 							c.accessContext { contextPointer in
 								self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 							}
-						}
-					}*/
+						}*/
+					}
 					break;
 				
 				case .data(recipientIndex: let recipientIndex, counter: let counter, payload: let payload):
