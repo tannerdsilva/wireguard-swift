@@ -76,6 +76,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
 	private let listeningPort:Int
 	private let wgh:WireguardHandler
+	private let kcpcbh:KcpControlBlockHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
@@ -86,6 +87,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.debug)
+		self.kcpcbh = KcpControlBlockHandler(key: staticPrivateKey, logLevel: logger.logLevel)
 	}
 
 	public func waitForChannelInit() async throws {
@@ -105,7 +107,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 						channel.pipeline.addHandlers([
 							PacketHandler(mtu:1500, logLevel:l.logLevel),
 							wgh,
-							KcpHandler(logLevel:l.logLevel),
+							KCPSegment.Handler(mtu: 1400, logLevel: l.logLevel),
+							self.kcpcbh,
 							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
 							dhh
 						])

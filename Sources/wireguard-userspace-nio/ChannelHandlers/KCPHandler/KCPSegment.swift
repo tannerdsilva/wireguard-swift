@@ -104,29 +104,10 @@ internal struct KCPSegment:Sendable {
 			}
 			dataLength = lenParsed
 
-			// read the rest of the fields that are used for kcp internal processing
-			guard let resendtsParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
-				return nil
-			}
-			resendts = resendtsParsed
-
-			// read the retransmission timeout
-			guard let rtoParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
-				return nil
-			}
-			rto = rtoParsed
-
-			// read the fastack counter
-			guard let fastackParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
-				return nil
-			}
-			fastack = fastackParsed
-
-			// read the transmit count
-			guard let xmitParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
-				return nil
-			}
-			xmit = xmitParsed
+			resendts = 0
+			rto = 0
+			fastack = 0
+			xmit = 0
 		}
 
 		internal func encode(to buffer:inout ByteBuffer) {
@@ -138,10 +119,6 @@ internal struct KCPSegment:Sendable {
 			buffer.writeInteger(sequenceNumber, endianness:.big, as:UInt32.self)
 			buffer.writeInteger(una, endianness:.big, as:UInt32.self)
 			buffer.writeInteger(dataLength, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(resendts, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(rto, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(fastack, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(xmit, endianness:.big, as:UInt32.self)
 		}
 	}
 }
@@ -164,7 +141,10 @@ extension KCPSegment {
 extension KCPSegment {
 	/// decode a kcp segment from a byte buffer. the bytes will be read from the buffer.
 	internal init?(decode buffer:inout ByteBuffer) {
-		guard let h = Header(decode:&buffer), buffer.readableBytes >= Int(h.dataLength) else {
+		guard let h = Header(decode:&buffer) else {
+			return nil
+		}
+		guard buffer.readableBytes >= Int(h.dataLength) else {
 			return nil
 		}
 		defer {

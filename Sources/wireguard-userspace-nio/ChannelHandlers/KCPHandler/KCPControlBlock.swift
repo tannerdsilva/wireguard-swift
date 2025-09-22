@@ -1,4 +1,5 @@
 import NIO
+import RAW_dh25519
 import Dispatch
 
 public enum SendError:Swift.Error {
@@ -174,7 +175,7 @@ internal final class KCPControlBlock {
 	// KCP Send
 	// - Segments a ByteBuffer and puts the fragmented ByteBuffer into snd_buf with the appropriate write/ack promise at the last fragment.
 	@available(*, noasync)
-	public func send(_ inputBuffer:ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>?) throws(SendError) -> Int {
+	public func send(_ inputBuffer:ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws(SendError) -> Int {
 		let len = inputBuffer.readableBytes
 		guard mss > 0 else {
 			writePromise?.fail(SendError.mssValueError)
@@ -206,9 +207,9 @@ internal final class KCPControlBlock {
 			
 			let view = inputBuffer.getSlice(at: inputBuffer.readerIndex + offset, length: fragSize)
 
-			var header = KCPSegment.Header(conv: conv, cmd: KCPSegment.Command(rawValue: IKCP_CMD_PUSH)!, frg: UInt8(count - i - 1), sn: snd_nxt, len: UInt32(fragSize))
+			let header = KCPSegment.Header(conv: conv, cmd: KCPSegment.Command(rawValue: IKCP_CMD_PUSH)!, frg: UInt8(count - i - 1), sn: snd_nxt, len: UInt32(fragSize))
 			snd_nxt &+= 1
-			var seg = KCPSegment(header: header, data: view!.readableBytesView)
+			let seg = KCPSegment(header: header, data: view!.readableBytesView)
 			
 			
 			if(i == count-1) {
@@ -352,7 +353,6 @@ internal final class KCPControlBlock {
 	@available(*, noasync)
 	public func input(_ inputBuffer:inout ByteBuffer) throws(InputError) {
 		let count = inputBuffer.readableBytes
-		let prevUna = snd_una
 		var maxAck:UInt32 = 0
 		var latestTS:UInt32 = 0
 		var gotAck = false
@@ -361,7 +361,7 @@ internal final class KCPControlBlock {
 		}
 		
 		var left = count
-		while left >= IKCP_OVERHEAD {
+		while left >= IKCP_OVERHEAD { 
 			let seg = KCPSegment(decode: &inputBuffer)!
 			
 			guard seg.header.conversationID == self.conv else {
@@ -426,6 +426,7 @@ internal final class KCPControlBlock {
 				default:
 					throw InputError.invalidCMD
 			}
+			left -= Int(seg.header.dataLength)
 		}
 		if gotAck {
 			parseFastAck(sn:maxAck, ts:latestTS)
@@ -438,7 +439,7 @@ internal final class KCPControlBlock {
 	// - If it's a new segment, puts the segment into the rcv_buf in the correct order
 	// - Moves any segments it can (sequentially) into the receive queue
 	@available(*, noasync)
-	internal func parseData(_ newseg: KCPSegment) {
+	private func parseData(_ newseg: KCPSegment) {
 		let sn = newseg.header.sequenceNumber
 		var isDuplicate = false
 		guard itimeDiff(later:sn, earlier:rcv_nxt &+ rcv_wnd) < 0, itimeDiff(later:sn, earlier:rcv_nxt) >= 0 else {
@@ -471,68 +472,102 @@ internal final class KCPControlBlock {
 	}
 
 	// KCP Receive
-	// - 
+	// - Checks if there is data ready to receive
+	// - Calls the private receive function to receive the data
+	// - Moves available data from the rcv_buf to the rcv_queue
+	@available(*, noasync)
+	public func receive() throws -> ByteBuffer {
+		let expectedLength = try receiveAvailableLength()
+		guard expectedLength > 0 else {
+			throw ReceiveError.receiveQueueEmpty
+		}
+		let allocator = ByteBufferAllocator()
+		var retBuffer = allocator.buffer(capacity: expectedLength)
+		_ = try receive(&retBuffer)
+		return retBuffer
+	}
 	
-	// @available(*, noasync)
-	// public func receive(_ ptr:UnsafeMutableRawPointer?, len:Int) throws(ReceiveError) -> Int {
-	// 	guard rcv_queue.isEmpty == false else {
-	// 		throw ReceiveError.receiveQueueEmpty
-	// 	}
-	// 	let isPeek:Bool = (len < 0)
-	// 	let absLen = isPeek ? -len : len
+	@available(*, noasync)
+	private borrowing func receiveAvailableLength() throws-> Int {
+		guard rcv_queue.isEmpty == false else {
+			throw ReceiveError.receiveQueueEmpty
+		}
+
+        guard let firstNode = rcv_queue.front, let firstSeg = firstNode.value else {
+        	throw ReceiveError.missingFirstElement
+        }
+        if firstSeg.header.fragmentID == 0 {
+        	return Int(firstSeg.header.dataLength)
+        }
+
+		// Check that the expected number of fragments exist to call receive
+        if rcv_queue.count < UInt32(firstSeg.header.fragmentID + 1) {
+        	throw ReceiveError.firstSegmentFragmentError
+        }
+
+		// Find the length of the receive and return it
+		var buildLen = 0
+		for (_, seg) in rcv_queue.makeIterator() {
+			buildLen += Int(seg.header.dataLength)
+			if(seg.header.fragmentID == 0) {
+				break
+			}
+		}
+		return buildLen
+	}
+	
+	@available(*, noasync)
+	private func receive(_ receiveBuffer:inout ByteBuffer) throws(ReceiveError) -> Int {
+		var recover:Bool = false
+		if rcv_queue.count >= rcv_wnd {
+			recover = true
+		}
+		var copied = 0
+		nodeLoop: for (node, seg) in rcv_queue.makeIterator() {
+			let b = seg.data.count
+
+			if seg.header.dataLength > 0 {
+				receiveBuffer.setBytes(seg.data, at: receiveBuffer.writerIndex + copied)
+			}
+
+			copied += Int(seg.header.dataLength)
+			rcv_queue.remove(node)
+
+			guard seg.header.fragmentID != 0 else {
+				break nodeLoop
+			}
+		}
+
+		// after the loop, advance writerIndex
+		receiveBuffer.moveWriterIndex(forwardBy: copied)
 		
-	// 	let peekSize = try peekSize()
-	// 	guard peekSize <= absLen else {
-	// 		throw ReceiveError.lengthTooSmall
-	// 	}
-	// 	var recover:Bool = false
-	// 	if rcv_queue.count >= rcv_wnd {
-	// 		recover = true
-	// 	}
-	// 	var copied = 0
-	// 	nodeLoop: for (node, seg) in rcv_queue.makeIterator() {
-	// 		if let buf = ptr, seg.len > 0 {
-	// 			buf.advanced(by:copied).assumingMemoryBound(to:UInt8.self).update(from:seg.data, count:Int(seg.len))
-	// 		}
-	// 		copied += Int(seg.len)
-	// 		if isPeek == false {
-	// 			rcv_queue.remove(node)
-	// 		}
-	// 		guard seg.frg != 0 else {
-	// 			break nodeLoop
-	// 		}
-	// 	}
-		
-	// 	#if DEBUG
-	// 	guard copied == peekSize else {
-	// 		fatalError("copied is not the same as peeksize. this is unexpected")
-	// 	}
-	// 	#endif
-		
-	// 	for (node, seg) in rcv_buf.makeIterator() {
-	// 		if seg.sn == rcv_nxt && rcv_buf.count < rcv_wnd {
-	// 			rcv_buf.remove(node)
+		// Move what can be moved from the rcv_buf to the rcv_queue
+		for (node, seg) in rcv_buf.makeIterator() {
+			if seg.header.sequenceNumber == rcv_nxt && rcv_queue.count < rcv_wnd {
+				rcv_buf.remove(node)
 				
-	// 			rcv_queue.addTail(node)
+				rcv_queue.addTail(node)
 				
-	// 			rcv_nxt += 1
-	// 		} else {
-	// 			break
-	// 		}
-	// 	}
+				rcv_nxt += 1
+			} else {
+				print(rcv_queue.count)
+				break
+			}
+		}
 		
-	// 	if rcv_queue.count < rcv_wnd && recover == true {
-	// 		probe |= IKCP_ASK_TELL
-	// 	}
-	// 	return copied
-	// }
+		
+		if rcv_queue.count < rcv_wnd && recover == true {
+			probe |= IKCP_ASK_TELL
+		}
+		return copied
+	}
 
 	// KCP Flush
 	// - Sends any pending ACKs
 	// - Sends any pending Probes
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
-	public func flush(current:UInt32, byteBuffer:inout ByteBuffer) -> Bool {
+	public func flush(current:UInt32, byteBuffer:inout ByteBuffer, key:PublicKey, context:ChannelHandlerContext, wrapOut: @escaping (KCPSegment.PipelineEncoded) -> NIOAny) -> Bool {
 		self.current = current
 		
 		let wnd = wndUnused()
@@ -550,6 +585,7 @@ internal final class KCPControlBlock {
 			// Check if we need to output data
 			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
 				// OUTPUT HERE -------------------------
+				_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
 				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 			}
 			seg.encode(to: &byteBuffer)
@@ -583,6 +619,7 @@ internal final class KCPControlBlock {
 			byteBuffer.clear()
 			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
 				// OUTPUT HERE -------------------------
+				_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
 				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 			}
 			seg.encode(to: &byteBuffer)
@@ -592,6 +629,7 @@ internal final class KCPControlBlock {
 			seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WINS)!
 			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
 				// OUTPUT HERE -------------------------
+				_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
 				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 			}
 			seg.encode(to: &byteBuffer)
@@ -600,6 +638,7 @@ internal final class KCPControlBlock {
 				
 		let rtomin:UInt32 = nodelay == 0 ? UInt32(rx_rto) >> 3 : 0
 		
+		var lastPromise:EventLoopPromise<Void>? = nil
 		for (node, seg) in snd_buf.makeIterator() {
 			var needsend = false
 			if seg.data.header.xmit == 0 {
@@ -631,7 +670,10 @@ internal final class KCPControlBlock {
 
 				if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) + Int(node.value!.data.header.dataLength) > mtu) {
 					// OUTPUT HERE -------------------------
+					_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: node.value!.writePromise)
 					byteBuffer.clear(minimumCapacity: Int(mtu))
+				} else {
+					lastPromise = node.value!.writePromise
 				}
 				node.value!.data.encode(to: &byteBuffer)
 
@@ -650,6 +692,7 @@ internal final class KCPControlBlock {
 
 		if(byteBuffer.readableBytes != 0) {
 			// OUTPUT HERE -------------------------
+			_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: lastPromise)
 			byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 		}
 

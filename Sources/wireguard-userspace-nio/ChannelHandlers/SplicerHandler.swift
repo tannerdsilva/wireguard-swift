@@ -21,11 +21,11 @@ extension Array {
 
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = (PublicKey, [UInt8]) // From kcp handler, needs to be stitched together
+	internal typealias InboundIn = (PublicKey, ByteBuffer) // From kcp handler, needs to be stitched together
 	public typealias InboundOut = (PublicKey, [UInt8]) // Send to the Handoff handler
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
-	internal typealias OutboundOut = (PublicKey, [UInt8]) // Send spliced data to kcp handler
+	internal typealias OutboundOut = (PublicKey, ByteBuffer) // Send spliced data to kcp handler
 	
 	private var logger:Logger
 	
@@ -48,7 +48,8 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	// Received kcp segment. Need to stitch together and send to handoff handler
 	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-		let (key, data) = unwrapInboundIn(data)
+		let (key, byteBuffer) = unwrapInboundIn(data)
+		let data: [UInt8] = byteBuffer.getBytes(at: byteBuffer.readerIndex, length: byteBuffer.readableBytes)!
 		
 		guard storedLengths[key] != nil else {
 			// Extract the UInt32 from the first 4 bytes
@@ -95,8 +96,8 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		if(data.count <= spliceByteLength) {
             let footerBytes = [UInt8](repeating: 0, count: 4)
             data.append(contentsOf: footerBytes)
-			
-            context.writeAndFlush(wrapOutboundOut((key, data)), promise: promise)
+			let buf = ByteBuffer(bytes: data)
+            context.writeAndFlush(wrapOutboundOut((key, buf)), promise: promise)
 		}
 		// Data needs to be spliced and place a len header on first segment
 		else {
@@ -109,10 +110,11 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
                         segment.append(contentsOf: $0)
 					}
 				}
+				let buf = ByteBuffer(bytes: segment)
 				if(i == splices.count-1) {
-                    context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
+                    context.writeAndFlush(wrapOutboundOut((key, buf)), promise: promise)
 				} else {
-                    context.writeAndFlush(wrapOutboundOut((key, segment)), promise: nil)
+                    context.writeAndFlush(wrapOutboundOut((key, buf)), promise: nil)
 				}
 			}
 		}

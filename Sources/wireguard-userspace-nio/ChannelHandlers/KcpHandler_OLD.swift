@@ -5,12 +5,7 @@ import kcp_swift
 import Logging
 import wireguard_crypto_core
 
-enum KCPError: Error {
-	/// The connection has been declared dead (max retransmits hit).
-	case deadLink
-	/// There are no control blocks active
-	case noControlBlocks
-}
+
 
 @RAW_staticbuff(bytes:8)
 @RAW_staticbuff_fixedwidthinteger_type<UInt64>(bigEndian:true)
