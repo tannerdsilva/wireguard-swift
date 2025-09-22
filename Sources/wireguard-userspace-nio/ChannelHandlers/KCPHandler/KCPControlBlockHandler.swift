@@ -97,6 +97,7 @@ extension KcpControlBlockHandler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
+			kcp[key]![0].setNoDelay(1, interval: 30, resend: 1, nc: 1)
 			kcpUpdates(key: key, context: context)
 		}
         
@@ -120,6 +121,7 @@ extension KcpControlBlockHandler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
+			kcp[key]![0].setNoDelay(1, interval: 30, resend: 1, nc: 1)
 			kcpUpdates(key: key, context: context)
 		}
 

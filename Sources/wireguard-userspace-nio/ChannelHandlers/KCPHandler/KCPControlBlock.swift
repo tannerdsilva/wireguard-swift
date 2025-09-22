@@ -119,6 +119,12 @@ internal final class KCPControlBlock {
 	var ackcount:UInt32
 	var ackblock:UInt32
 
+	var fastresend:Int64
+	
+	private var fastlimit:Int64
+
+	var nocwnd:Int64
+
 	var inactiveA:Bool
 	var inactiveB:Bool
 
@@ -164,9 +170,9 @@ internal final class KCPControlBlock {
 		self.ackcount = 0
 		self.ackblock = 0
 
-		// self.fastresend = 0
-		// self.fastlimit = Int64(IKCP_FASTACK_LIMIT)
-		// self.nocwnd = 1
+		self.fastresend = 0
+		self.fastlimit = Int64(IKCP_FASTACK_LIMIT)
+		self.nocwnd = 1
 		
 		self.inactiveA = true
 		self.inactiveB = true
@@ -175,7 +181,7 @@ internal final class KCPControlBlock {
 	// KCP Send
 	// - Segments a ByteBuffer and puts the fragmented ByteBuffer into snd_buf with the appropriate write/ack promise at the last fragment.
 	@available(*, noasync)
-	public func send(_ inputBuffer:ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws(SendError) -> Int {
+	public func send(_ inputBuffer: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws(SendError) -> Int {
 		let len = inputBuffer.readableBytes
 		guard mss > 0 else {
 			writePromise?.fail(SendError.mssValueError)
@@ -343,7 +349,10 @@ internal final class KCPControlBlock {
 
 	@available(*, noasync)
 	internal func wndUnused() -> UInt16 {
-		return UInt16(rcv_wnd)
+		if (rcv_queue.count < rcv_wnd) {
+			return UInt16(rcv_wnd - rcv_queue.count)
+		}
+		return 0
 	}
 
 	// KCP Input
@@ -352,6 +361,7 @@ internal final class KCPControlBlock {
 	// - Update snd_wnd, parseUna, and shrinkbuff for ALL segments
 	@available(*, noasync)
 	public func input(_ inputBuffer:inout ByteBuffer) throws(InputError) {
+		var prevUna = snd_una
 		let count = inputBuffer.readableBytes
 		var maxAck:UInt32 = 0
 		var latestTS:UInt32 = 0
@@ -430,6 +440,28 @@ internal final class KCPControlBlock {
 		}
 		if gotAck {
 			parseFastAck(sn:maxAck, ts:latestTS)
+		}
+		if itimeDiff(later:snd_una, earlier:prevUna) > 0 {
+			if cwnd < rmt_wnd {
+				let mss = self.mss
+				if cwnd < ssthresh {
+					cwnd &+= 1
+					incr &+= mss
+				} else {
+					if incr < mss {
+						incr = mss
+					}
+					incr &+= (mss * mss) / incr + (mss / 16)
+					if ((cwnd &+ 1) &* mss <= incr) {
+						cwnd = (incr &+ mss &- 1) / (mss > 0 ? mss : 1)
+					}
+				}
+				
+				if cwnd > rmt_wnd {
+					cwnd = rmt_wnd
+					incr = rmt_wnd &* mss
+				}
+			}
 		}
 	}
 
@@ -574,7 +606,7 @@ internal final class KCPControlBlock {
 		// Create a basic segment for acks
 		let header = KCPSegment.Header(conv: conv, cmd: KCPSegment.Command(rawValue: IKCP_CMD_ACK)!, frg: 0, sn: 0, len: 0)
 		var seg = KCPSegment(header: header, data: ByteBufferView())
-		seg.header.receiveWindowSize = wnd
+		seg.header.receiveWindowSize = wndUnused()
 		seg.header.una = rcv_nxt
 		seg.header.timestamp = 0
 
@@ -593,7 +625,7 @@ internal final class KCPControlBlock {
 		ackcount = 0
 				
 		// Only manage probes if we have nothing to send
-		if snd_buf.count == 0 {
+		if rmt_wnd == 0 || snd_buf.count == 0 {
 			// Update probe time variables and prepare send ask_probe if needed
 			if probe_wait == 0 {
 				probe_wait = IKCP_PROBE_INIT
@@ -636,7 +668,16 @@ internal final class KCPControlBlock {
 		}
 		probe = 0
 				
+		var cwnd = min(snd_wnd, rmt_wnd)
+		if nocwnd == 0 {
+			cwnd = min(cwnd, self.cwnd)
+		}
+		
+		let resent:UInt32 = fastresend > 0 ? UInt32(fastresend) : UInt32.max
 		let rtomin:UInt32 = nodelay == 0 ? UInt32(rx_rto) >> 3 : 0
+		
+		var change = false
+		var lost = false
 		
 		var lastPromise:EventLoopPromise<Void>? = nil
 		for (node, seg) in snd_buf.makeIterator() {
@@ -657,7 +698,16 @@ internal final class KCPControlBlock {
 					node.value!.data.header.rto = node.value!.data.header.rto &+ step / 2
 				}
 				node.value!.data.header.resendts = current &+ node.value!.data.header.rto
-			} 
+			} else if node.value!.data.header.fastack >= resent {
+				// fast‑retransmit (duplicate ACKs)
+				if Int32(node.value!.data.header.xmit) <= fastlimit || fastlimit <= 0 {
+					needsend = true
+					node.value!.data.header.xmit &+= 1
+					node.value!.data.header.fastack = 0
+					node.value!.data.header.resendts = current &+ node.value!.data.header.rto
+					change = true
+				}
+			}
 			
 			if needsend {
 				inactiveA = false
@@ -666,7 +716,7 @@ internal final class KCPControlBlock {
 				// Update timestamp and una
 				node.value!.data.header.timestamp = current
 				node.value!.data.header.una = rcv_nxt	
-				node.value!.data.header.receiveWindowSize = wnd			
+				node.value!.data.header.receiveWindowSize = wndUnused()			
 
 				if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) + Int(node.value!.data.header.dataLength) > mtu) {
 					// OUTPUT HERE -------------------------
@@ -695,6 +745,24 @@ internal final class KCPControlBlock {
 			_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: lastPromise)
 			byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 		}
+		if change == true {
+			let inflight = snd_nxt &- snd_una
+			ssthresh = inflight / 2
+			if ssthresh < IKCP_THRESH_MIN { ssthresh = IKCP_THRESH_MIN }
+			self.cwnd = ssthresh &+ resent
+			incr = self.cwnd &* mss
+		}
+		
+		if lost == true {
+			ssthresh = cwnd / 2
+			if ssthresh < IKCP_THRESH_MIN { ssthresh = IKCP_THRESH_MIN }
+			self.cwnd = 1
+			incr = mss
+		}
+		if cwnd < 1 {
+			self.cwnd = 1
+			incr = mss
+		}
 
 		if(inactiveA && inactiveB) {
 			return true
@@ -702,5 +770,37 @@ internal final class KCPControlBlock {
 			return false
 		}
 	}
+
+	@available(*, noasync)
+    @discardableResult public func setNoDelay(_ nodelay:Int, interval:Int, resend:Int, nc:Int) -> Int {
+        // nodelay flag
+        if nodelay >= 0 {
+            self.nodelay = UInt32(nodelay)
+            self.rx_minrto = (nodelay != 0) ? Int32(IKCP_RTO_NDL) : Int32(IKCP_RTO_MIN)
+        }
+
+        // interval (same clamping as ikcp_interval)
+        if interval >= 0 {
+            var iv = interval
+            if iv > 5_000 {
+            	iv = 5_000
+            } else if iv < 10 {
+            	iv = 10
+            }
+            self.interval = UInt32(iv)
+        }
+
+        // fast resend
+        if resend >= 0 {
+            self.fastresend = Int64(resend)
+        }
+
+        // no congestion‑window
+        if nc >= 0 {
+            self.nocwnd = Int64(nc)
+        }
+
+        return 0
+    }
 
 }
