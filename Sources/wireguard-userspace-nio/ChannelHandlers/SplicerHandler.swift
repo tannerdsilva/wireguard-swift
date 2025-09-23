@@ -1,7 +1,6 @@
 import NIO
 import RAW
 import RAW_dh25519
-import kcp_swift
 import Logging
 
 extension Array {

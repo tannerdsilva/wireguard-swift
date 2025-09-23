@@ -20,8 +20,6 @@ let package = Package(
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", revision:"2cac9bf674351d950ea765c13fafb3d138f75a06"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
 		.package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
-//		.package(name: "kcp-swift-core", path: "../kcp-swift-core")
-		.package(url:"https://github.com/tannerdsilva/kcp-swift-core", revision: "ff50e43075fe8a0226490ff4190d873e197e3f39")
 	],
 	targets: [
 		.executableTarget(
@@ -65,7 +63,6 @@ let package = Package(
 				.product(name:"RAW_hmac", package:"rawdog"),
 				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 				.product(name:"bedrock_ip", package:"bedrock"),
-				.product(name:"kcp-swift", package: "kcp-swift-core"),
 				"wireguard-crypto-core"
 			]
 		),

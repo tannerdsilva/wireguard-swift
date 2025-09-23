@@ -1,7 +1,6 @@
 import NIO
 import RAW
 import RAW_dh25519
-import kcp_swift
 import Logging
 import wireguard_crypto_core
 
@@ -25,14 +24,14 @@ extension KCPSegment {
 	internal final class Handler:ChannelDuplexHandler, @unchecked Sendable {
 
 		/// the type that comes into the channel from the previous handler
-		internal typealias InboundIn = (PublicKey, ByteBuffer)
+		internal typealias InboundIn = PipelineEncoded
 		/// the type that goes out of the channel to the next handler
-		internal typealias InboundOut = PipelineEncoded
+		internal typealias InboundOut = PipelineDecoded
 
 		/// the type that comes into the channel from the previous writer
-		internal typealias OutboundIn = PipelineEncoded
+		internal typealias OutboundIn = PipelineDecoded
 		/// the type that goes out of the channel to the next writer
-		internal typealias OutboundOut = (PublicKey, ByteBuffer)
+		internal typealias OutboundOut = PipelineEncoded
 
 		/// the logger that is used for logging within this handler
 		private let log:Logger
@@ -81,12 +80,12 @@ extension KCPSegment.Handler {
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
 		var encodedInbound = unwrapInboundIn(data)
-		// guard let segment = KCPSegment(decode:&encodedInbound.buffer) else {
-		// 	logger.error("failed to decode kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)"])
-		// 	context.fireErrorCaught(ParseFailure())
-		// 	return
-		// }
-		context.fireChannelRead(wrapInboundOut(KCPSegment.PipelineEncoded(publicKey:encodedInbound.0, buffer:encodedInbound.1)))
+		guard let segment = KCPSegment(decode:&encodedInbound.buffer) else {
+			logger.error("failed to decode kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)"])
+			context.fireErrorCaught(ParseFailure())
+			return
+		}
+		context.fireChannelRead(wrapInboundOut(KCPSegment.PipelineDecoded(publicKey:encodedInbound.publicKey, segment:segment)))
 	}
 }
 
@@ -104,20 +103,19 @@ extension KCPSegment.Handler {
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let logger = log
-		let encodedBound = unwrapOutboundIn(data)
-		// let expectedEncodedLength = decodedOutbound.segment.header.dataLength + UInt32(MemoryLayout<KCPSegment.Header>.size)
-		// guard expectedEncodedLength <= dataMTU else {
-		// 	logger.error("attempted to write kcp segment that exceeds configured mtu.", metadata:["mtu":"\(dataMTU)", "data_length":"\(decodedOutbound.segment.header.dataLength)", "public_key":"\(decodedOutbound.publicKey)"])
-		// 	let error = MTUExceeded(mtu:dataMTU, mss:dataMTU - UInt16(MemoryLayout<KCPSegment.Header>.size), paddedLength:Int(expectedEncodedLength))
-		// 	context.fireErrorCaught(error)
-		// 	promise?.fail(error)
-		// 	return
-		// }
-		// logger.trace("writing kcp segment to next handler in pipeline...", metadata:["data_length":"\(decodedOutbound.segment.header.dataLength)", "public-key_remote":"\(decodedOutbound.publicKey)", "kcp_conversation_id":"\(decodedOutbound.segment.header.conversationID)", "kcp_command":"\(decodedOutbound.segment.header.command)", "kcp_sequence_number":"\(decodedOutbound.segment.header.sequenceNumber)"])
-		// encodeBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
-		// decodedOutbound.segment.encode(to:&encodeBuffer)
-		logger.trace("writing kcp segment to next handler in pipeline...")
-		context.write(wrapOutboundOut((encodedBound.publicKey, encodedBound.buffer)), promise:promise)
+		let decodedOutbound = unwrapOutboundIn(data)
+		let expectedEncodedLength = decodedOutbound.segment.header.dataLength + UInt32(IKCP_OVERHEAD)
+		guard expectedEncodedLength <= dataMTU else {
+			logger.error("attempted to write kcp segment that exceeds configured mtu.", metadata:["mtu":"\(dataMTU)", "data_length":"\(decodedOutbound.segment.header.dataLength)", "public_key":"\(decodedOutbound.publicKey)"])
+			let error = MTUExceeded(mtu:dataMTU, mss:dataMTU - UInt16(IKCP_OVERHEAD), paddedLength:Int(expectedEncodedLength))
+			context.fireErrorCaught(error)
+			promise?.fail(error)
+			return
+		}
+		logger.trace("writing kcp segment to next handler in pipeline...", metadata:["data_length":"\(decodedOutbound.segment.header.dataLength)", "public-key_remote":"\(decodedOutbound.publicKey)", "kcp_conversation_id":"\(decodedOutbound.segment.header.conversationID)", "kcp_command":"\(decodedOutbound.segment.header.command)", "kcp_sequence_number":"\(decodedOutbound.segment.header.sequenceNumber)"])
+		encodeBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
+		decodedOutbound.segment.encode(to:&encodeBuffer)
+		context.write(wrapOutboundOut(KCPSegment.PipelineEncoded(publicKey:decodedOutbound.publicKey, buffer:encodeBuffer)), promise:promise)
 	}
 }
 

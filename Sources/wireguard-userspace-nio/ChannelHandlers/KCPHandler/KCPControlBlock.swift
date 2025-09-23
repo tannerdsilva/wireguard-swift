@@ -1,6 +1,5 @@
 import NIO
 import RAW_dh25519
-import Dispatch
 
 public enum SendError:Swift.Error {
 	case mssValueError
@@ -27,7 +26,7 @@ public enum FatalBlockError:Swift.Error {
 }
 
 public func iclock() -> UInt32 {
-	let now = DispatchTime.now().uptimeNanoseconds
+	let now = NIODeadline.now().uptimeNanoseconds
 	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
 }
 @inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
@@ -125,9 +124,6 @@ internal final class KCPControlBlock {
 
 	var nocwnd:Int64
 
-	var inactiveA:Bool
-	var inactiveB:Bool
-
 	init(conv: UInt32) {
 		self.conv = conv
 		self.mtu = IKCP_MTU_DEF
@@ -173,9 +169,6 @@ internal final class KCPControlBlock {
 		self.fastresend = 0
 		self.fastlimit = Int64(IKCP_FASTACK_LIMIT)
 		self.nocwnd = 1
-		
-		self.inactiveA = true
-		self.inactiveB = true
 	}
 
 	// KCP Send
@@ -414,8 +407,6 @@ internal final class KCPControlBlock {
 						#endif
 					}
 				case KCPSegment.Command.push:
-					inactiveA = false
-					inactiveB = false
 					if itimeDiff(later:sn, earlier:self.rcv_nxt + rcv_wnd) < 0 {
 						ackPush(sn:sn, ts:ts)
 						if itimeDiff(later:sn, earlier:self.rcv_nxt) >= 0 {
@@ -424,17 +415,15 @@ internal final class KCPControlBlock {
 					}
 				case KCPSegment.Command.probeRequest:
 					probe |= IKCP_ASK_TELL
-					if(rcv_queue.count == 0) {
-						inactiveA = true
-					}
+					// if (rcv_queue.count == 0) {
+					// 	inactiveA = true
+					// }
 				case KCPSegment.Command.probeResponse:
-					if(rcv_queue.count == 0) {
-						inactiveB = true
-					}
+					// if(rcv_queue.count == 0) {
+					// 	inactiveB = true
+					// }
 					// nothing to do here
 					break;
-				default:
-					throw InputError.invalidCMD
 			}
 			left -= Int(seg.header.dataLength)
 		}
@@ -582,11 +571,9 @@ internal final class KCPControlBlock {
 				
 				rcv_nxt += 1
 			} else {
-				print(rcv_queue.count)
 				break
 			}
 		}
-		
 		
 		if rcv_queue.count < rcv_wnd && recover == true {
 			probe |= IKCP_ASK_TELL
@@ -599,12 +586,13 @@ internal final class KCPControlBlock {
 	// - Sends any pending Probes
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
-	public func flush(current:UInt32, byteBuffer:inout ByteBuffer, key:PublicKey, context:ChannelHandlerContext, wrapOut: @escaping (KCPSegment.PipelineEncoded) -> NIOAny) -> Bool {
+	public func flush(current:UInt32, byteBuffer:inout ByteBuffer, key:PublicKey, context:ChannelHandlerContext, wrapOut: @escaping (KCPSegment.PipelineEncoded) -> NIOAny) {
 		self.current = current
 		
 		let wnd = wndUnused()
-		// Create a basic segment for acks
-		let header = KCPSegment.Header(conv: conv, cmd: KCPSegment.Command(rawValue: IKCP_CMD_ACK)!, frg: 0, sn: 0, len: 0)
+
+		let header = KCPSegment.Header(conv:conv, cmd:.ack, frg:0, sn:0, len:0)
+
 		var seg = KCPSegment(header: header, data: ByteBufferView())
 		seg.header.receiveWindowSize = wndUnused()
 		seg.header.una = rcv_nxt
@@ -613,11 +601,11 @@ internal final class KCPControlBlock {
 		// Send pending acks
 		for i in 0..<ackcount {
 			
-			ackGet(p:Int(i), sn:&seg.header.sequenceNumber, ts:&seg.header.timestamp)
+			// ackGet(p:Int(i), sn:&seg.header.sequenceNumber, ts:&seg.header.timestamp)
 			// Check if we need to output data
-			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
+			if (byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
 				// OUTPUT HERE -------------------------
-				_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
+				_ = context.write(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
 				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 			}
 			seg.encode(to: &byteBuffer)
@@ -647,21 +635,21 @@ internal final class KCPControlBlock {
 		
 		// If snd_buf = 0 and probe time has passed. Send send_probe
 		if (probe & IKCP_ASK_SEND) != 0 {
-			seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WASK)!
+			// seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WASK)!
 			byteBuffer.clear()
 			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
 				// OUTPUT HERE -------------------------
-				_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
+				_ = context.write(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
 				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 			}
 			seg.encode(to: &byteBuffer)
 		}
 		// If send_probe has been received, send tell_probe
 		if (probe & IKCP_ASK_TELL) != 0 {
-			seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WINS)!
+			// seg.header.command = KCPSegment.Command(rawValue: IKCP_CMD_WINS)!
 			if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) > mtu) {
 				// OUTPUT HERE -------------------------
-				_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
+				_ = context.write(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)))
 				byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 			}
 			seg.encode(to: &byteBuffer)
@@ -710,9 +698,6 @@ internal final class KCPControlBlock {
 			}
 			
 			if needsend {
-				inactiveA = false
-				inactiveB = false
-
 				// Update timestamp and una
 				node.value!.data.header.timestamp = current
 				node.value!.data.header.una = rcv_nxt	
@@ -720,7 +705,7 @@ internal final class KCPControlBlock {
 
 				if(byteBuffer.readableBytes + Int(IKCP_OVERHEAD) + Int(node.value!.data.header.dataLength) > mtu) {
 					// OUTPUT HERE -------------------------
-					_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: node.value!.writePromise)
+					_ = context.write(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: node.value!.writePromise)
 					byteBuffer.clear(minimumCapacity: Int(mtu))
 				} else {
 					lastPromise = node.value!.writePromise
@@ -738,11 +723,12 @@ internal final class KCPControlBlock {
 					break
 				}
 			}
+			
 		}
 
-		if(byteBuffer.readableBytes != 0) {
+		if (byteBuffer.readableBytes != 0) {
 			// OUTPUT HERE -------------------------
-			_ = context.writeAndFlush(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: lastPromise)
+			_ = context.write(wrapOut(KCPSegment.PipelineEncoded(publicKey: key, buffer: byteBuffer)), promise: lastPromise)
 			byteBuffer.clear(minimumCapacity: Int(IKCP_OVERHEAD))
 		}
 		if change == true {
@@ -762,12 +748,6 @@ internal final class KCPControlBlock {
 		if cwnd < 1 {
 			self.cwnd = 1
 			incr = mss
-		}
-
-		if(inactiveA && inactiveB) {
-			return true
-		} else {
-			return false
 		}
 	}
 
