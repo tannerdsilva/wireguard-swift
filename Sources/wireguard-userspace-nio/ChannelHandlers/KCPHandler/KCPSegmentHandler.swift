@@ -4,34 +4,35 @@ import RAW_dh25519
 import Logging
 import wireguard_crypto_core
 
-extension KCPSegment {
-	/// this represents a decoded kcp segment that is associated with a public key.
-	internal struct PipelineDecoded {
-		/// the public key that the segment is associated with
-		internal let publicKey:PublicKey
-		/// the kcp segment that is being passed
-		internal var segment:KCPSegment
-	}
+/// this represents a decoded kcp segment that is associated with a public key.
+internal struct PeerSegment {
+	/// the public key that the segment is associated with
+	internal let publicKey:PublicKey
+	/// the kcp segment that is being passed
+	internal var segment:KCPSegment
+}
 
-	/// this represents an encoded kcp segment that is associated with a public key.
-	internal struct PipelineEncoded {
-		/// the public key that the segment is associated with
-		internal let publicKey:PublicKey
-		/// the kcp segment that is being passed
-		internal var buffer:ByteBuffer
-	}
+/// this represents an encoded kcp segment that is associated with a public key.
+internal struct PeerPayload {
+	/// the public key that the segment is associated with
+	internal let publicKey:PublicKey
+	/// the kcp segment that is being passed
+	internal var buffer:ByteBuffer
+}
+
+extension KCPSegment {
 
 	internal final class Handler:ChannelDuplexHandler, @unchecked Sendable {
 
 		/// the type that comes into the channel from the previous handler
-		internal typealias InboundIn = PipelineEncoded
+		internal typealias InboundIn = PeerPayload
 		/// the type that goes out of the channel to the next handler
-		internal typealias InboundOut = PipelineDecoded
+		internal typealias InboundOut = PeerSegment
 
 		/// the type that comes into the channel from the previous writer
-		internal typealias OutboundIn = PipelineDecoded
+		internal typealias OutboundIn = PeerSegment
 		/// the type that goes out of the channel to the next writer
-		internal typealias OutboundOut = PipelineEncoded
+		internal typealias OutboundOut = PeerPayload
 
 		/// the logger that is used for logging within this handler
 		private let log:Logger
@@ -85,7 +86,7 @@ extension KCPSegment.Handler {
 			context.fireErrorCaught(ParseFailure())
 			return
 		}
-		context.fireChannelRead(wrapInboundOut(KCPSegment.PipelineDecoded(publicKey:encodedInbound.publicKey, segment:segment)))
+		context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 	}
 }
 
@@ -112,10 +113,16 @@ extension KCPSegment.Handler {
 			promise?.fail(error)
 			return
 		}
-		logger.trace("writing kcp segment to next handler in pipeline...", metadata:["data_length":"\(decodedOutbound.segment.header.dataLength)", "public-key_remote":"\(decodedOutbound.publicKey)", "kcp_conversation_id":"\(decodedOutbound.segment.header.conversationID)", "kcp_command":"\(decodedOutbound.segment.header.command)", "kcp_sequence_number":"\(decodedOutbound.segment.header.sequenceNumber)"])
+		logger.trace("writing to next outbound handler in pipeline...", metadata:["data_length":"\(decodedOutbound.segment.header.dataLength)", "public-key_remote":"\(decodedOutbound.publicKey)", "kcp_conversation_id":"\(decodedOutbound.segment.header.conversationID)", "kcp_command":"\(decodedOutbound.segment.header.command)", "kcp_sequence_number":"\(decodedOutbound.segment.header.sequenceNumber)"])
 		encodeBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 		decodedOutbound.segment.encode(to:&encodeBuffer)
-		context.write(wrapOutboundOut(KCPSegment.PipelineEncoded(publicKey:decodedOutbound.publicKey, buffer:encodeBuffer)), promise:promise)
+		context.write(wrapOutboundOut(PeerPayload(publicKey:decodedOutbound.publicKey, buffer:encodeBuffer)), promise:promise)
+	}
+
+	internal func flush(context:ChannelHandlerContext) {
+		let logger = log
+		logger.trace("flushing outbound data in pipeline...")
+		context.flush()
 	}
 }
 

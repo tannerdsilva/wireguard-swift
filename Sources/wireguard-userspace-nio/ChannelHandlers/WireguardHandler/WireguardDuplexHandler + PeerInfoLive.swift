@@ -173,6 +173,7 @@ extension PeerInfo.Live {
 		logger.trace("updating nRecv value for session", metadata:["session_id":"\(inputPositionExplicit.element.geometry)"])
 		switch inputPositionExplicit {
 			case .current(let element):
+				// switch to evaluate if the current session has crossed the passive rehandshake threshold
 				switch element.geometry {
 					case .selfInitiated(m:_, mp:_):
 						// passive rehandshake evaluation
@@ -193,6 +194,12 @@ extension PeerInfo.Live {
 				rotation.next!.nVar.valueRecv = newValue
 				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
 				applyRotation(context:context, now:now)
+				if rotation.previous == nil {
+					while var nextPacket = postHandshakePackets.dequeue() {
+						logger.trace("writing post-handshake queued packet after applying key rotation.", metadata:["size":"\(nextPacket.data.readableBytes) bytes"])
+						wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise)
+					}
+				}
 		}
 	}
 }
@@ -278,7 +285,7 @@ extension PeerInfo.Live {
 						encBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:encodedLength) { (ptr:UnsafeMutableRawBufferPointer) -> Int in
 							return ptr.baseAddress!.distance(to:handshakeInitiationMessage.RAW_encode(dest:ptr.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 						}
-						contextPtr.pointee.writeAndFlush(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer))).whenComplete { [l = l] result in
+						contextPtr.pointee.write(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer))).whenComplete { [l = l] result in
 							switch result {
 								case .success():
 									l.trace("transmitted handshake initiation message.", metadata:["public-key_remote":"\(pubKey)"])
@@ -286,6 +293,7 @@ extension PeerInfo.Live {
 									l.error("error occurred while transmitting handshake initiation message: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
 							}
 						}
+						wireguardHandler.flushOutbound(context:contextPtr.pointee, force:true)
 					}
 				}
 			} catch let error {

@@ -37,6 +37,19 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 
 	private let log:Logger
 	private let datagramMTU:UInt16
+
+	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
+	private var readsPassed:Int = 0
+
+	#if DEBUG
+	private var readBytes:[UInt8:(count:Int, size:Int)] = [:]
+	fileprivate func incrementReadBytes(type:UInt8, size:Int) {
+		if readBytes[type] == nil {
+			readBytes[type] = (0, size)
+		}
+		readBytes[type]!.0 += 1
+	}
+	#endif
 	
 	internal init(mtu:UInt16, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -74,9 +87,12 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 			return byteBuffer[0]
 		}
 		logger[metadataKey:"packet_type"] = "\(firstByte)"
+		
 		// proceed based on the first byte of the buffer
+		let wireBytes:Int
 		switch firstByte {
 			case 0x1:
+				wireBytes = MemoryLayout<Message.Initiation.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					guard byteBuffer.count == MemoryLayout<Message.Initiation.Payload.Authenticated>.size else {
 						logger.error("invalid handshake initiation packet size: \(byteBuffer.count)", metadata:["expected_length":"\(MemoryLayout<Message.Initiation.Payload.Authenticated>.size)"])
@@ -86,8 +102,10 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					logger.debug("received handshake initiation packet. sending downstream in pipeline...")
 					let packet = Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.initiation(packet))))
+					readsPassed += 1
 				}
 			case 0x2:
+				wireBytes = MemoryLayout<Message.Response.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					guard byteBuffer.count == MemoryLayout<Message.Response.Payload.Authenticated>.size else {
 						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)"])
@@ -97,12 +115,15 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					logger.debug("received handshake response packet. sending downstream in pipeline...")
 					let packet = Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Response.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.response(packet))))
+					readsPassed += 1
 				}
 			case 0x3:
+				wireBytes = MemoryLayout<Message.Cookie.Payload>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					logger.debug("received cookie response packet. sending downstream in pipeline...")
 					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
+					readsPassed += 1
 				}
 			case 0x4:
 				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Payload>.size + MemoryLayout<Tag>.size) else {
@@ -122,11 +143,50 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					context.fireErrorCaught(Error.mtuExceeded)
 					return
 				}
-				logger.debug("received transit data packet of size \(envelope.data.readableBytes - MemoryLayout<Tag>.size), sending downstream in pipeline...")
+				let availableBytes = envelope.data.readableBytes - MemoryLayout<Tag>.size
+				wireBytes = availableBytes
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
+				readsPassed += 1
+
 			default:
 				logger.error("unrecognized packet type received: \(firstByte)")
 				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
+				return
 		}
+		#if DEBUG
+		incrementReadBytes(type:firstByte, size:wireBytes)
+		#endif
+	}
+
+	internal func channelReadComplete(context:ChannelHandlerContext) {
+		// do not pass readComplete downstream if there have been no reads
+		guard readsPassed > 0 else {
+			return
+		}
+		defer {
+			readsPassed = 0
+		}
+		
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		defer {
+			readBytes.removeAll(keepingCapacity:true)
+		}
+		var logger = log
+		var sumCount = 0
+		var sumSize = 0
+		for (type, stats) in readBytes {
+			logger[metadataKey:"packet_count_type-\(type)"] = "\(stats.count)"
+			logger[metadataKey:"data_size_type-\(type)"] = "\(stats.size)"
+			sumCount += stats.count
+			sumSize += stats.size
+		}
+		logger[metadataKey:"sum_packet_count"] = "\(sumCount)"
+		logger[metadataKey:"sum_data_size"] = "\(sumSize)"
+		logger.trace("completed reading from channel.")
+		context.fireChannelReadComplete()
+		#else
+		context.fireChannelReadComplete()
+		#endif
 	}
 }

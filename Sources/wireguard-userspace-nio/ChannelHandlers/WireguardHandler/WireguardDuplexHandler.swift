@@ -44,6 +44,10 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	internal let isCongested:Atomic<Bool> = .init(false)
 
+	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
+	private var readsPassed:Int = 0
+	private var writesPassed:Int = 0
+
 	/// stored variables of the WireguardHandler that are automatically managed through Unmanaged instances of the WireguardHandler being stored in sub-structures.
 	internal struct AutomaticallyUpdated {
 		/// initiation indicies.
@@ -92,8 +96,9 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:mesLen) { outputBuffer in
 			return outputBuffer.baseAddress!.distance(to:message.RAW_encode(dest:outputBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 		}
-		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(destinationEndpoint), data: encodeBuffer)
-		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
+		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+		writesPassed += 1
 	}
 }
 
@@ -186,8 +191,9 @@ extension WireguardHandler {
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
-					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
+					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
+					flushOutbound(context:context, force:true)
 					break;
 			
 				case .response(let payload):
@@ -302,11 +308,25 @@ extension WireguardHandler {
 
 					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
 					context.fireChannelRead(wrapInboundOut((identifiedPublicKey, encodeBuffer)))
+					readsPassed += 1
 			}
 		} catch let error {
 			logger.error("error processing packet: \(error)")
 			context.fireErrorCaught(error)
 		}
+	}
+
+	internal func channelReadComplete(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		guard readsPassed > 0 else {
+			return
+		}
+		defer {
+			readsPassed = 0
+		}
+		context.fireChannelReadComplete()
 	}
 }
 
@@ -355,7 +375,8 @@ extension WireguardHandler {
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
-				context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+				writesPassed += 1
 				break
 		}
 	}
@@ -366,5 +387,33 @@ extension WireguardHandler {
 		#endif
 		var (publicKey, payload) = unwrapOutboundIn(data)
 		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
+	}
+}
+
+// MARK: Flush
+extension WireguardHandler {
+	internal func flush(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		flushOutbound(context:context, force:false)
+	}
+
+	internal func flushOutbound(context:ChannelHandlerContext, force:Bool) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		let logger = log
+		logger.trace("flushing outbound data in pipeline...", metadata:["flush_force":"\(force)"])
+		if force == false {
+			guard writesPassed > 0 else {
+				return
+			}
+			writesPassed = 0
+			context.flush()
+		} else {
+			writesPassed = 0
+			context.flush()
+		}
 	}
 }

@@ -17,11 +17,11 @@ enum KCPError: Swift.Error {
 struct MagicID:Sendable {}
 
 internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = KCPSegment.PipelineEncoded
+	internal typealias InboundIn = KCPSegment.PipelineDecoded
 	internal typealias InboundOut = (PublicKey, ByteBuffer)
 	
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
-	internal typealias OutboundOut = KCPSegment.PipelineEncoded
+	internal typealias OutboundOut = KCPSegment.PipelineDecoded
 	
 	// kcp control blocks: index 0 is the newest control block
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
