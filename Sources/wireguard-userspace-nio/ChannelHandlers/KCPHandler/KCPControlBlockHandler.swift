@@ -17,11 +17,11 @@ enum KCPError: Swift.Error {
 struct MagicID:Sendable {}
 
 internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = KCPSegment.PipelineDecoded
+	internal typealias InboundIn = PeerSegment
 	internal typealias InboundOut = (PublicKey, ByteBuffer)
 	
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
-	internal typealias OutboundOut = KCPSegment.PipelineDecoded
+	internal typealias OutboundOut = PeerSegment
 	
 	// kcp control blocks: index 0 is the newest control block
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
@@ -89,7 +89,6 @@ extension KcpControlBlockHandler {
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let data = unwrapInboundIn(data)
 		let key = data.publicKey
-		var inputBuffer = data.buffer
 
 		// Check if control block exists
 		if (kcp[key] == nil) {
@@ -102,8 +101,8 @@ extension KcpControlBlockHandler {
         
 		// Input segment
 		do {
-			logger.trace("Received kcp segment", metadata: ["size": "\(inputBuffer.readableBytes) bytes"])
-			try input(key: key, data: &inputBuffer)
+			logger.trace("Received kcp segment", metadata: ["seg len": "\(data.segment.header.dataLength) bytes"])
+			try input(key: key, segment: data.segment)
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -120,7 +119,7 @@ extension KcpControlBlockHandler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
-			kcp[key]![0].setNoDelay(1, interval: 30, resend: 1, nc:1)
+			kcp[key]![0].setNoDelay(1, interval: 30, resend: 1, nc:0)
 			kcpUpdates(key: key, context: context)
 		}
 
@@ -171,10 +170,10 @@ extension KcpControlBlockHandler {
 		}
 	}
 
-	private func input(key:PublicKey, data: inout ByteBuffer) throws {
+	private func input(key:PublicKey, segment: KCPSegment) throws {
 		for i in 0..<kcp[key]!.count {
 			do {
-				try kcp[key]![i].input(&data)
+				try kcp[key]![i].input(segment)
 			} catch {
 				continue
 			}

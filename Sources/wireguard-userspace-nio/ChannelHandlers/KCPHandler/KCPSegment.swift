@@ -13,7 +13,7 @@ internal struct KCPSegment:Sendable {
 		/// the conversation ID that this segment belongs to
 		internal let conversationID:UInt32
 		/// the command signal that this segment is carrying
-		internal let command:Command
+		internal var command:Command
 		/// the fragment number of this segment
 		internal let fragmentID:UInt8
 		/// the receive window size.
@@ -21,7 +21,7 @@ internal struct KCPSegment:Sendable {
 		/// the current timestamp of this segment. used for rtt calculations.
 		internal var timestamp:UInt32
 		/// the sequence number of this segment
-		internal let sequenceNumber:UInt32
+		internal var sequenceNumber:UInt32
 		/// the earliest unacknowledged segment
 		internal var una:UInt32
 		/// the length of the data carried in this segment

@@ -19,8 +19,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 
 	internal typealias InboundIn = (Endpoint, Message.NIO)
-	internal typealias InboundOut = (PublicKey, ByteBuffer)
-	internal typealias OutboundIn = (PublicKey, ByteBuffer)
+	internal typealias InboundOut = PeerPayload
+	internal typealias OutboundIn = PeerPayload
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
 	internal static let keepaliveTimeout = TimeAmount.seconds(10)
@@ -307,7 +307,7 @@ extension WireguardHandler {
 					}
 
 					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
-					context.fireChannelRead(wrapInboundOut((identifiedPublicKey, encodeBuffer)))
+					context.fireChannelRead(wrapInboundOut(PeerPayload(publicKey: identifiedPublicKey, buffer: encodeBuffer)))
 					readsPassed += 1
 			}
 		} catch let error {
@@ -385,7 +385,8 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var (publicKey, payload) = unwrapOutboundIn(data)
+		var peerPayload = unwrapOutboundIn(data)
+		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.buffer)
 		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
 	}
 }
