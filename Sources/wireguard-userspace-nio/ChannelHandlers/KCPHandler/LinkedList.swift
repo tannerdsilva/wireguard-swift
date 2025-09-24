@@ -70,7 +70,9 @@ internal struct LinkedList<Element> {
 	}
 	public mutating func clear() {
 		// break the links on every node
-		var cur = head.next!
+		guard var cur = head.next else {
+			return
+		}
 		while cur !== head {
 			let nxt = cur.next!
 			cur.next = nil

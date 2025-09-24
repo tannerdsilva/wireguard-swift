@@ -17,11 +17,11 @@ enum KCPError:Swift.Error {
 struct MagicID:Sendable {}
 
 internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = PeerSegment
+	internal typealias InboundIn = PeerAssociated<KCPSegment>
 	internal typealias InboundOut = (PublicKey, ByteBuffer)
 	
 	internal typealias OutboundIn = (PublicKey, ByteBuffer)
-	internal typealias OutboundOut = PeerSegment
+	internal typealias OutboundOut = PeerAssociated<KCPSegment>
 	
 	// kcp control blocks: index 0 is the newest control block
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
@@ -51,22 +51,7 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 			[weak self, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			
-			flush(key: key, context: context)
-			
-			rcvLoop: while true {
-				do {
-					if (kcp[key]!.isEmpty) {
-						throw KCPError.noControlBlocks
-					}
-
-					let receivedData = try kcp[key]![kcp[key]!.count-1].receive()
-					
-					logger.debug("Compiled kcp message. Passing to splicer.", metadata: ["size": "\(receivedData.readableBytes) bytes"])
-					c.accessContext { contextPointer in
-						contextPointer.pointee.fireChannelRead(wrapInboundOut((key, receivedData)))
-					}
-				} catch { break rcvLoop } // received no data or it failed
-			}
+			writeOutboundOut(key: key, context: context)
 		}
 	}
 	
@@ -103,33 +88,19 @@ extension KcpControlBlockHandler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
-			kcp[key]![0].setNoDelay(1, interval: 30, resend: 1, nc:0)
+			kcp[key]![0].setNoDelay(0, nc:0)
 			kcpUpdates(key: key, context: context)
 		}
         
 		// Input segment
 		do {
-			logger.trace("Received kcp segment", metadata: ["seg len": "\(data.segment.header.dataLength) bytes"])
-			try input(key: key, segment: data.segment)
+			logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
+			let inboundOutBuffers = try input(key: key, segment: data.associatedValue, context: context)
+			for buffer in inboundOutBuffers {
+				context.fireChannelRead(wrapInboundOut((key, buffer)))
+			}
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
-		}
-
-		for (pubKey, block) in kcp {
-			rcvLoop: while true {
-				do {
-					if (block.isEmpty) {
-						throw KCPError.noControlBlocks
-					}
-
-					let receivedData = try block[block.count-1].receive()
-					
-					logger.debug("Compiled kcp message. Passing to splicer.", metadata: ["size": "\(receivedData.readableBytes) bytes", "public-key_remote":"\(pubKey)"])
-					
-					context.fireChannelRead(wrapInboundOut((pubKey, receivedData)))
-
-				} catch { break rcvLoop } // received no data or it failed
-			}
 		}
 	}
 }
@@ -144,7 +115,7 @@ extension KcpControlBlockHandler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
-			kcp[key]![0].setNoDelay(1, interval: 30, resend: 1, nc:0)
+			kcp[key]![0].setNoDelay(1, nc:0)
 			kcpUpdates(key: key, context: context)
 		}
 
@@ -190,27 +161,31 @@ extension KcpControlBlockHandler {
 		
 	}
 
-	private func flush(key:PublicKey, context: ChannelHandlerContext) {
+	private func writeOutboundOut(key:PublicKey, context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 
 		var i = 0
 		while i < kcp[key]!.count {
-			let remove = kcp[key]![i].flush(current: iclock(), byteBuffer: &buffer, key: key, context: context, wrapOut: wrapOutboundOut)
+			let outboundOutSegments = kcp[key]![i].getOutboundSegments(byteBuffer: &buffer)
 
+			for segment in outboundOutSegments {
+				context.write(wrapOutboundOut(PeerAssociated<KCPSegment>(publicKey: key, segment: segment.0)), promise: segment.1)
+			}
 			i += 1
 		}
 		context.flush()
 	}
 
-	private func input(key:PublicKey, segment: KCPSegment) throws {
+	private func input(key:PublicKey, segment: KCPSegment, context:ChannelHandlerContext) throws -> [ByteBuffer]{
 		for i in 0..<kcp[key]!.count {
 			do {
-				try kcp[key]![i].input(segment)
+				return try kcp[key]![i].input(segment, context: context)
 			} catch {
 				continue
 			}
 		}
+		return []
 	}
 }

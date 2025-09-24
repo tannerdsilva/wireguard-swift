@@ -1,34 +1,7 @@
 import NIO
 import RAW_dh25519
 
-public enum SendError:Swift.Error {
-	case mssValueError
-	case inputLengthError
-	case invalidDataCountForReceiveWindow
-}
 
-public enum ReceiveError:Swift.Error {
-	case receiveQueueEmpty
-	case lengthTooSmall
-	case missingFirstElement
-	case firstSegmentFragmentError
-}
-
-public enum InputError:Swift.Error {
-	case invalidInputCount
-	case convValueMismatch
-	case partialTrailingData
-	case invalidCMD
-}
-
-public enum FatalBlockError:Swift.Error {
-	case deadLink
-}
-
-public func iclock() -> UInt32 {
-	let now = NIODeadline.now().uptimeNanoseconds
-	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
-}
 @inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
 	return a > b ? a : b
 }
@@ -39,30 +12,7 @@ public func iclock() -> UInt32 {
   return Int32(bitPattern: a &- b)
 }
 
-let IKCP_RTO_NDL:UInt32 = 30
-let IKCP_RTO_MIN:UInt32 = 100
-let IKCP_RTO_DEF:UInt32 = 200
-let IKCP_RTO_MAX:UInt32 = 60000
-let IKCP_CMD_PUSH:UInt8 = 81
-let IKCP_CMD_ACK:UInt8 = 82
-let IKCP_CMD_WASK:UInt8 = 83
-let IKCP_CMD_WINS:UInt8 = 84
-let IKCP_ASK_SEND:UInt32 = 1
-let IKCP_ASK_TELL:UInt32 = 2
-let IKCP_WND_SND:UInt32 = 256
-let IKCP_WND_RCV:UInt32 = 256
-let IKCP_MTU_DEF:UInt32 = 1400
-let IKCP_ACK_FAST:UInt32 = 3
-let IKCP_INTERVAL:UInt32 = 100
-let IKCP_OVERHEAD:UInt32 = 24
-let IKCP_DEADLINK:UInt32 = 20
-let IKCP_THRESH_INIT:UInt32 = 2
-let IKCP_THRESH_MIN:UInt32 = 2
-let IKCP_PROBE_INIT:UInt32 = 7000
-let IKCP_PROBE_LIMIT:UInt32 = 120000
-let IKCP_FASTACK_LIMIT:UInt32 = 5
-
-internal final class KCPControlBlock {
+internal final class KCPControlBlock_OLD {
 	/// conversation id
 	var conv:UInt32
 	/// maximum transmission unit: the largest udp packet accepted
@@ -126,7 +76,7 @@ internal final class KCPControlBlock {
 
 	init(conv: UInt32) {
 		self.conv = conv
-		self.mtu = IKCP_MTU_DEF
+		self.mtu = 0
 		self.mss = mtu - IKCP_OVERHEAD
 
 		self.snd_una = 0
