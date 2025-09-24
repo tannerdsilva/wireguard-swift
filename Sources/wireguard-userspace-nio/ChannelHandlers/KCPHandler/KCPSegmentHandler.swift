@@ -192,18 +192,22 @@ extension KCPSegment.Handler {
 		let logger = log
 		var encodedInbound = unwrapInboundIn(data)
 		var i = 0
-		while let segment = KCPSegment(decode:&encodedInbound.buffer) {
+		while encodedInbound.associatedValue.readableBytes >= 24, let segment = KCPSegment(decode:&encodedInbound.buffer) {
 			i += 1
 			logger.debug("decoded kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)", "segment_sequence_number":"\(segment.header.sequenceNumber)", "segment_command":"\(segment.header.command)", "segment_data_length":"\(segment.header.dataLength)", "segment_fragment_id":"\(segment.header.fragmentID)", "segment_timestamp":"\(segment.header.timestamp)", "segment_una":"\(segment.header.una)"])
 			context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 		}
-		guard let segment = KCPSegment(decode:&encodedInbound.buffer) else {
-			logger.error("failed to decode kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)"])
-			context.fireErrorCaught(ParseFailure())
-			return
+		if(i != 1) {
+			print(i)
 		}
 		
-		context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
+		// guard let segment = KCPSegment(decode:&encodedInbound.buffer) else {
+		// 	logger.error("failed to decode kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)"])
+		// 	context.fireErrorCaught(ParseFailure())
+		// 	return
+		// }
+		
+		// context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 	}
 }
 
