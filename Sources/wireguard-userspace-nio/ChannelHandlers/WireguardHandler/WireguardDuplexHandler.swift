@@ -323,9 +323,7 @@ extension WireguardHandler {
 		guard readsPassed > 0 else {
 			return
 		}
-		defer {
-			readsPassed = 0
-		}
+		readsPassed = 0
 		context.fireChannelReadComplete()
 	}
 }

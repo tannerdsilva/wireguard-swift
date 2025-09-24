@@ -23,6 +23,10 @@ struct CLI:AsyncParsableCommand {
 		]
 	)
 
+	struct GeneratePublicKey:ParsableCommand {
+		
+	}
+
 	struct GenerateKeys:ParsableCommand {
 		static let configuration = CommandConfiguration(
 			abstract:"Generate a new WireGuard key pair."
@@ -227,8 +231,8 @@ struct CLI:AsyncParsableCommand {
 			let cliLogger = Logger(label: "wg-test-tool.initiator")
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.critical, listeningPort: myPort)
+				let myPeers = [PeerInfo(publicKey:respondersPublicKey, ipAddress:ipAddress, port: port, internalKeepAlive: .seconds(30))]
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()

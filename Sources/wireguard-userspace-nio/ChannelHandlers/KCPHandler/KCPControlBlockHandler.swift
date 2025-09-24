@@ -5,7 +5,7 @@ import RAW_blake2
 import Logging
 import wireguard_crypto_core
 
-enum KCPError: Swift.Error {
+enum KCPError:Swift.Error {
 	/// The connection has been declared dead (max retransmits hit).
 	case deadLink
 	/// There are no control blocks active
@@ -55,7 +55,7 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 			
 			rcvLoop: while true {
 				do {
-					if(kcp[key]!.isEmpty) {
+					if (kcp[key]!.isEmpty) {
 						throw KCPError.noControlBlocks
 					}
 
@@ -85,6 +85,14 @@ extension KcpControlBlockHandler {
 
 // Channel Read
 extension KcpControlBlockHandler {
+
+	internal func channelReadComplete(context: ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		context.fireChannelReadComplete()
+	}
+	
 	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let data = unwrapInboundIn(data)
@@ -105,6 +113,23 @@ extension KcpControlBlockHandler {
 			try input(key: key, segment: data.segment)
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
+		}
+
+		for (pubKey, block) in kcp {
+			rcvLoop: while true {
+				do {
+					if (block.isEmpty) {
+						throw KCPError.noControlBlocks
+					}
+
+					let receivedData = try block[block.count-1].receive()
+					
+					logger.debug("Compiled kcp message. Passing to splicer.", metadata: ["size": "\(receivedData.readableBytes) bytes", "public-key_remote":"\(pubKey)"])
+					
+					context.fireChannelRead(wrapInboundOut((pubKey, receivedData)))
+
+				} catch { break rcvLoop } // received no data or it failed
+			}
 		}
 	}
 }
@@ -161,13 +186,22 @@ extension KcpControlBlockHandler {
 		return h.RAW_native()
 	}
 
+	internal func flush(context: ChannelHandlerContext) {
+		
+	}
+
 	private func flush(key:PublicKey, context: ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+
 		var i = 0
 		while i < kcp[key]!.count {
 			let remove = kcp[key]![i].flush(current: iclock(), byteBuffer: &buffer, key: key, context: context, wrapOut: wrapOutboundOut)
 
 			i += 1
 		}
+		context.flush()
 	}
 
 	private func input(key:PublicKey, segment: KCPSegment) throws {
