@@ -32,6 +32,10 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 	
     private let ourKey:PublicKey
 	private let logger:Logger
+
+	private var pendingOutboundPackets:[PublicKey:LinkedList<(data:ByteBuffer, writePromise:EventLoopPromise<Void>?)>] = [:]
+
+	var count = 0
 		
 	internal init(key:MemoryGuarded<PrivateKey>, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -93,7 +97,7 @@ extension KcpControlBlockHandler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
-			kcp[key]![0].setNoDelay(0, nc:0)
+			kcp[key]![0].setNoDelay(1, nc:0)
 			scheduleRepeatedKCPUpdates(key: key, context: context)
 		}
         
@@ -127,14 +131,19 @@ extension KcpControlBlockHandler {
 		// Send data to control block
 		do {
 			logger.trace("Sending kcp segment", metadata: ["size": "\(data.readableBytes) bytes"])
-			_ = try kcp[key]![0].send(data, ackPromise: promise)
+			if(context.channel.isWritable) {
+				_ = kcp[key]![0].send(data, ackPromise: promise)
+			}
+			else {
+				pendingOutboundPackets[key, default: LinkedList<(data: ByteBuffer, writePromise: EventLoopPromise<Void>?)>()].addTail((data: data, writePromise: promise))
+			}
 		} catch {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
 	}
 }
 
-// Channel user events
+// Channel events
 extension KcpControlBlockHandler {
 	// Inbound events (Handshake Reset)
 	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
@@ -149,6 +158,10 @@ extension KcpControlBlockHandler {
 				return
 		}
 	}
+
+	func channelWritabilityChanged(context: ChannelHandlerContext) {
+		
+	}
 }
 
 // Control Block Helper Functions
@@ -162,31 +175,30 @@ extension KcpControlBlockHandler {
 		return h.RAW_native()
 	}
 
-	internal func flush(context: ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		logger.debug("flushing...", metadata:["_func":"\(#function)"])
-		context.flush()
-	}
-
 	private func writeOutboundOut(key:PublicKey, context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 
 		var i = 0
+		var isWritten = false
 		while i < kcp[key]!.count {
 			let outboundOutSegments = kcp[key]![i].getOutboundSegments(byteBuffer: &buffer)
 
 			for segment in outboundOutSegments {
 				logger.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(key)", "segment_sequence_number":"\(segment.0.header.sequenceNumber)", "segment_command":"\(segment.0.header.command)", "segment_data_length":"\(segment.0.header.dataLength)", "segment_fragment_id":"\(segment.0.header.fragmentID)", "segment_timestamp":"\(segment.0.header.timestamp)", "segment_una":"\(segment.0.header.una)"])
 				context.write(wrapOutboundOut(PeerAssociated<KCPSegment>(publicKey: key, segment: segment.0)), promise: segment.1)
+				isWritten = true
 			}
 			i += 1
 		}
-		if i > 0 {
-			logger.trace("flushing...", metadata:["_func":"\(#function)"])
+		if isWritten {
+			#if DEBUG
+			context.eventLoop.assertInEventLoop()
+			#endif
+			logger.debug("flushing...", metadata:["_func":"\(#function)"])
+			count += 1
+			print("COUNT ------------------------------------------------------- \(count)")
 			context.flush()
 		}
 	}

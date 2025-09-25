@@ -199,6 +199,7 @@ extension PeerInfo.Live {
 						logger.trace("writing post-handshake queued packet after applying key rotation.", metadata:["size":"\(nextPacket.data.readableBytes) bytes"])
 						wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise)
 					}
+					context.flush()
 				}
 		}
 	}
@@ -417,6 +418,7 @@ extension PeerInfo.Live {
 			logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(publicKey)"])
 			wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
 		}
+		context.flush()
 		
 		// cancel the scheduled handshake initiation task
 		handshakeInitiationTask = nil

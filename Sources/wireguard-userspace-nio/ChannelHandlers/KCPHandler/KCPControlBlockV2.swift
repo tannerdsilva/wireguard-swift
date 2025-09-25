@@ -348,11 +348,11 @@ internal final class KCPControlBlock {
 		}
 	}
 
-	public func send(_ inputBuffer: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws(SendError) {
+	public func send(_ inputBuffer: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) -> Bool {
 		let count = (inputBuffer.readableBytes + Int(mss) - 1) / Int(mss)
-
-		guard UInt32(count) + snd_buf.count < snd_wnd else {
-			throw SendError.invalidDataCountForSendWindow
+		var bufferIsFull = false
+		if(UInt32(count) + snd_buf.count < snd_wnd ) {
+			bufferIsFull = true
 		}
 
 		var i = 0
@@ -373,6 +373,7 @@ internal final class KCPControlBlock {
 			
 			i += 1
 		}
+		return bufferIsFull
 	}
 
 	private func wndUnused() -> UInt16 {

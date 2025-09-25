@@ -96,6 +96,7 @@ extension KCPSegment {
 				} else {
 					promiseStack[publicKey] = [promise!]
 				}
+				didWrite = true
 			}
 			return didWrite
 		}
@@ -230,15 +231,12 @@ extension KCPSegment.Handler {
 	}
 
 	internal func flush(context:ChannelHandlerContext) {
-		defer {
+		if(outboundOutCount > 0) {
+			log.trace("flushing...", metadata:["stacked_segments_written":"\(stackedSegmentCount)"])
+			outboundOutCount = 0
+			stackedSegmentCount = 0
+			writtenStack.completeAll(context:context, handler:self)
 			context.flush()
 		}
-		guard outboundOutCount > 0 else {
-			return
-		}
-		log.trace("flushing...", metadata:["stacked_segments_written":"\(stackedSegmentCount)"])
-		outboundOutCount = 0
-		stackedSegmentCount = 0
-		writtenStack.completeAll(context:context, handler:self)
 	}
 }
