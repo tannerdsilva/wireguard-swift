@@ -42,17 +42,22 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 		buffer = ByteBuffer()
 	}
 
-	private func kcpUpdates(key:PublicKey, context:ChannelHandlerContext) {
+	private func scheduleRepeatedKCPUpdates(key:PublicKey, context:ChannelHandlerContext) {
 		if updateTasks[key] != nil {
 			updateTasks[key]!.cancel()
+			logger.trace("kcp update task task cancelled", metadata: ["public-key_remote":"\(key)"])
 		}
 		
 		updateTasks[key] = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
-			[weak self, c = ContextContainer(context:context)] _ in
+			[weak self, l = logger, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
-			
-			writeOutboundOut(key: key, context: context)
+			l.trace("kcp update triggered", metadata: ["public-key_remote":"\(key)"])
+			c.accessContext({ contextPointer in
+				writeOutboundOut(key: key, context: contextPointer.pointee)
+			})
 		}
+
+		logger.debug("kcp update task scheduled", metadata: ["public-key_remote":"\(key)"])
 	}
 	
 }
@@ -89,7 +94,7 @@ extension KcpControlBlockHandler {
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
 			kcp[key]![0].setNoDelay(0, nc:0)
-			kcpUpdates(key: key, context: context)
+			scheduleRepeatedKCPUpdates(key: key, context: context)
 		}
         
 		// Input segment
@@ -116,7 +121,7 @@ extension KcpControlBlockHandler {
 			let magicID = try! magicID(key1: key, key2: ourKey)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
 			kcp[key]![0].setNoDelay(1, nc:0)
-			kcpUpdates(key: key, context: context)
+			scheduleRepeatedKCPUpdates(key: key, context: context)
 		}
 
 		// Send data to control block
@@ -158,7 +163,11 @@ extension KcpControlBlockHandler {
 	}
 
 	internal func flush(context: ChannelHandlerContext) {
-		
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		logger.debug("flushing...", metadata:["_func":"\(#function)"])
+		context.flush()
 	}
 
 	private func writeOutboundOut(key:PublicKey, context: ChannelHandlerContext) {
@@ -171,11 +180,15 @@ extension KcpControlBlockHandler {
 			let outboundOutSegments = kcp[key]![i].getOutboundSegments(byteBuffer: &buffer)
 
 			for segment in outboundOutSegments {
+				logger.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(key)", "segment_sequence_number":"\(segment.0.header.sequenceNumber)", "segment_command":"\(segment.0.header.command)", "segment_data_length":"\(segment.0.header.dataLength)", "segment_fragment_id":"\(segment.0.header.fragmentID)", "segment_timestamp":"\(segment.0.header.timestamp)", "segment_una":"\(segment.0.header.una)"])
 				context.write(wrapOutboundOut(PeerAssociated<KCPSegment>(publicKey: key, segment: segment.0)), promise: segment.1)
 			}
 			i += 1
 		}
-		context.flush()
+		if i > 0 {
+			logger.trace("flushing...", metadata:["_func":"\(#function)"])
+			context.flush()
+		}
 	}
 
 	private func input(key:PublicKey, segment: KCPSegment, context:ChannelHandlerContext) throws -> [ByteBuffer]{

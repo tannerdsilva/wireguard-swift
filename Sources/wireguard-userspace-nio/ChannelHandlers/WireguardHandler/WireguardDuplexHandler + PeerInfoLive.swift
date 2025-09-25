@@ -293,7 +293,7 @@ extension PeerInfo.Live {
 									l.error("error occurred while transmitting handshake initiation message: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
 							}
 						}
-						wireguardHandler.flushOutbound(context:contextPtr.pointee, force:true)
+						contextPtr.pointee.flush()
 					}
 				}
 			} catch let error {

@@ -80,20 +80,21 @@ internal struct LinkedList<Element> {
 			cur = nxt
 		}
 		// make sentinel point to itself again
-		head.next = nil
-		head.prev = nil
+		head.next = head
+		head.prev = head
 		count = 0
 	}
-	private mutating func insert(_ node: Node, after anchor: Node) {
-		let nxt = anchor.next!
-		node.next = nxt
-		node.prev = anchor
-		anchor.next = node
-		nxt.prev = node
-		count += 1
-	}
+    private mutating func insert(_ node: Node, after anchor: Node?) {
+        let anchorNode = anchor ?? head
+        let nxt = anchorNode.next!
+        node.next = nxt
+        node.prev = anchorNode
+        anchorNode.next = node
+        nxt.prev = node
+        count += 1
+    }
 	private mutating func insert(_ node: Node, before anchor: Node) {
-		insert(node, after: anchor.prev!)
+		insert(node, after: anchor.prev)
 	}
 }
 

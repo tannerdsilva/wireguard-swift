@@ -7,6 +7,8 @@ internal struct KCPSegment:Sendable, Hashable {
 	internal var header:Header
 	/// the data payload of the kcp segment (can be zero length)
 	internal var data:ByteBufferView
+	/// runtime metadata associated with a kcp segment that is not transmitted on the wire.
+	internal var runtimeMetadata:RuntimeMetadata = RuntimeMetadata()
 
 	/// the header section of the kcp segment
 	internal struct Header:Sendable, Hashable {
@@ -26,14 +28,6 @@ internal struct KCPSegment:Sendable, Hashable {
 		internal var una:UInt32
 		/// the length of the data carried in this segment
 		internal let dataLength:UInt32
-		/// resend timestamp. the time to retransmit if no ACK is received
-		internal var resendts:UInt32
-		/// retransmission timeout. computed based on the round trip time.
-		internal var rto:UInt32
-		/// fast ack counter. incremented when duplicate packets are received.
-		internal var fastack:UInt32
-		/// transmit count. incremented when this segment is sent.
-		internal var xmit:UInt32
 
 		// not sure which of these stored instance varaibles should be `var` vs `let`, I would like to make a conclusive decision on this when the timing is right.
 
@@ -46,11 +40,8 @@ internal struct KCPSegment:Sendable, Hashable {
 			sequenceNumber = sn
 			una = 0
 			dataLength = len
-			resendts = 0
-			rto = 0
-			fastack = 0
-			xmit = 0
 		}
+
 		/// decode a kcp segment header from a byte buffer. the bytes will be read from the buffer.
 		internal init?(decode buffer:inout ByteBuffer) {
 			// read the conversation id
@@ -103,11 +94,6 @@ internal struct KCPSegment:Sendable, Hashable {
 				return nil
 			}
 			dataLength = lenParsed
-
-			resendts = 0
-			rto = 0
-			fastack = 0
-			xmit = 0
 		}
 
 		internal func encode(to buffer:inout ByteBuffer) {
@@ -135,6 +121,20 @@ extension KCPSegment {
 		case probeRequest = 83
 		/// kcp command to signify a window size response
 		case probeResponse = 84
+	}
+}
+
+extension KCPSegment {
+	/// runtime metadata associated with a kcp segment that is not transmitted on the wire.
+	internal struct RuntimeMetadata:Sendable, Hashable {
+		/// resend timestamp. the time to retransmit if no ACK is received
+		internal var resendts:UInt32 = 0
+		/// retransmission timeout. computed based on the round trip time.
+		internal var rto:UInt32 = 0
+		/// fast ack counter. incremented when duplicate packets are received.
+		internal var fastack:UInt32 = 0
+		/// transmit count. incremented when this segment is sent.
+		internal var xmit:UInt32 = 0
 	}
 }
 

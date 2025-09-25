@@ -160,9 +160,6 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 
 	internal func channelReadComplete(context:ChannelHandlerContext) {
 		// do not pass readComplete downstream if there have been no reads
-		guard readsPassed > 0 else {
-			return
-		}
 		defer {
 			readsPassed = 0
 		}

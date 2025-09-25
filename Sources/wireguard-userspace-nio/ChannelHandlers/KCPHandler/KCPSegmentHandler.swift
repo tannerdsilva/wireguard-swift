@@ -148,11 +148,12 @@ extension KCPSegment {
 		private var encodeBuffer:ByteBuffer! = nil
 
 		/// the primary tool for stacking segments into (up to) mtu sized buffers
+		private var stackedSegmentCount:Int = 0
 		private var writtenStack:MTUStacking
-		private var writtenCount:Int = 0
+		private var outboundOutCount:Int = 0
 
 		internal init(mtu:UInt16, logLevel:Logger.Level) {
-			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			var buildLogger = Logger(label:"\(String(describing:KCPSegment.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			log = buildLogger
 			dataMTU = mtu
@@ -192,13 +193,10 @@ extension KCPSegment.Handler {
 		let logger = log
 		var encodedInbound = unwrapInboundIn(data)
 		var i = 0
-		while encodedInbound.associatedValue.readableBytes >= 24, let segment = KCPSegment(decode:&encodedInbound.buffer) {
+		while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {
 			i += 1
 			logger.debug("decoded kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)", "segment_sequence_number":"\(segment.header.sequenceNumber)", "segment_command":"\(segment.header.command)", "segment_data_length":"\(segment.header.dataLength)", "segment_fragment_id":"\(segment.header.fragmentID)", "segment_timestamp":"\(segment.header.timestamp)", "segment_una":"\(segment.header.una)"])
 			context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
-		}
-		if(i != 1) {
-			print(i)
 		}
 		
 		// guard let segment = KCPSegment(decode:&encodedInbound.buffer) else {
@@ -209,6 +207,14 @@ extension KCPSegment.Handler {
 		
 		// context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 	}
+
+	internal func channelReadComplete(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		log.trace("channel read complete.")
+		context.fireChannelReadComplete()
+	}
 }
 
 // MARK: Channel Write
@@ -217,16 +223,22 @@ extension KCPSegment.Handler {
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)
 		if writtenStack.stack(segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, context:context, handler:self) == true {
-			writtenCount += 1
+			outboundOutCount += 1
 		}
+		stackedSegmentCount += 1
+		log.trace("stacked kcp segment for outbound write.", metadata:["public_key":"\(decodedOutbound.publicKey)", "stacked_segments":"\(stackedSegmentCount)", "outbound_writes_since_flush":"\(outboundOutCount)"])
 	}
 
 	internal func flush(context:ChannelHandlerContext) {
-		guard writtenCount > 0 else {
+		defer {
+			context.flush()
+		}
+		guard outboundOutCount > 0 else {
 			return
 		}
-		writtenCount = 0
+		log.trace("flushing...", metadata:["stacked_segments_written":"\(stackedSegmentCount)"])
+		outboundOutCount = 0
+		stackedSegmentCount = 0
 		writtenStack.completeAll(context:context, handler:self)
-		context.flush()
 	}
 }

@@ -1,3 +1,4 @@
+/*
 import NIO
 import RAW_dh25519
 
@@ -12,6 +13,7 @@ import RAW_dh25519
   return Int32(bitPattern: a &- b)
 }
 
+@available(*, unavailable, message:"Use KCPControlBlock instead")
 internal final class KCPControlBlock_OLD {
 	/// conversation id
 	var conv:UInt32
@@ -248,7 +250,7 @@ internal final class KCPControlBlock_OLD {
 					seg.fastack &+= 1
 				}
 				#else
-				node.value!.data.header.fastack &+= 1
+				node.value!.data.runtimeMetadata.fastack &+= 1
 				#endif
 			}
 		}
@@ -601,29 +603,29 @@ internal final class KCPControlBlock_OLD {
 		var count = 0
 		for (node, seg) in snd_buf.makeIterator() {
 			var needsend = false
-			if seg.data.header.xmit == 0 {
+			if seg.data.runtimeMetadata.xmit == 0 {
 				needsend = true
-				node.value!.data.header.xmit = 1
-				node.value!.data.header.rto = UInt32(rx_rto)
-				node.value!.data.header.resendts = current &+ node.value!.data.header.rto &+ rtomin
-			} else if itimeDiff(later:current, earlier:seg.data.header.resendts) >= 0 {
+				node.value!.data.runtimeMetadata.xmit = 1
+				node.value!.data.runtimeMetadata.rto = UInt32(rx_rto)
+				node.value!.data.runtimeMetadata.resendts = current &+ node.value!.data.runtimeMetadata.rto &+ rtomin
+			} else if itimeDiff(later:current, earlier:seg.data.runtimeMetadata.resendts) >= 0 {
 				needsend = true
-				node.value!.data.header.xmit &+= 1
+				node.value!.data.runtimeMetadata.xmit &+= 1
 				xmit &+= 1
 				if nodelay == 0 {
-					node.value!.data.header.rto = seg.data.header.rto &+ max(UInt32(seg.data.header.rto), UInt32(rx_rto))
+					node.value!.data.runtimeMetadata.rto = seg.data.runtimeMetadata.rto &+ max(UInt32(seg.data.runtimeMetadata.rto), UInt32(rx_rto))
 				} else {
-					let step:UInt32 = (nodelay < 2) ? node.value!.data.header.rto : UInt32(rx_rto)
-					node.value!.data.header.rto = node.value!.data.header.rto &+ step / 2
+					let step:UInt32 = (nodelay < 2) ? node.value!.data.runtimeMetadata.rto : UInt32(rx_rto)
+					node.value!.data.runtimeMetadata.rto = node.value!.data.runtimeMetadata.rto &+ step / 2
 				}
-				node.value!.data.header.resendts = current &+ node.value!.data.header.rto
-			} else if node.value!.data.header.fastack >= resent {
+				node.value!.data.runtimeMetadata.resendts = current &+ node.value!.data.runtimeMetadata.rto
+			} else if node.value!.data.runtimeMetadata.fastack >= resent {
 				// fast‑retransmit (duplicate ACKs)
-				if Int32(node.value!.data.header.xmit) <= fastlimit || fastlimit <= 0 {
+				if Int32(node.value!.data.runtimeMetadata.xmit) <= fastlimit || fastlimit <= 0 {
 					needsend = true
-					node.value!.data.header.xmit &+= 1
-					node.value!.data.header.fastack = 0
-					node.value!.data.header.resendts = current &+ node.value!.data.header.rto
+					node.value!.data.runtimeMetadata.xmit &+= 1
+					node.value!.data.runtimeMetadata.fastack = 0
+					node.value!.data.runtimeMetadata.resendts = current &+ node.value!.data.runtimeMetadata.rto
 					change = true
 				}
 			}
@@ -639,7 +641,7 @@ internal final class KCPControlBlock_OLD {
 				byteBuffer.clear(minimumCapacity: Int(mtu))
 				
 				// Dead link occured. Wipe send queue
-				if node.value!.data.header.xmit >= dead_link {
+				if node.value!.data.runtimeMetadata.xmit >= dead_link {
 					for (node, _) in snd_buf.makeIterator() {
 						node.value!.ackPromise?.fail(FatalBlockError.deadLink)
 					}
@@ -706,3 +708,4 @@ internal final class KCPControlBlock_OLD {
     }
 
 }
+*/

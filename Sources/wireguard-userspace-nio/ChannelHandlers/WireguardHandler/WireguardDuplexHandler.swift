@@ -19,8 +19,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 
 	internal typealias InboundIn = (Endpoint, Message.NIO)
-	internal typealias InboundOut = PeerPayload
-	internal typealias OutboundIn = PeerPayload
+	internal typealias InboundOut = PeerAssociated<ByteBuffer>
+	internal typealias OutboundIn = PeerAssociated<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
 	internal static let keepaliveTimeout = TimeAmount.seconds(10)
@@ -193,7 +193,7 @@ extension WireguardHandler {
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
-					flushOutbound(context:context, force:true)
+					context.flush()
 					break;
 			
 				case .response(let payload):
@@ -320,9 +320,6 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		guard readsPassed > 0 else {
-			return
-		}
 		readsPassed = 0
 		context.fireChannelReadComplete()
 	}
@@ -360,7 +357,6 @@ extension WireguardHandler {
 					forgedLength += MemoryLayout<Message.Data.Header>.size
 					forgedLength += MemoryLayout<Tag>.size
 					forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
-					logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
 					encodeBuffer.clear(minimumCapacity:forgedLength)
 					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
 						return try Message.Data.Payload.forge(receiverIndex:sendValues.session.geometry.mp, nonce:&sendValues.nSend, transportKey:sendValues.tSend, plainText:&payload, output:bufferPtr.baseAddress!)
@@ -373,6 +369,7 @@ extension WireguardHandler {
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
+				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes) bytes", "public-key_remote":"\(publicKey)"])
 				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 				writesPassed += 1
 				break
@@ -395,24 +392,6 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		flushOutbound(context:context, force:false)
-	}
-
-	internal func flushOutbound(context:ChannelHandlerContext, force:Bool) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		let logger = log
-		logger.trace("flushing outbound data in pipeline...", metadata:["flush_force":"\(force)"])
-		if force == false {
-			guard writesPassed > 0 else {
-				return
-			}
-			writesPassed = 0
-			context.flush()
-		} else {
-			writesPassed = 0
-			context.flush()
-		}
+		context.flush()
 	}
 }
