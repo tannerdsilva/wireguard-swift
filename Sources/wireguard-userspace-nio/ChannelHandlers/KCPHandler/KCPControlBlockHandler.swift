@@ -108,6 +108,7 @@ extension KcpControlBlockHandler {
 			for buffer in inboundOutBuffers {
 				context.fireChannelRead(wrapInboundOut((key, buffer)))
 			}
+			sendPending(context: context, key: key)
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -131,19 +132,15 @@ extension KcpControlBlockHandler {
 		// Send data to control block
 		do {
 			logger.trace("Sending kcp segment", metadata: ["size": "\(data.readableBytes) bytes"])
-			if(context.channel.isWritable) {
-				_ = kcp[key]![0].send(data, ackPromise: promise)
-			}
-			else {
-				pendingOutboundPackets[key, default: LinkedList<(data: ByteBuffer, writePromise: EventLoopPromise<Void>?)>()].addTail((data: data, writePromise: promise))
-			}
+			pendingOutboundPackets[key, default: LinkedList<(data: ByteBuffer, writePromise: EventLoopPromise<Void>?)>()].addTail((data: data, writePromise: promise))
+			sendPending(context: context, key: key)
 		} catch {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
 	}
 }
 
-// Channel events
+// Channel user events
 extension KcpControlBlockHandler {
 	// Inbound events (Handshake Reset)
 	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
@@ -158,9 +155,11 @@ extension KcpControlBlockHandler {
 				return
 		}
 	}
+}
 
+// Channel writability changing
+extension KcpControlBlockHandler {
 	func channelWritabilityChanged(context: ChannelHandlerContext) {
-		
 	}
 }
 
@@ -198,7 +197,6 @@ extension KcpControlBlockHandler {
 			#endif
 			logger.debug("flushing...", metadata:["_func":"\(#function)"])
 			count += 1
-			print("COUNT ------------------------------------------------------- \(count)")
 			context.flush()
 		}
 	}
@@ -212,5 +210,25 @@ extension KcpControlBlockHandler {
 			}
 		}
 		return []
+	}
+
+	private func sendPending(context:ChannelHandlerContext, key:PublicKey) {
+		let watermark = context.channel.getOption(ChannelOptions.writeBufferWaterMark)
+		watermark.whenSuccess({ wm in
+			while true {
+				if self.pendingOutboundPackets[key] != nil, let firstNode = self.pendingOutboundPackets[key]!.front {
+					let inflight = self.kcp[key]![0].snd_buf.count * 1400
+
+					guard firstNode.value!.data.readableBytes + Int(inflight) + 1000 < wm.high else {
+						return
+					}
+
+					_ = self.kcp[key]![0].send(firstNode.value!.data, ackPromise: firstNode.value!.writePromise)
+					_ = self.pendingOutboundPackets[key]!.popFront()
+				} else {
+					return
+				}
+			}
+		})
 	}
 }

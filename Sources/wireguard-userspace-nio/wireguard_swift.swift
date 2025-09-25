@@ -105,13 +105,14 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value: 1 << 20)
 					.channelOption(ChannelOptions.socketOption(.so_sndbuf), value: 1 << 20)
+					.channelOption(ChannelOptions.writeBufferWaterMark, value: ChannelOptions.Types.WriteBufferWaterMark(low: 32 * 1024, high: 256 * 1024))
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
 							PacketHandler(mtu:1500, logLevel:l.logLevel),
 							wgh,
 							KCPSegment.Handler(mtu: 1400, logLevel: l.logLevel),
 							self.kcpcbh,
-							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
+							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
 							dhh
 						])
 					}
