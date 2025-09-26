@@ -52,6 +52,8 @@ extension KCPSegment {
 		/// stores the byte buffers that are being built for each public key
 		private var segmentStack:[PublicKey:ByteBuffer] = [:]
 
+		private var pendingWrites:[(payload:PeerPayload, promise:[EventLoopPromise<Void>])] = []
+
 		internal init(transmitMTU:UInt16) {
 			self.transmitMTU = transmitMTU
 		}
@@ -65,19 +67,24 @@ extension KCPSegment {
 				// we have an existing buffer, see if we can append to it...
 				if hasExistingBuffer.writableBytes < Int(expectedEncodedLength) {
 					// mtu would be exceeded if we used the existing buffer, so we need to allocate a new one and flush the existing one.
-					context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
-						switch result {
-							case .failure(let error):
-								for curElement in promises {
-									curElement.fail(error)
-								}
-							case .success():
-								for curElement in promises {
-									curElement.succeed(())
-								}
-								break
-						}
-					})
+					if context.channel.isWritable == false {
+						pendingWrites.append((payload:PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer), promise:promiseStack[publicKey]!))
+						return didWrite
+					} else {
+						context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
+							switch result {
+								case .failure(let error):
+									for curElement in promises {
+										curElement.fail(error)
+									}
+								case .success():
+									for curElement in promises {
+										curElement.succeed(())
+									}
+									break
+							}
+						})
+					}
 					hasExistingBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 					didWrite = true
 					promiseStack[publicKey] = []
@@ -105,7 +112,12 @@ extension KCPSegment {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
+			var didWrite = false
 			for (publicKey, buffer) in segmentStack {
+				guard context.channel.isWritable == true else {
+					pendingWrites.append((payload:PeerPayload(publicKey:publicKey, buffer:buffer), promise:promiseStack[publicKey]!))
+					continue
+				}
 				context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:buffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
 					switch result {
 						case .failure(let error):
@@ -119,7 +131,9 @@ extension KCPSegment {
 							break
 					}
 				})
+				didWrite = true
 			}
+			context.flush()
 			segmentStack.removeAll(keepingCapacity:true)
 			promiseStack.removeAll(keepingCapacity:true)
 		}
@@ -153,12 +167,15 @@ extension KCPSegment {
 		private var writtenStack:MTUStacking
 		private var outboundOutCount:Int = 0
 
-		internal init(mtu:UInt16, logLevel:Logger.Level) {
+		private var pendingWrites:[(encoded:PeerPayload, promise:EventLoopPromise<Void>?)] = []
+
+		internal init(mtu:inout UInt16, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:KCPSegment.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			log = buildLogger
 			dataMTU = mtu
 			writtenStack = MTUStacking(transmitMTU: mtu)
+			mtu -= UInt16(IKCP_OVERHEAD)
 		}
 
 		deinit {
@@ -220,6 +237,26 @@ extension KCPSegment.Handler {
 
 // MARK: Channel Write
 extension KCPSegment.Handler {
+
+	internal func channelWritabilityChanged(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
+		guard context.channel.isWritable else {
+			log.notice("backpressure in channel detected.")
+			return
+		}
+		log.trace("channel is writable, flushing buffered writes...")
+		for (envelope, promise) in pendingWrites {
+			log.trace("writing buffered packet...", metadata:["bytes_written":"\(envelope.associatedValue.readableBytes)"])
+			context.write(wrapOutboundOut(envelope), promise:promise)
+		}
+		pendingWrites.removeAll()
+	}
+
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)

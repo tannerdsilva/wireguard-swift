@@ -77,7 +77,6 @@ extension KcpControlBlockHandler {
 
 // Channel Read
 extension KcpControlBlockHandler {
-
 	internal func channelReadComplete(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -99,7 +98,7 @@ extension KcpControlBlockHandler {
 			scheduleRepeatedKCPUpdates(key: key, context: context)
 		}
         
-		// Input segment
+		// imp segment
 		do {
 			logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
 			let inboundOutBuffers = try input(key: key, segment: data.associatedValue, context: context)
@@ -153,12 +152,6 @@ extension KcpControlBlockHandler {
 	}
 }
 
-// Channel writability changing
-extension KcpControlBlockHandler {
-	func channelWritabilityChanged(context: ChannelHandlerContext) {
-	}
-}
-
 // Control Block Helper Functions
 extension KcpControlBlockHandler {
 
@@ -187,14 +180,7 @@ extension KcpControlBlockHandler {
 			}
 			i += 1
 		}
-		if isWritten {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			logger.debug("flushing...", metadata:["_func":"\(#function)"])
-			count += 1
-			context.flush()
-		}
+		context.flush()
 	}
 
 	private func input(key:PublicKey, segment: KCPSegment, context:ChannelHandlerContext) throws -> [ByteBuffer]{

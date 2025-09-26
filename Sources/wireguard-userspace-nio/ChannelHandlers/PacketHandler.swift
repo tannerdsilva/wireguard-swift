@@ -15,7 +15,7 @@ internal enum PacketTypeOutbound {
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
 
-internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
+internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
 		/// specifies that the packet length does not match the expected length for the given packet type
@@ -35,23 +35,16 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
+
+	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
+
+	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
+
 	private let log:Logger
 	private let datagramMTU:UInt16
 
 	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
-	private var readsPassed:Int = 0
-
-	#if DEBUG
-	private var readBytes:[UInt8:(count:Int, size:Int)] = [:]
-	fileprivate func incrementReadBytes(type:UInt8, size:Int) {
-		if readBytes[type] == nil {
-			readBytes[type] = (0, size)
-		}
-		readBytes[type]!.0 += 1
-	}
-	#endif
-	
-	internal init(mtu:UInt16, logLevel:Logger.Level) {
+	internal init(mtu:inout UInt16, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		log = buildLogger
@@ -102,7 +95,6 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					logger.debug("received handshake initiation packet. sending downstream in pipeline...")
 					let packet = Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.initiation(packet))))
-					readsPassed += 1
 				}
 			case 0x2:
 				wireBytes = MemoryLayout<Message.Response.Payload.Authenticated>.size
@@ -115,7 +107,6 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					logger.debug("received handshake response packet. sending downstream in pipeline...")
 					let packet = Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Response.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.response(packet))))
-					readsPassed += 1
 				}
 			case 0x3:
 				wireBytes = MemoryLayout<Message.Cookie.Payload>.size
@@ -123,7 +114,6 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					logger.debug("received cookie response packet. sending downstream in pipeline...")
 					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
-					readsPassed += 1
 				}
 			case 0x4:
 				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Payload>.size + MemoryLayout<Tag>.size) else {
@@ -146,44 +136,56 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 				let availableBytes = envelope.data.readableBytes - MemoryLayout<Tag>.size
 				wireBytes = availableBytes
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
-				readsPassed += 1
 
 			default:
 				logger.error("unrecognized packet type received: \(firstByte)")
 				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
 				return
 		}
-		#if DEBUG
-		incrementReadBytes(type:firstByte, size:wireBytes)
-		#endif
 	}
 
 	internal func channelReadComplete(context:ChannelHandlerContext) {
-		// do not pass readComplete downstream if there have been no reads
-		defer {
-			readsPassed = 0
-		}
-		
+		log.trace("done reading.")
+		context.fireChannelReadComplete()
+	}
+
+	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
-		defer {
-			readBytes.removeAll(keepingCapacity:true)
-		}
-		var logger = log
-		var sumCount = 0
-		var sumSize = 0
-		for (type, stats) in readBytes {
-			logger[metadataKey:"packet_count_type-\(type)"] = "\(stats.count)"
-			logger[metadataKey:"data_size_type-\(type)"] = "\(stats.size)"
-			sumCount += stats.count
-			sumSize += stats.size
-		}
-		logger[metadataKey:"sum_packet_count"] = "\(sumCount)"
-		logger[metadataKey:"sum_data_size"] = "\(sumSize)"
-		logger.trace("completed reading from channel.")
-		context.fireChannelReadComplete()
-		#else
-		context.fireChannelReadComplete()
 		#endif
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
+		guard context.channel.isWritable else {
+			log.notice("backpressure in channel detected.")
+			return
+		}
+		log.trace("channel is writable, flushing buffered writes...")
+		for (envelope, promise) in pendingWrites {
+			log.trace("writing buffered packet...", metadata:["bytes_written":"\(envelope.data.readableBytes)", "remote_address":"\(envelope.remoteAddress.description)"])
+			context.write(wrapOutboundOut(envelope), promise:promise)
+		}
+		pendingWrites.removeAll()
+	}
+
+	private var pendingWrites:[(envelope:AddressedEnvelope<ByteBuffer>, promise:EventLoopPromise<Void>?)] = []
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		let envelope = unwrapOutboundIn(data)
+		log.trace("writing udp packets...", metadata:["bytes_written":"\(envelope.data.readableBytes)", "remote_address":"\(envelope.remoteAddress.description)"])
+		if context.channel.isWritable == false {
+			log.notice("channel is not writable, buffering packet write...", metadata:["buffered_writes":"\(pendingWrites.count + 1)"])
+			pendingWrites.append((envelope:envelope, promise:promise))
+			return
+		} else {
+			context.write(wrapOutboundOut(envelope), promise:promise)
+		}
+	}
+
+	internal func flush(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		log.trace("flushing udp packets...")
+		context.flush()
 	}
 }

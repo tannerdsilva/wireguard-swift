@@ -286,7 +286,7 @@ extension PeerInfo.Live {
 						encBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:encodedLength) { (ptr:UnsafeMutableRawBufferPointer) -> Int in
 							return ptr.baseAddress!.distance(to:handshakeInitiationMessage.RAW_encode(dest:ptr.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 						}
-						contextPtr.pointee.write(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer))).whenComplete { [l = l] result in
+						contextPtr.pointee.writeAndFlush(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer))).whenComplete { [l = l] result in
 							switch result {
 								case .success():
 									l.trace("transmitted handshake initiation message.", metadata:["public-key_remote":"\(pubKey)"])
@@ -294,7 +294,6 @@ extension PeerInfo.Live {
 									l.error("error occurred while transmitting handshake initiation message: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
 							}
 						}
-						contextPtr.pointee.flush()
 					}
 				}
 			} catch let error {

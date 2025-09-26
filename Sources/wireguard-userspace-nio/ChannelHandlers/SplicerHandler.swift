@@ -33,6 +33,8 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	private let spliceByteLength:Int
 
+	private var pendingWrites:[(payload:(PublicKey, ByteBuffer), promise:EventLoopPromise<Void>?)] = []
+
 	internal init(logLevel:Logger.Level, spliceByteLength:Int) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
@@ -53,14 +55,14 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		guard storedLengths[key] != nil else {
 			// Extract the UInt32 from the first 4 bytes
 			let value = data.RAW_access {
-                return EncodedUInt32(RAW_staticbuff:$0.baseAddress!.advanced(by: data.count-4)).RAW_native()
+				return EncodedUInt32(RAW_staticbuff:$0.baseAddress!.advanced(by: data.count-4)).RAW_native()
 			}
 			
 			// Remove the first 4 bytes from the array
 			let payload = Array(data.dropLast(4))
 			
 			// Only this one segment
-			if(value == 0) {
+			if (value == 0) {
 				logger.debug("Sending single message to DHH")
 				context.fireChannelRead(wrapInboundOut((key, payload)))
 				return
@@ -76,12 +78,48 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		storedPayload[key]!.append(contentsOf: data)
 		storedLengths[key]! -= 1
 		
-		// If it's the last segment, then send the whole thing to handoff handler
-		if(storedLengths[key]! == 0) {
+		// if it's the last segment, then send the whole thing to handoff handler
+		if (storedLengths[key]! == 0) {
 			storedLengths[key] = nil
 			logger.debug("Sending reforged message to DHH")
 			context.fireChannelRead(wrapInboundOut((key, storedPayload[key]!)))
 			storedPayload[key] = nil
+		}
+	}
+
+	internal func channelReadComplete(context: ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		logger.trace("channel read complete.")
+		context.fireChannelReadComplete()
+	}
+
+	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
+		logger.trace("channel writability changed: \(context.channel.isWritable)")
+		guard context.channel.isWritable == true else {
+			logger.notice("backpressure in channel detected.")
+			return
+		}
+		logger.trace("channel is writable, flushing buffered writes...")
+		for ((publicKey, buffer), promise) in pendingWrites {
+			logger.trace("writing buffered packet...", metadata:["bytes_written":"\(buffer.readableBytes)", "remote_address":"\(publicKey)"])
+			context.writeAndFlush(wrapOutboundOut((publicKey, buffer)), promise:promise)
+		}
+		// context.flush()
+		pendingWrites.removeAll()
+	}
+
+	private func writeOrStore(context:ChannelHandlerContext, key:PublicKey, buffer:ByteBuffer, promise:EventLoopPromise<Void>?) {
+		if context.channel.isWritable == false {
+			logger.notice("channel is not writable, buffering packet write...", metadata:["buffered_writes":"\(pendingWrites.count + 1)"])
+			pendingWrites.append((payload:(key, buffer), promise:promise))
+		} else {
+			logger.trace("writing spliced packet...", metadata:["bytes_written":"\(buffer.readableBytes)"])
+			context.writeAndFlush(wrapOutboundOut((key, buffer)), promise: promise)
 		}
 	}
 	
@@ -92,28 +130,26 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		logger.debug("Splicing \(data.count) bytes")
 		
 		// Data doesn't need to be spliced, add a header signifying 0 length
-		if(data.count <= spliceByteLength) {
-            let footerBytes = [UInt8](repeating: 0, count: 4)
-            data.append(contentsOf: footerBytes)
-			let buf = ByteBuffer(bytes: data)
-            context.writeAndFlush(wrapOutboundOut((key, buf)), promise: promise)
-		}
-		// Data needs to be spliced and place a len header on first segment
-		else {
+		if (data.count <= spliceByteLength) {
+			let footerBytes = [UInt8](repeating: 0, count: 4)
+			data.append(contentsOf: footerBytes)
+			let buf = context.channel.allocator.buffer(bytes:data)
+			writeOrStore(context:context, key:key, buffer:buf, promise:promise)
+		} else {
 			let splices = data.split(intoChunksOf: spliceByteLength)
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
 			for i in 0..<splices.count {
 				var segment = Array(splices[i])
-				if(i == 0) {
+				if (i == 0) {
 					footerBytes.RAW_access {
-                        segment.append(contentsOf: $0)
+						segment.append(contentsOf: $0)
 					}
 				}
-				let buf = ByteBuffer(bytes: segment)
-				if(i == splices.count-1) {
-                    context.writeAndFlush(wrapOutboundOut((key, buf)), promise: promise)
+				let buf = context.channel.allocator.buffer(bytes:segment)
+				if (i == splices.count-1) {
+					writeOrStore(context:context, key:key, buffer:buf, promise:promise)
 				} else {
-                    context.writeAndFlush(wrapOutboundOut((key, buf)), promise: nil)
+					writeOrStore(context:context, key:key, buffer:buf, promise:nil)
 				}
 			}
 		}

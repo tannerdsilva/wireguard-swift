@@ -75,18 +75,24 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let group:MultiThreadedEventLoopGroup
 	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
 	private let listeningPort:Int
+
+	private let ph:PacketHandler
 	private let wgh:WireguardHandler
+	private let kcpsh:KCPSegment.Handler
 	private let kcpcbh:KcpControlBlockHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16 = 1500, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
-		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.debug)
+		var mtuStep = mtu
+		self.ph = PacketHandler(mtu: &mtuStep, logLevel: logger.logLevel)
+		self.wgh = WireguardHandler(privateKey: staticPrivateKey, mtu: &mtuStep, initialPeers: initialConfiguration, logLevel: logger.logLevel)
+		self.kcpsh = KCPSegment.Handler(mtu: &mtuStep, logLevel: logger.logLevel)
 		self.kcpcbh = KcpControlBlockHandler(key: staticPrivateKey, logLevel: logger.logLevel)
 	}
 
@@ -108,9 +114,9 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					.channelOption(ChannelOptions.writeBufferWaterMark, value: ChannelOptions.Types.WriteBufferWaterMark(low: 32 * 1024, high: 256 * 1024))
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
-							PacketHandler(mtu:1500, logLevel:l.logLevel),
+							self.ph,
 							wgh,
-							KCPSegment.Handler(mtu: 1400, logLevel: l.logLevel),
+							self.kcpsh,
 							self.kcpcbh,
 							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
 							dhh

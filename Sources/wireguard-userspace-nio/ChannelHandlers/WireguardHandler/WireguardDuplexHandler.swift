@@ -44,10 +44,6 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	
 	internal let isCongested:Atomic<Bool> = .init(false)
 
-	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
-	private var readsPassed:Int = 0
-	private var writesPassed:Int = 0
-
 	/// stored variables of the WireguardHandler that are automatically managed through Unmanaged instances of the WireguardHandler being stored in sub-structures.
 	internal struct AutomaticallyUpdated {
 		/// initiation indicies.
@@ -67,7 +63,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// the current operational state of the handler.
 	private var operatingState:State
 
-	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
+	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout UInt16, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
 		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:AutomaticallyUpdated.ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
@@ -84,6 +80,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		
 		log.trace("instance initialized", metadata:["peer_count":"\(initialPeers.count)"])
 		operatingState = .initialized(initialPeers)
+		mtu -= UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size)
 	}
 
 	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
@@ -98,7 +95,6 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		}
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
 		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
-		writesPassed += 1
 	}
 }
 
@@ -174,6 +170,7 @@ extension WireguardHandler {
 							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
 							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
+							context.flush()
 							return
 						}
 					}
@@ -308,7 +305,6 @@ extension WireguardHandler {
 
 					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
 					context.fireChannelRead(wrapInboundOut(PeerPayload(publicKey: identifiedPublicKey, buffer: encodeBuffer)))
-					readsPassed += 1
 			}
 		} catch let error {
 			logger.error("error processing packet: \(error)")
@@ -320,8 +316,16 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		readsPassed = 0
+		log.trace("done reading.")
 		context.fireChannelReadComplete()
+	}
+	
+	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		log.trace("channel writability changed")
+		context.fireChannelWritabilityChanged()
 	}
 }
 
@@ -371,7 +375,6 @@ extension WireguardHandler {
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
 				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes) bytes", "public-key_remote":"\(publicKey)"])
 				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
-				writesPassed += 1
 				break
 		}
 	}
@@ -392,6 +395,7 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		log.trace("flushing...")
 		context.flush()
 	}
 }
