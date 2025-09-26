@@ -25,7 +25,7 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 	
 	// kcp control blocks: index 0 is the newest control block
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
-	private var updateTasks:[PublicKey:RepeatedTask] = [:]
+	private var updateTask:RepeatedTask?
 	private var kcpUpdateTime:TimeAmount = .milliseconds(30)
 
 	private var buffer:ByteBuffer
@@ -44,22 +44,24 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 		buffer = ByteBuffer()
 	}
 
-	private func scheduleRepeatedKCPUpdates(key:PublicKey, context:ChannelHandlerContext) {
-		if updateTasks[key] != nil {
-			updateTasks[key]!.cancel()
-			logger.trace("kcp update task task cancelled", metadata: ["public-key_remote":"\(key)"])
+	private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
+		if updateTask != nil {
+			updateTask!.cancel()
+			logger.trace("kcp update task task cancelled")
 		}
 		
-		updateTasks[key] = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
+		updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
 			[weak self, l = logger, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
-			l.trace("kcp update triggered", metadata: ["public-key_remote":"\(key)"])
-			c.accessContext({ contextPointer in
-				writeOutboundOut(key: key, context: contextPointer.pointee)
-			})
+			l.trace("kcp update triggered")
+			for (key, _) in kcp {
+				c.accessContext({ contextPointer in
+					writeOutboundOut(key: key, context: contextPointer.pointee)
+				})
+			}
 		}
 
-		logger.debug("kcp update task scheduled", metadata: ["public-key_remote":"\(key)"])
+		logger.debug("kcp update task scheduled")
 	}
 	
 }
@@ -95,7 +97,7 @@ extension KcpControlBlockHandler {
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
 			kcp[key]![0].setNoDelay(1, nc:0)
-			scheduleRepeatedKCPUpdates(key: key, context: context)
+			scheduleRepeatedKCPUpdates(context: context)
 		}
         
 		// imp segment
@@ -122,7 +124,7 @@ extension KcpControlBlockHandler {
 			let magicID = try! magicID(key1: key, key2: ourKey)
 			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
 			kcp[key]![0].setNoDelay(1, nc:0)
-			scheduleRepeatedKCPUpdates(key: key, context: context)
+			scheduleRepeatedKCPUpdates(context: context)
 		}
 
 		// Send data to control block
@@ -148,6 +150,23 @@ extension KcpControlBlockHandler {
 			default:
 				context.fireUserInboundEventTriggered(event)
 				return
+		}
+	}
+}
+
+extension KcpControlBlockHandler {
+	func channelWritabilityChanged(context: ChannelHandlerContext) {
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
+		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
+		if(context.channel.isWritable) {
+			scheduleRepeatedKCPUpdates(context: context)
+		} else {
+			if(updateTask != nil) {
+				logger.debug("Cancelling repeated scheduled task")
+				updateTask!.cancel()
+			}
 		}
 	}
 }
