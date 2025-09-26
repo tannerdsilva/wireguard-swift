@@ -231,12 +231,10 @@ extension KCPSegment.Handler {
 	}
 
 	internal func flush(context:ChannelHandlerContext) {
-		if(outboundOutCount > 0) {
-			log.trace("flushing...", metadata:["stacked_segments_written":"\(stackedSegmentCount)"])
-			outboundOutCount = 0
-			stackedSegmentCount = 0
-			writtenStack.completeAll(context:context, handler:self)
-			context.flush()
-		}
+		log.trace("flushing...", metadata:["stacked_segments_written":"\(stackedSegmentCount)"])
+		outboundOutCount = 0
+		stackedSegmentCount = 0
+		writtenStack.completeAll(context:context, handler:self)
+		context.flush()
 	}
 }

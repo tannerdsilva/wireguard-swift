@@ -33,8 +33,6 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
     private let ourKey:PublicKey
 	private let logger:Logger
 
-	private var pendingOutboundPackets:[PublicKey:LinkedList<(data:ByteBuffer, writePromise:EventLoopPromise<Void>?)>] = [:]
-
 	var count = 0
 		
 	internal init(key:MemoryGuarded<PrivateKey>, logLevel:Logger.Level) {
@@ -108,7 +106,6 @@ extension KcpControlBlockHandler {
 			for buffer in inboundOutBuffers {
 				context.fireChannelRead(wrapInboundOut((key, buffer)))
 			}
-			sendPending(context: context, key: key)
 		} catch let error {
 			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -132,8 +129,7 @@ extension KcpControlBlockHandler {
 		// Send data to control block
 		do {
 			logger.trace("Sending kcp segment", metadata: ["size": "\(data.readableBytes) bytes"])
-			pendingOutboundPackets[key, default: LinkedList<(data: ByteBuffer, writePromise: EventLoopPromise<Void>?)>()].addTail((data: data, writePromise: promise))
-			sendPending(context: context, key: key)
+			_ = self.kcp[key]![0].send(data, ackPromise: promise)
 		} catch {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -210,25 +206,5 @@ extension KcpControlBlockHandler {
 			}
 		}
 		return []
-	}
-
-	private func sendPending(context:ChannelHandlerContext, key:PublicKey) {
-		let watermark = context.channel.getOption(ChannelOptions.writeBufferWaterMark)
-		watermark.whenSuccess({ wm in
-			while true {
-				if self.pendingOutboundPackets[key] != nil, let firstNode = self.pendingOutboundPackets[key]!.front {
-					let inflight = self.kcp[key]![0].snd_buf.count * 1400
-
-					guard firstNode.value!.data.readableBytes + Int(inflight) + 1000 < wm.high else {
-						return
-					}
-
-					_ = self.kcp[key]![0].send(firstNode.value!.data, ackPromise: firstNode.value!.writePromise)
-					_ = self.pendingOutboundPackets[key]!.popFront()
-				} else {
-					return
-				}
-			}
-		})
 	}
 }
