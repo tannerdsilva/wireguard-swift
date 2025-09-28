@@ -109,8 +109,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value: 1 << 20)
-					.channelOption(ChannelOptions.socketOption(.so_sndbuf), value: 1 << 20)
+					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value: 1 << 23)
+					.channelOption(ChannelOptions.socketOption(.so_sndbuf), value: 1 << 23)
 					.channelOption(ChannelOptions.writeBufferWaterMark, value: ChannelOptions.Types.WriteBufferWaterMark(low: 32 * 1024, high: 256 * 1024))
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
@@ -122,6 +122,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 							dhh
 						])
 					}
+					
 				let channel = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort).get()
 				try bootstrappedFuture.setSuccess(())
 				state = .engaged(channel)
