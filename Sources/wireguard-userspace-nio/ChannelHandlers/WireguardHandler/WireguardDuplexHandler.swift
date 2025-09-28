@@ -311,14 +311,6 @@ extension WireguardHandler {
 			context.fireErrorCaught(error)
 		}
 	}
-
-	internal func channelReadComplete(context:ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		log.trace("done reading.")
-		context.fireChannelReadComplete()
-	}
 	
 	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
 		#if DEBUG
@@ -386,16 +378,5 @@ extension WireguardHandler {
 		var peerPayload = unwrapOutboundIn(data)
 		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.buffer)
 		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
-	}
-}
-
-// MARK: Flush
-extension WireguardHandler {
-	internal func flush(context:ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		log.trace("flushing...")
-		context.flush()
 	}
 }

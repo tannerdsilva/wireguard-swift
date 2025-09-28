@@ -111,7 +111,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value: 1 << 23)
 					.channelOption(ChannelOptions.socketOption(.so_sndbuf), value: 1 << 23)
-					.channelOption(ChannelOptions.writeBufferWaterMark, value: ChannelOptions.Types.WriteBufferWaterMark(low: 32 * 1024, high: 256 * 1024))
+					.channelOption(ChannelOptions.writeBufferWaterMark, value: ChannelOptions.Types.WriteBufferWaterMark(low: 1<<20, high:8<<20))
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([
 							self.ph,

@@ -86,7 +86,6 @@ extension KcpControlBlockHandler {
 		context.fireChannelReadComplete()
 	}
 	
-	// Receiving kcp segment
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let data = unwrapInboundIn(data)
 		let key = data.publicKey
@@ -115,6 +114,13 @@ extension KcpControlBlockHandler {
 
 // Channel Write
 extension KcpControlBlockHandler {
+	internal func flush(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		logger.trace("caught flush signal.")
+	}
+
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var (key, data) = unwrapOutboundIn(data)
