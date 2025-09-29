@@ -24,8 +24,8 @@ public enum FatalBlockError:Swift.Error {
 	case deadLink
 }
 
-public func iclock() -> UInt32 {
-	let now = NIODeadline.now().uptimeNanoseconds
+public func iclock(_ delay:UInt64) -> UInt32 {
+	let now = NIODeadline.now().uptimeNanoseconds - delay
 	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
 }
 @inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
@@ -48,17 +48,14 @@ let IKCP_CMD_WASK:UInt8 = 83
 let IKCP_CMD_WINS:UInt8 = 84
 let IKCP_ASK_SEND:UInt32 = 1
 let IKCP_ASK_TELL:UInt32 = 2
-let IKCP_WND_SND:UInt32 = 256
-let IKCP_WND_RCV:UInt32 = 256
-let IKCP_ACK_FAST:UInt32 = 3
-let IKCP_INTERVAL:UInt32 = 100
+let IKCP_WND_SND:UInt32 = 2048
+let IKCP_WND_RCV:UInt32 = 2048
 let IKCP_OVERHEAD:UInt32 = 24
 let IKCP_DEADLINK:UInt32 = 20
 let IKCP_THRESH_INIT:UInt32 = 2
 let IKCP_THRESH_MIN:UInt32 = 2
 let IKCP_PROBE_INIT:UInt32 = 7000
 let IKCP_PROBE_LIMIT:UInt32 = 120000
-let IKCP_FASTACK_LIMIT:UInt32 = 5
 
 internal final class KCPControlBlock {
 	/// conversation id
@@ -109,6 +106,8 @@ internal final class KCPControlBlock {
 	private var acklist = LinkedList<(sn:UInt32, ts:UInt32)>()
 
 	var nocwnd:Bool
+		
+	var delay:UInt64 = 0
 
 	init(conv: UInt32, mtu:UInt32 = 1400) {
 		self.conv = conv
@@ -261,8 +260,8 @@ internal final class KCPControlBlock {
 
 		switch seg.header.command {
 			case KCPSegment.Command.ack:
-				if(itimeDiff(later: iclock(), earlier: ts) >= 0) {
-					updateRtt(rtt: iclock() &- ts)
+				if(itimeDiff(later: iclock(delay), earlier: ts) >= 0) {
+					updateRtt(rtt: iclock(delay) &- ts)
 				}
 				parseAck(sn: sn)
 				syncSendBuff()
@@ -414,7 +413,7 @@ internal final class KCPControlBlock {
 			// Update probe time variables and prepare send ask_probe if needed
 			if probe_wait == 0 {
 				probe_wait = IKCP_PROBE_INIT
-			} else if itimeDiff(later:iclock(), earlier:ts_probe) >= 0 {
+			} else if itimeDiff(later:iclock(delay), earlier:ts_probe) >= 0 {
 				if probe_wait < IKCP_PROBE_INIT {
 					probe_wait = IKCP_PROBE_INIT
 				}
@@ -422,7 +421,7 @@ internal final class KCPControlBlock {
 				if probe_wait > IKCP_PROBE_LIMIT {
 					probe_wait = IKCP_PROBE_LIMIT
 				}
-				ts_probe = iclock() + probe_wait
+				ts_probe = iclock(delay) + probe_wait
 				probe |= IKCP_ASK_SEND
 			}
 		} else {
@@ -460,8 +459,8 @@ internal final class KCPControlBlock {
 				needsend = true
 				node.value!.data.runtimeMetadata.xmit = 1
 				node.value!.data.runtimeMetadata.rto = UInt32(rx_rto)
-				node.value!.data.runtimeMetadata.resendts = iclock() &+ node.value!.data.runtimeMetadata.rto &+ rtomin
-			} else if itimeDiff(later:iclock(), earlier:seg.data.runtimeMetadata.resendts) >= 0 {
+				node.value!.data.runtimeMetadata.resendts = iclock(delay) &+ node.value!.data.runtimeMetadata.rto &+ rtomin
+			} else if itimeDiff(later:iclock(delay), earlier:seg.data.runtimeMetadata.resendts) >= 0 {
 				needsend = true
 				node.value!.data.runtimeMetadata.xmit &+= 1
 				if nodelay == 0 {
@@ -470,13 +469,13 @@ internal final class KCPControlBlock {
 					let step:UInt32 = (nodelay < 2) ? node.value!.data.runtimeMetadata.rto : UInt32(rx_rto)
 					node.value!.data.runtimeMetadata.rto = node.value!.data.runtimeMetadata.rto &+ step / 2
 				}
-				node.value!.data.runtimeMetadata.resendts = iclock() &+ node.value!.data.runtimeMetadata.rto
+				node.value!.data.runtimeMetadata.resendts = iclock(delay) &+ node.value!.data.runtimeMetadata.rto
 				lost = true
 			} 
 			
 			if needsend {
 				// Update timestamp and una
-				node.value!.data.header.timestamp = iclock()
+				node.value!.data.header.timestamp = iclock(delay)
 				node.value!.data.header.una = rcv_nxt	
 				node.value!.data.header.receiveWindowSize = wndUnused()			
 

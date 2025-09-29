@@ -25,8 +25,9 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 	
 	// kcp control blocks: index 0 is the newest control block
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
+	private var frozenTime:UInt64 = 0
 	private var updateTask:RepeatedTask?
-	private var kcpUpdateTime:TimeAmount = .milliseconds(30)
+	private var kcpUpdateTime:TimeAmount = .milliseconds(50)
 
 	private var buffer:ByteBuffer
 	
@@ -50,13 +51,16 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 			logger.trace("kcp update task task cancelled")
 		}
 		
-		updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: kcpUpdateTime, delay: kcpUpdateTime) {
+		updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
 			[weak self, l = logger, c = ContextContainer(context:context)] _ in
 			guard let self = self else { return }
 			l.trace("kcp update triggered")
 			for (key, _) in kcp {
 				c.accessContext({ contextPointer in
 					writeOutboundOut(key: key, context: contextPointer.pointee)
+//					if(kcp[key]![0].delay != 0) {
+//						print(kcp[key]![0].delay)
+//					}
 				})
 			}
 		}
@@ -167,9 +171,15 @@ extension KcpControlBlockHandler {
 		}
 		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
 		if(context.channel.isWritable) {
+			for k in kcp.keys {
+				for i in 0..<kcp[k]!.count {
+					kcp[k]![i].delay += NIODeadline.now().uptimeNanoseconds - frozenTime
+				}
+			}
 			scheduleRepeatedKCPUpdates(context: context)
 		} else {
 			if(updateTask != nil) {
+				frozenTime = NIODeadline.now().uptimeNanoseconds
 				logger.debug("Cancelling repeated scheduled task")
 				updateTask!.cancel()
 			}
