@@ -71,7 +71,7 @@ extension KCPSegment {
 						pendingWrites.append((payload:PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer), promise:promiseStack[publicKey]!))
 						return didWrite
 					} else {
-						context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
+						context.writeAndFlush(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
 							switch result {
 								case .failure(let error):
 									for curElement in promises {

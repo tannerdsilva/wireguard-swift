@@ -27,7 +27,7 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
 	private var frozenTime:UInt64 = 0
 	private var updateTask:RepeatedTask?
-	private var kcpUpdateTime:TimeAmount = .milliseconds(50)
+	private var kcpUpdateTime:TimeAmount = .milliseconds(30)
 
 	private var buffer:ByteBuffer
 	
@@ -58,9 +58,6 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 			for (key, _) in kcp {
 				c.accessContext({ contextPointer in
 					writeOutboundOut(key: key, context: contextPointer.pointee)
-//					if(kcp[key]![0].delay != 0) {
-//						print(kcp[key]![0].delay)
-//					}
 				})
 			}
 		}
@@ -221,7 +218,13 @@ extension KcpControlBlockHandler {
 	private func input(key:PublicKey, segment: KCPSegment, context:ChannelHandlerContext) throws -> [ByteBuffer]{
 		for i in 0..<kcp[key]!.count {
 			do {
-				return try kcp[key]![i].input(segment, context: context)
+				let ret = try kcp[key]![i].input(segment, context: context)
+				// Get acks and write them
+				let acks = kcp[key]![i].getSendableAckSegments()
+				for ack in acks {
+					context.write(wrapOutboundOut(PeerAssociated<KCPSegment>(publicKey: key, segment: ack)), promise: nil)
+				}
+				return ret
 			} catch {
 				continue
 			}

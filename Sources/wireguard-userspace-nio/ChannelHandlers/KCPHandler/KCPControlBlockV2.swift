@@ -48,8 +48,8 @@ let IKCP_CMD_WASK:UInt8 = 83
 let IKCP_CMD_WINS:UInt8 = 84
 let IKCP_ASK_SEND:UInt32 = 1
 let IKCP_ASK_TELL:UInt32 = 2
-let IKCP_WND_SND:UInt32 = 2048
-let IKCP_WND_RCV:UInt32 = 2048
+let IKCP_WND_SND:UInt32 = 256
+let IKCP_WND_RCV:UInt32 = 256
 let IKCP_OVERHEAD:UInt32 = 24
 let IKCP_DEADLINK:UInt32 = 20
 let IKCP_THRESH_INIT:UInt32 = 2
@@ -228,6 +228,28 @@ internal final class KCPControlBlock {
 
 	private func ackPush(sn: UInt32, ts: UInt32) {
 		acklist.addTail((sn, ts))
+	}
+	
+	public func getSendableAckSegments() -> [KCPSegment] {
+		let header = KCPSegment.Header(conv:conv, cmd:.ack, frg:0, sn:0, len:0)
+		var seg = KCPSegment(header: header, data: ByteBufferView())
+		seg.header.receiveWindowSize = wndUnused()
+		seg.header.una = rcv_nxt
+		seg.header.timestamp = 0
+		
+		var acks: [KCPSegment] = []
+
+		// Send pending acks
+		for (_, ack) in acklist {
+			seg.header.sequenceNumber = ack.sn
+			seg.header.timestamp = ack.ts
+			
+			acks.append(seg)
+		}
+		if (!acklist.isEmpty) {
+			acklist.clear()
+		}
+		return acks
 	}
 
 	// Input a kcp segment and parse it
