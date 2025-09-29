@@ -133,7 +133,6 @@ extension KCPSegment {
 				})
 				didWrite = true
 			}
-			context.flush()
 			segmentStack.removeAll(keepingCapacity:true)
 			promiseStack.removeAll(keepingCapacity:true)
 		}
