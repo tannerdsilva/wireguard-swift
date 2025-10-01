@@ -6,7 +6,7 @@ internal struct KCPSegment:Sendable, Hashable {
 	/// the header of the kcp segment
 	internal var header:Header
 	/// the data payload of the kcp segment (can be zero length)
-	internal var data:ByteBufferView
+	internal let data:ByteBufferView
 	/// runtime metadata associated with a kcp segment that is not transmitted on the wire.
 	internal var runtimeMetadata:RuntimeMetadata = RuntimeMetadata()
 
@@ -31,14 +31,14 @@ internal struct KCPSegment:Sendable, Hashable {
 
 		// not sure which of these stored instance varaibles should be `var` vs `let`, I would like to make a conclusive decision on this when the timing is right.
 
-		internal init(conv:UInt32, cmd:Command, frg:UInt8, sn: UInt32, len:UInt32) {
+		internal init(conv:UInt32, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt32, una:UInt32, len:UInt32) {
 			conversationID = conv
 			command = cmd
 			fragmentID = frg
-			receiveWindowSize = 0
-			timestamp = 0
+			receiveWindowSize = rcv_wnd_size
+			timestamp = ts
 			sequenceNumber = sn
-			una = 0
+			self.una = una
 			dataLength = len
 		}
 
@@ -112,7 +112,7 @@ internal struct KCPSegment:Sendable, Hashable {
 // MARK: Command
 extension KCPSegment {
 	/// kcp commands that can be sent within a segment
-	internal enum Command:UInt8, Hashable {
+	internal enum Command:UInt8, Hashable, Equatable {
 		/// kcp command to signify the push of data
 		case push = 81
 		/// kcp command to signify an acknowledgement of received data

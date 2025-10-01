@@ -18,9 +18,9 @@ struct MagicID:Sendable {}
 
 internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = PeerAssociated<KCPSegment>
-	internal typealias InboundOut = (PublicKey, ByteBuffer)
+	internal typealias InboundOut = PeerAssociated<ByteBuffer>
 	
-	internal typealias OutboundIn = (PublicKey, ByteBuffer)
+	internal typealias OutboundIn = PeerAssociated<ByteBuffer>
 	internal typealias OutboundOut = PeerAssociated<KCPSegment>
 	
 	// kcp control blocks: index 0 is the newest control block
@@ -167,7 +167,7 @@ extension KcpControlBlockHandler {
 			context.fireChannelWritabilityChanged()
 		}
 		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
-		if(context.channel.isWritable) {
+		if (context.channel.isWritable) {
 			for k in kcp.keys {
 				for i in 0..<kcp[k]!.count {
 					kcp[k]![i].delay += NIODeadline.now().uptimeNanoseconds - frozenTime
@@ -175,7 +175,7 @@ extension KcpControlBlockHandler {
 			}
 			scheduleRepeatedKCPUpdates(context: context)
 		} else {
-			if(updateTask != nil) {
+			if (updateTask != nil) {
 				frozenTime = NIODeadline.now().uptimeNanoseconds
 				logger.debug("Cancelling repeated scheduled task")
 				updateTask!.cancel()

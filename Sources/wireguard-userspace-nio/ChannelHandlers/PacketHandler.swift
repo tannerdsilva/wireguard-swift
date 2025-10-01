@@ -144,38 +144,8 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 	}
 
-	private static let backpressureEnabled:Bool = true
-	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		guard PacketHandler.backpressureEnabled == true else {
-			return
-		}
-		guard context.channel.isWritable == true else {
-			log.notice("outbound backpressure detected.")
-			return
-		}
-		for (envelope, promise) in pendingWrites {
-			log.trace("writing buffered packet...", metadata:["bytes_written":"\(envelope.data.readableBytes)", "remote_address":"\(envelope.remoteAddress.description)"])
-			context.write(wrapOutboundOut(envelope), promise:promise)
-		}
-		context.flush()
-		pendingWrites.removeAll()
-	}
-	private var pendingWrites:[(envelope:AddressedEnvelope<ByteBuffer>, promise:EventLoopPromise<Void>?)] = []
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let envelope = unwrapOutboundIn(data)
-		log.trace("writing udp packets...", metadata:["bytes_written":"\(envelope.data.readableBytes)", "remote_address":"\(envelope.remoteAddress.description)"])
-		if PacketHandler.backpressureEnabled == true && context.channel.isWritable == false {
-			log.notice("channel is not writable, buffering packet write...", metadata:["buffered_writes":"\(pendingWrites.count + 1)"])
-			pendingWrites.append((envelope:envelope, promise:promise))
-			return
-		} else {
-			context.write(wrapOutboundOut(envelope), promise:promise)
-		}
+		context.write(wrapOutboundOut(envelope), promise:promise)
 	}
 }

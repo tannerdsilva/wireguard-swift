@@ -7,4 +7,8 @@ internal struct PeerAssociated<AssociatedType:Sendable & Hashable>:Sendable {
 		self.publicKey = publicKey
 		self.associatedValue = associatedValue
 	}
+	public init(_ tuple:(PublicKey, AssociatedType)) {
+		self.publicKey = tuple.0
+		self.associatedValue = tuple.1
+	}
 }
