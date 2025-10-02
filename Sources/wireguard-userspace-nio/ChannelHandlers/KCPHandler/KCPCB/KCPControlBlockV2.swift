@@ -63,24 +63,9 @@ LAW OF THE LAND
 =================
 
 nodelay = 1 ALWAYS. this is not a param but a hard coded reality of the architecture of this project.
-nocwnd = 0 ALWAYS. there will be a congestion window under all circumstances.
+nocwnd NEVER. there will NOT be a congestion window under ALL circumstances.
 
 */
-
-extension KCPControlBlock {
-	@available(*, deprecated, renamed: "outboundOutBuffer")
-	internal var sendBuffer:LinkedList<(data:KCPSegment, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?)> {
-		get {
-			return outboundOutBuffer
-		}
-	}
-
-	internal var receiveBuffer:LinkedList<KCPSegment> {
-		get {
-			return receiveBuffer
-		}
-	}
-}
 
 extension KCPControlBlock {
 	internal struct DeadlinkError:Swift.Error {}
@@ -140,14 +125,12 @@ internal final class KCPControlBlock {
 	// buffers
 	/// the buffer for data that is being transmitted to the remote peer.
 	/// - NOTE: previously known as `send_buf`
-	internal var outboundOutBuffer = LinkedList<(data:KCPSegment, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?)>()		// user data waiting to be segmented and sent out
+	internal var outboundInBuffer = LinkedList<(data:KCPSegment, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?)>()		// user data waiting to be segmented and sent out
 	
 	/// a structure used to encompass all the info involved with firing data to inbound out.
 	internal struct InboundOutInfo:Sendable {
 		/// boolean flag to indicate if the buffer should be cleared on next use
 		internal var inboundOutByteByfferClearOnNextUse = false
-		/// counts the number of kcp segments that were written to the inboundOutByteBuffer
-		internal var inboundOutByteBufferSegmentsWritten:Int = 0
 		/// the buffer that will eventually make up a complete message that gets passed to inbound out
 		internal var inboundOutByteBuffer:ByteBuffer
 	}
@@ -157,15 +140,10 @@ internal final class KCPControlBlock {
 	/// segments that are waiting to be assembled in the correct order
 	internal var inboundInBuffer = LinkedList<KCPSegment>()
 
-	/// counts the number of kcp segments that were written to the outboundOutBuffer for each cycle of reading. used at `channelReadComplete` to determine if a flush is needed
+	/// counts the number of kcp segments that were written to the outboundInBuffer for each cycle of reading. used at `channelReadComplete` to determine if a flush is needed
 	internal var outboundOutSegmentsWrittenSinceChannelReadComplete:Int = 0
 
-	// window stuff
-	internal let snd_wnd:UInt32
-	internal let rcv_wnd:UInt32
-	internal let rmt_wnd:UInt32
-
-	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, snd_wnd:UInt32 = IKCP_WND_SND, rcv_wnd:UInt32 = IKCP_WND_RCV, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
+	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, logLevel:Logger.Level) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -173,12 +151,9 @@ internal final class KCPControlBlock {
 		buildLogger.logLevel = logLevel
 		self.log = buildLogger
 		self.peerPublicKey = peerPublicKey
-		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * snd_wnd)))
+		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * 256)))
 		self.conv = conv
 		self.mtu = mtu
-		self.snd_wnd = snd_wnd
-		self.rcv_wnd = rcv_wnd
-		self.rmt_wnd = rmt_wnd
 	}
 
 	internal func handleChannelReadComplete(context:ChannelHandlerContext, handler:KcpControlBlockHandler) {
@@ -216,47 +191,21 @@ internal final class KCPControlBlock {
 				}
 				parseInbound(ack: associatedSegment.associatedValue.header.sequenceNumber)
 			case KCPSegment.Command.push:
-				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- (rcv_nxt + rcv_wnd)) < 0 {
-					
-					// write the acknowledgement instead of pushing it to the acklist
-					let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:wndUnused(), frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:associatedSegment.associatedValue.header.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
-					context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
-					outboundOutSegmentsWrittenSinceChannelReadComplete += 1
-					
-					if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
-						parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
-					}
+				// write the acknowledgement instead of pushing it to the acklist
+				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:0, frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:associatedSegment.associatedValue.header.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
+				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
+				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
+				
+				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
+					parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
 				}
 			case KCPSegment.Command.probeRequest:
-				let ackResponseSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeResponse, rcv_wnd_size:wndUnused(), frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView())
+				let ackResponseSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeResponse, rcv_wnd_size:0, frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView())
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackResponseSeg)), promise:nil)
 				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
 			case KCPSegment.Command.probeResponse:
 				// nothing to do here
 			break;
-		}
-
-		if itimeDiff(later:snd_una, earlier:previousUna) > 0 {
-			if cwndInfo.cwnd < rmt_wnd {
-				let mss = self.mss
-				if cwndInfo.cwnd < cwndInfo.ssthresh {
-					cwndInfo.cwnd &+= 1
-					cwndInfo.incr &+= mss
-				} else {
-					if cwndInfo.incr < mss {
-						cwndInfo.incr = mss
-					}
-					cwndInfo.incr &+= (mss * mss) / cwndInfo.incr + (mss / 16)
-					if ((cwndInfo.cwnd &+ 1) &* mss <= cwndInfo.incr) {
-						cwndInfo.cwnd = (cwndInfo.incr &+ mss &- 1) / (mss > 0 ? mss : 1)
-					}
-				}
-
-				if cwndInfo.cwnd > rmt_wnd {
-					cwndInfo.cwnd = rmt_wnd
-					cwndInfo.incr = rmt_wnd &* mss
-				}
-			}
 		}
 	}
 }
@@ -272,7 +221,7 @@ extension KCPControlBlock {
 		let sn = segment.header.sequenceNumber
 		var isDuplicate = false
 		var insertAfterNode:LinkedList<KCPSegment>.Node? = nil
-		segLoop: for (curNode, seg) in receiveBuffer.makeReverseIterator() {
+		segLoop: for (curNode, seg) in inboundInBuffer.makeReverseIterator() {
 			guard seg.header.sequenceNumber != sn else {
 				isDuplicate = true
 				break segLoop
@@ -293,7 +242,7 @@ extension KCPControlBlock {
 		}
 
 		// loop through any continuous segments in the receive buffer and write them to the outbound out byte buffer
-		while let firstNode = inboundInBuffer.front, firstNode.value!.header.sequenceNumber == rcv_nxt && inboundOutInfo.inboundOutByteBufferSegmentsWritten < rcv_wnd {
+		while let firstNode = inboundInBuffer.front, firstNode.value!.header.sequenceNumber == rcv_nxt  {
 			// remove the node from the receive buffer and add it to the receive queue
 			// start by popping it from the receive buffer
 			inboundInBuffer.remove(firstNode)
@@ -301,14 +250,12 @@ extension KCPControlBlock {
 			// if the inboundOutByteBuffer is marked to be cleared on next use, clear it now
 			if inboundOutInfo.inboundOutByteByfferClearOnNextUse == true {
 				inboundOutInfo.inboundOutByteBuffer.clear()
-				inboundOutInfo.inboundOutByteBufferSegmentsWritten = 0
 				inboundOutInfo.inboundOutByteByfferClearOnNextUse = false
 			}
 
 			// write the segment contents to the inboundOutByteBuffer
 			inboundOutInfo.inboundOutByteBuffer.writeBytes(firstNode.value!.data)
-			inboundOutInfo.inboundOutByteBufferSegmentsWritten += 1
-
+			
 			// if this is the last fragment of a message, fire the entire inboundOutByteBuffer to the pipeline and mark it to be cleared on next reader in the pipeline
 			if firstNode.value!.header.fragmentID == 0 {
 				context.fireChannelRead(handler.wrapInboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:inboundOutInfo.inboundOutByteBuffer)))
@@ -322,14 +269,14 @@ extension KCPControlBlock {
 
 	/// parse inbound una data
 	private func parseInbound(una:UInt32) {
-		for (node, seg) in outboundOutBuffer.makeIterator() {
+		for (node, seg) in outboundInBuffer.makeIterator() {
 			// guard isAcked == true
 			guard Int32(bitPattern: una &- seg.data.header.sequenceNumber) > 0 else {
 				snd_una = seg.data.header.sequenceNumber
 				return
 			}
 			node.value!.ackPromise?.succeed()
-			outboundOutBuffer.remove(node)
+			outboundInBuffer.remove(node)
 		}
 		snd_una = snd_nxt
 	}
@@ -340,16 +287,16 @@ extension KCPControlBlock {
 			return
 		}
 		defer {
-			if let node = outboundOutBuffer.front {
+			if let node = outboundInBuffer.front {
 				snd_una = node.value!.data.header.sequenceNumber
 			} else {
 				snd_una = snd_nxt
 			}
 		}
-		segLoop: for (curNode, seg) in outboundOutBuffer.makeIterator() {
+		segLoop: for (curNode, seg) in outboundInBuffer.makeIterator() {
 			guard seg.data.header.sequenceNumber != sn else {
 				curNode.value!.ackPromise?.succeed()
-				outboundOutBuffer.remove(curNode)
+				outboundInBuffer.remove(curNode)
 				break segLoop
 			}
 			guard Int32(bitPattern:sn &- seg.data.header.sequenceNumber) >= 0 else {
@@ -379,40 +326,32 @@ extension KCPControlBlock {
 	}
 }
 
+// MARK: Sending
 extension KCPControlBlock {
-	public func send(_ inputBuffer: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) -> Bool {
-		let count = (inputBuffer.readableBytes + Int(mss) - 1) / Int(mss)
-		var bufferIsFull = false
-		if (UInt32(count) + sendBuffer.count < snd_wnd ) {
-			bufferIsFull = true
-		}
+	public func handleWrite(context:ChannelHandlerContext, handler:KcpControlBlockHandler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) {
+		let now = iclock()
+		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
 
-		var i = 0
-		for offset in stride(from: 0, to: inputBuffer.readableBytes, by: Int(mss)) {
-			let fragSize = min(Int(mss), inputBuffer.readableBytes - offset)
+		for offset in stride(from: 0, to: message.readableBytes, by: Int(mss)) {
+			let fragSize = min(Int(mss), message.readableBytes - offset)
 			
-			let view = inputBuffer.getSlice(at: inputBuffer.readerIndex + offset, length: fragSize)
+			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
 
-			let header = KCPSegment.Header(conv: conv, cmd: .push, frg: UInt8(count - i - 1), sn: snd_nxt, len: UInt32(fragSize))
+			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size: 0, frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:now, una:rcv_nxt, len: UInt32(fragSize))
 			snd_nxt &+= 1
-			let seg = KCPSegment(header: header, data: view!.readableBytesView)
+			var seg = KCPSegment(header: header, data: view!.readableBytesView)
 			
-			if (i == count-1) {
-				sendBuffer.addTail((seg, writePromise, ackPromise))
+			seg.runtimeMetadata.xmit = 1
+			seg.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
+			seg.runtimeMetadata.resendts = now &+ seg.runtimeMetadata.rto
+			log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(seg.header.sequenceNumber)", "segment_command":"\(seg.header.command)", "segment_data_length":"\(seg.header.dataLength)", "segment_fragment_id":"\(seg.header.fragmentID)", "segment_timestamp":"\(seg.header.timestamp)", "segment_una":"\(seg.header.una)"])
+			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:seg)), promise:writePromise)
+			if (offset/Int(mss) == count-1) {
+				outboundInBuffer.addTail((seg, writePromise, ackPromise))
 			} else {
-				sendBuffer.addTail((seg, nil, nil))
+				outboundInBuffer.addTail((seg, nil, nil))
 			}
-			
-			i += 1
 		}
-		return bufferIsFull
-	}
-
-	private func wndUnused() -> UInt16 {
-		if (receiveQueue.count < rcv_wnd) {
-			return UInt16(rcv_wnd - receiveQueue.count)
-		}
-		return 0
 	}
 
 	// KCP Flush
@@ -420,11 +359,11 @@ extension KCPControlBlock {
 	// - Sends any pending Probes
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
-	public func getOutboundSegments(context:ChannelHandlerContext, handler:KcpControlBlockHandler) -> [(KCPSegment, EventLoopPromise<Void>?)]{	
+	public func resendAndProbe(context:ChannelHandlerContext, handler:KcpControlBlockHandler) {
 		let now = iclock()
 
-		// only manage probes if we have nothing to send
-		if rmt_wnd == 0 || outboundOutBuffer.count == 0 {
+		// only manage probes if we have nothing to receive
+		if inboundInBuffer.count == 0 {
 			// Update probe time variables and prepare send ask_probe if needed
 			if probeInfo.probe_wait == 0 {
 				probeInfo.probe_wait = IKCP_PROBE_INIT
@@ -437,55 +376,36 @@ extension KCPControlBlock {
 					probeInfo.probe_wait = IKCP_PROBE_LIMIT
 				}
 				probeInfo.ts_probe = now + probeInfo.probe_wait
-				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:wndUnused(), frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
+				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:0, frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
 			}
 		} else {
 			probeInfo.ts_probe = 0
 			probeInfo.probe_wait = 0
 		}
 		
-		let useCwnd = min(min(snd_wnd, rmt_wnd), cwndInfo.cwnd)
-
-		var lost = false
 		var count = 0
-		for (node, seg) in outboundOutBuffer.makeIterator() {
+		for (node, seg) in outboundInBuffer.makeIterator() {
 			defer {
 				count &+= 1
 			}
-			if seg.data.runtimeMetadata.xmit == 0 {
-				node.value!.data.runtimeMetadata.xmit = 1
-				node.value!.data.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
-				node.value!.data.runtimeMetadata.resendts = now &+ node.value!.data.runtimeMetadata.rto
-				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)
-			} else if itimeDiff(later:now, earlier:seg.data.runtimeMetadata.resendts) >= 0 {
+			if itimeDiff(later:now, earlier:seg.data.runtimeMetadata.resendts) >= 0 {
 				node.value!.data.runtimeMetadata.xmit &+= 1
 				node.value!.data.runtimeMetadata.rto = node.value!.data.runtimeMetadata.rto &+ (node.value!.data.runtimeMetadata.rto / 2)
 				node.value!.data.runtimeMetadata.resendts = now &+ node.value!.data.runtimeMetadata.rto
-				lost = true
+				node.value!.data.header.timestamp = now
+				node.value!.data.header.una = rcv_nxt
+				log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(node.value!.data.header.sequenceNumber)", "segment_command":"\(node.value!.data.header.command)", "segment_data_length":"\(node.value!.data.header.dataLength)", "segment_fragment_id":"\(node.value!.data.header.fragmentID)", "segment_timestamp":"\(node.value!.data.header.timestamp)", "segment_una":"\(node.value!.data.header.una)"])
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)
+				
 				// Dead link occured. Wipe send queue
 				if node.value!.data.runtimeMetadata.xmit >= 20 {
-					for (node, _) in outboundOutBuffer.makeIterator() {
+					for (node, _) in outboundInBuffer.makeIterator() {
 						node.value!.ackPromise?.fail(DeadlinkError())
 					}
-					outboundOutBuffer.clear()
+					outboundInBuffer.clear()
 					break
 				}
 			}
-			guard count < snd_wnd else {
-				break
-			}
-		}
-		
-		if lost == true {
-			cwndInfo.ssthresh = useCwnd / 2
-			if cwndInfo.ssthresh < IKCP_THRESH_MIN { cwndInfo.ssthresh = IKCP_THRESH_MIN }
-			self.cwndInfo.cwnd = 1
-			cwndInfo.incr = mss
-		}
-		if cwndInfo.cwnd < 1 {
-			self.cwndInfo.cwnd = 1
-			cwndInfo.incr = mss
 		}
 	}
 }

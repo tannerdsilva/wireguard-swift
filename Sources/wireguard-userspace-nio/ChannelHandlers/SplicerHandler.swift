@@ -20,11 +20,11 @@ extension Array {
 
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = (PublicKey, ByteBuffer) // From kcp handler, needs to be stitched together
+	internal typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
 	public typealias InboundOut = (PublicKey, [UInt8]) // Send to the Handoff handler
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
-	internal typealias OutboundOut = (PublicKey, ByteBuffer) // Send spliced data to kcp handler
+	internal typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
 	
 	private var logger:Logger
 	
@@ -49,7 +49,9 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 	// Received kcp segment. Need to stitch together and send to handoff handler
 	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-		let (key, byteBuffer) = unwrapInboundIn(data)
+		let inboundIn = unwrapInboundIn(data)
+		let key = inboundIn.publicKey
+		let byteBuffer = inboundIn.associatedValue
 		let data: [UInt8] = byteBuffer.getBytes(at: byteBuffer.readerIndex, length: byteBuffer.readableBytes)!
 		
 		guard storedLengths[key] != nil else {
@@ -107,7 +109,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		logger.trace("channel is writable, flushing buffered writes...")
 		for ((publicKey, buffer), promise) in pendingWrites {
 			logger.trace("writing buffered packet...", metadata:["bytes_written":"\(buffer.readableBytes)", "remote_address":"\(publicKey)"])
-			context.writeAndFlush(wrapOutboundOut((publicKey, buffer)), promise:promise)
+			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey: publicKey, associatedValue: buffer)), promise:promise)
 		}
 		// context.flush()
 		pendingWrites.removeAll()
@@ -119,7 +121,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			pendingWrites.append((payload:(key, buffer), promise:promise))
 		} else {
 			logger.trace("writing spliced packet...", metadata:["bytes_written":"\(buffer.readableBytes)"])
-			context.writeAndFlush(wrapOutboundOut((key, buffer)), promise: promise)
+			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey: key, associatedValue: buffer)), promise: promise)
 		}
 	}
 	

@@ -25,7 +25,6 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 	
 	// kcp control blocks: index 0 is the newest control block
 	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
-	private var frozenTime:UInt64 = 0
 	private var updateTask:RepeatedTask?
 	private var kcpUpdateTime:TimeAmount = .milliseconds(30)
 
@@ -34,15 +33,17 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
     private let ourKey:PublicKey
 	private let logger:Logger
 
+	let mtu:Int
 	var count = 0
 		
-	internal init(key:MemoryGuarded<PrivateKey>, logLevel:Logger.Level) {
+	internal init(key:MemoryGuarded<PrivateKey>, mtu:Int = 1400, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 
         ourKey = PublicKey(privateKey: key)
 		buffer = ByteBuffer()
+		self.mtu = mtu
 	}
 
 	private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
@@ -57,7 +58,12 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 			l.trace("kcp update triggered")
 			for (key, _) in kcp {
 				c.accessContext({ contextPointer in
-					writeOutboundOut(key: key, context: contextPointer.pointee)
+					var i = 0
+					var isWritten = false
+					while i < kcp[key]!.count {
+						kcp[key]![i].resendAndProbe(context: contextPointer.pointee, handler: self)
+					}
+					contextPointer.pointee.flush()
 				})
 			}
 		}
@@ -95,20 +101,18 @@ extension KcpControlBlockHandler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
-			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
-			kcp[key]![0].setNoDelay(1, nc:0)
+			kcp[key, default: []].append(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 			scheduleRepeatedKCPUpdates(context: context)
 		}
         
 		// imp segment
-		do {
-			logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
-			let inboundOutBuffers = try input(key: key, segment: data.associatedValue, context: context)
-			for buffer in inboundOutBuffers {
-				context.fireChannelRead(wrapInboundOut((key, buffer)))
+		logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
+		for i in 0..<kcp[key]!.count {
+			do {
+				try kcp[key]![i].handleChannelRead(context: context, handler: self, associatedSegment: data)
+			} catch {
+				continue
 			}
-		} catch let error {
-			logger.error("error reading kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
 	}
 }
@@ -124,20 +128,20 @@ extension KcpControlBlockHandler {
 
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		var (key, data) = unwrapOutboundIn(data)
+		var data = unwrapOutboundIn(data)
+		let key = data.publicKey
 		// Check if control block exists
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
-			kcp[key, default: []].append(KCPControlBlock(conv: magicID))
-			kcp[key]![0].setNoDelay(1, nc:0)
+			kcp[key, default: []].append(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 			scheduleRepeatedKCPUpdates(context: context)
 		}
 
 		// Send data to control block
 		do {
-			logger.trace("Sending kcp segment", metadata: ["size": "\(data.readableBytes) bytes"])
-			_ = self.kcp[key]![0].send(data, ackPromise: promise)
+			logger.trace("Sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
+			self.kcp[key]![0].handleWrite(context: context, handler: self, message: data.associatedValue)
 		} catch {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -168,15 +172,9 @@ extension KcpControlBlockHandler {
 		}
 		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
 		if (context.channel.isWritable) {
-			for k in kcp.keys {
-				for i in 0..<kcp[k]!.count {
-					kcp[k]![i].delay += NIODeadline.now().uptimeNanoseconds - frozenTime
-				}
-			}
 			scheduleRepeatedKCPUpdates(context: context)
 		} else {
 			if (updateTask != nil) {
-				frozenTime = NIODeadline.now().uptimeNanoseconds
 				logger.debug("Cancelling repeated scheduled task")
 				updateTask!.cancel()
 			}
@@ -193,42 +191,5 @@ extension KcpControlBlockHandler {
 		try hasher.update(key2)
 		var h = try hasher.finish()
 		return h.RAW_native()
-	}
-
-	private func writeOutboundOut(key:PublicKey, context: ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-
-		var i = 0
-		var isWritten = false
-		while i < kcp[key]!.count {
-			let outboundOutSegments = kcp[key]![i].getOutboundSegments(byteBuffer: &buffer)
-
-			for segment in outboundOutSegments {
-				logger.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(key)", "segment_sequence_number":"\(segment.0.header.sequenceNumber)", "segment_command":"\(segment.0.header.command)", "segment_data_length":"\(segment.0.header.dataLength)", "segment_fragment_id":"\(segment.0.header.fragmentID)", "segment_timestamp":"\(segment.0.header.timestamp)", "segment_una":"\(segment.0.header.una)"])
-				context.write(wrapOutboundOut(PeerAssociated<KCPSegment>(publicKey: key, segment: segment.0)), promise: segment.1)
-				isWritten = true
-			}
-			i += 1
-		}
-		context.flush()
-	}
-
-	private func input(key:PublicKey, segment: KCPSegment, context:ChannelHandlerContext) throws -> [ByteBuffer]{
-		for i in 0..<kcp[key]!.count {
-			do {
-				let ret = try kcp[key]![i].input(segment, context: context)
-				// Get acks and write them
-				let acks = kcp[key]![i].getSendableAckSegments()
-				for ack in acks {
-					context.write(wrapOutboundOut(PeerAssociated<KCPSegment>(publicKey: key, segment: ack)), promise: nil)
-				}
-				return ret
-			} catch {
-				continue
-			}
-		}
-		return []
 	}
 }
