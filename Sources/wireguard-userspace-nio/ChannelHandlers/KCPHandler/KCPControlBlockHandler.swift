@@ -58,9 +58,7 @@ internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sen
 			l.trace("kcp update triggered")
 			for (key, _) in kcp {
 				c.accessContext({ contextPointer in
-					var i = 0
-					var isWritten = false
-					while i < kcp[key]!.count {
+					for i in  0..<kcp[key]!.count {
 						kcp[key]![i].resendAndProbe(context: contextPointer.pointee, handler: self)
 					}
 					contextPointer.pointee.flush()
@@ -119,13 +117,6 @@ extension KcpControlBlockHandler {
 
 // Channel Write
 extension KcpControlBlockHandler {
-	internal func flush(context:ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		logger.trace("caught flush signal.")
-	}
-
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var data = unwrapOutboundIn(data)
@@ -141,7 +132,7 @@ extension KcpControlBlockHandler {
 		// Send data to control block
 		do {
 			logger.trace("Sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
-			self.kcp[key]![0].handleWrite(context: context, handler: self, message: data.associatedValue)
+			self.kcp[key]![0].handleWrite(context: context, handler: self, message: data.associatedValue, writePromise: promise)
 		} catch {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
