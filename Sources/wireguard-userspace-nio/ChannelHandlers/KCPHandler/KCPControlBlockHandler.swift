@@ -16,63 +16,64 @@ enum KCPError:Swift.Error {
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian: true)
 struct MagicID:Sendable {}
 
-internal final class KcpControlBlockHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = PeerAssociated<KCPSegment>
-	internal typealias InboundOut = PeerAssociated<ByteBuffer>
-	
-	internal typealias OutboundIn = PeerAssociated<ByteBuffer>
-	internal typealias OutboundOut = PeerAssociated<KCPSegment>
-	
-	// kcp control blocks: index 0 is the newest control block
-	private var kcp:[PublicKey:[KCPControlBlock]] = [:]
-	private var updateTask:RepeatedTask?
-	private var kcpUpdateTime:TimeAmount = .milliseconds(30)
+@available(*, deprecated, renamed:"KCPControlBlockHandler")
+internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
 
-	private var buffer:ByteBuffer
-	
-    private let ourKey:PublicKey
-	private let logger:Logger
-
-	let mtu:Int
-	var count = 0
+extension KCPControlBlock {
+	internal final class Handler:ChannelDuplexHandler, @unchecked Sendable {
+		internal typealias InboundIn = PeerAssociated<KCPSegment>
+		internal typealias InboundOut = PeerAssociated<ByteBuffer>
 		
-	internal init(key:MemoryGuarded<PrivateKey>, mtu:Int = 1400, logLevel:Logger.Level) {
-		var buildLogger = Logger(label:"\(String(describing:Self.self))")
-		buildLogger.logLevel = logLevel
-		logger = buildLogger
+		internal typealias OutboundIn = PeerAssociated<ByteBuffer>
+		internal typealias OutboundOut = PeerAssociated<KCPSegment>
+		
+		// kcp control blocks: index 0 is the newest control block
+		private var kcp:[PublicKey:[KCPControlBlock]] = [:]
+		private var updateTask:RepeatedTask?
+		private var kcpUpdateTime:TimeAmount = .milliseconds(30)
+		
+		private let ourKey:PublicKey
+		private let logger:Logger
 
-        ourKey = PublicKey(privateKey: key)
-		buffer = ByteBuffer()
-		self.mtu = mtu
-	}
+		let mtu:Int
+		var count = 0
+			
+		internal init(key:MemoryGuarded<PrivateKey>, mtu:Int = 1400, logLevel:Logger.Level) {
+			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			buildLogger.logLevel = logLevel
+			logger = buildLogger
 
-	private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
-		if updateTask != nil {
-			updateTask!.cancel()
-			logger.trace("kcp update task task cancelled")
+			ourKey = PublicKey(privateKey: key)
+			self.mtu = mtu
 		}
-		
-		updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
-			[weak self, l = logger, c = ContextContainer(context:context)] _ in
-			guard let self = self else { return }
-			l.trace("kcp update triggered")
-			for (key, _) in kcp {
-				c.accessContext({ contextPointer in
-					for i in  0..<kcp[key]!.count {
-						kcp[key]![i].resendAndProbe(context: contextPointer.pointee, handler: self)
-					}
-					contextPointer.pointee.flush()
-				})
+
+		private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
+			if updateTask != nil {
+				updateTask!.cancel()
+				logger.trace("kcp update task task cancelled")
 			}
-		}
+			
+			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
+				[weak self, l = logger, c = ContextContainer(context:context)] _ in
+				guard let self = self else { return }
+				for (key, _) in kcp {
+					c.accessContext({ contextPointer in
+						for i in  0..<kcp[key]!.count {
+							kcp[key]![i].resendAndProbe(context: contextPointer.pointee, handler: self)
+						}
+						contextPointer.pointee.flush()
+					})
+				}
+			}
 
-		logger.debug("kcp update task scheduled")
+			logger.debug("kcp update task scheduled")
+		}
+		
 	}
-	
 }
 
 // Basic Events
-extension KcpControlBlockHandler {
+extension KCPControlBlock.Handler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		logger.trace("handler added to NIO pipeline.")
 	}
@@ -83,7 +84,7 @@ extension KcpControlBlockHandler {
 }
 
 // Channel Read
-extension KcpControlBlockHandler {
+extension KCPControlBlock.Handler {
 	internal func channelReadComplete(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -102,7 +103,7 @@ extension KcpControlBlockHandler {
 			kcp[key, default: []].append(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 			scheduleRepeatedKCPUpdates(context: context)
 		}
-        
+		
 		// imp segment
 		logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
 		for i in 0..<kcp[key]!.count {

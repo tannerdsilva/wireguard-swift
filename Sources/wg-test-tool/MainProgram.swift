@@ -76,7 +76,7 @@ struct CLI:AsyncParsableCommand {
 			var cliLogger = Logger(label: "wg-test-tool.initiator")
 			cliLogger.logLevel = .trace
 			let peers = [Peer(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(15))]
-			let interface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:peers, logLevel:.trace)
+			let interface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:peers, logLevel:.trace)
 			Task {
 				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
 				try await interface.waitForChannelInit()
@@ -128,10 +128,10 @@ struct CLI:AsyncParsableCommand {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.critical, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.critical, listeningPort: 36001)
 				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, initialConfiguration:peerPeers, logLevel:.critical, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.critical, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -179,7 +179,7 @@ struct CLI:AsyncParsableCommand {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()
@@ -232,7 +232,7 @@ struct CLI:AsyncParsableCommand {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey:respondersPublicKey, ipAddress:ipAddress, port: port, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()

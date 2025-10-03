@@ -63,7 +63,7 @@ LAW OF THE LAND
 =================
 
 nodelay = 1 ALWAYS. this is not a param but a hard coded reality of the architecture of this project.
-nocwnd NEVER. there will NOT be a congestion window under ALL circumstances.
+nocwnd NEVER. there WILL be a congestion window under ALL circumstances.
 
 */
 
@@ -149,9 +149,10 @@ internal final class KCPControlBlock {
 		#endif
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
+		buildLogger[metadataKey: "public-key_peer"] = "\(peerPublicKey)"
 		self.log = buildLogger
 		self.peerPublicKey = peerPublicKey
-		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * 256)))
+		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * UInt32(UInt8.max) /* UInt8.max represents the maximum number of fragments possible */)))
 		self.conv = conv
 		self.mtu = mtu
 	}
@@ -160,10 +161,13 @@ internal final class KCPControlBlock {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		
+		var logger = log
 		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
 			context.flush()
 			outboundOutSegmentsWrittenSinceChannelReadComplete = 0
+			logger.trace("flushed \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments written since last channel read complete")
+		} else {
+			logger.trace("no segments written since last channel read complete; skipping flush", metadata: ["segments_written":"\(outboundOutSegmentsWrittenSinceChannelReadComplete)"])
 		}
 	}
 
@@ -171,7 +175,11 @@ internal final class KCPControlBlock {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		
+		guard associatedSegment.publicKey == peerPublicKey else {
+			fatalError("internal logic error: associated segment public key does not match control block public key. \(#file):\(#line)")
+		}
+		var logger = log
+		logger.trace("handling channel read")
 		let now = iclock()
 		let previousUna = snd_una
 
@@ -213,7 +221,6 @@ internal final class KCPControlBlock {
 // MARK: Parse Inbound
 extension KCPControlBlock {
 	/// parse inbound data segment from a handler with its context
-	/// - returns: the number of messages fired to the next pipeline reader
 	private func parseInbound(data segment:KCPSegment, handler:KcpControlBlockHandler, context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()

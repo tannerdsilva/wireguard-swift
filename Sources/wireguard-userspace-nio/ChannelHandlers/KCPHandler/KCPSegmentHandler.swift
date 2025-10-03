@@ -43,7 +43,7 @@ extension PeerAssociated where AssociatedType == ByteBuffer {
 
 extension KCPSegment {
 	/// used to stack multiple kcp segments into a single payload less than MTU size
-	internal struct MTUStacking:Sendable {
+	fileprivate struct MTUStacking:Sendable {
 		/// the maximum transmission unit that is configured for this handler
 		private let transmitMTU:UInt16
 
@@ -112,7 +112,6 @@ extension KCPSegment {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
-			var didWrite = false
 			for (publicKey, buffer) in segmentStack {
 				guard context.channel.isWritable == true else {
 					pendingWrites.append((payload:PeerPayload(publicKey:publicKey, buffer:buffer), promise:promiseStack[publicKey]!))
@@ -131,7 +130,6 @@ extension KCPSegment {
 							break
 					}
 				})
-				didWrite = true
 			}
 			segmentStack.removeAll(keepingCapacity:true)
 			promiseStack.removeAll(keepingCapacity:true)
@@ -212,7 +210,7 @@ extension KCPSegment.Handler {
 		var i = 0
 		while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {
 			i += 1
-			logger.debug("decoded kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)", "segment_sequence_number":"\(segment.header.sequenceNumber)", "segment_command":"\(segment.header.command)", "segment_data_length":"\(segment.header.dataLength)", "segment_fragment_id":"\(segment.header.fragmentID)", "segment_timestamp":"\(segment.header.timestamp)", "segment_una":"\(segment.header.una)"])
+			logger.trace("decoded kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)", "segment_sequence_number":"\(segment.header.sequenceNumber)", "segment_command":"\(segment.header.command)", "segment_data_length":"\(segment.header.dataLength)", "segment_fragment_id":"\(segment.header.fragmentID)", "segment_timestamp":"\(segment.header.timestamp)", "segment_una":"\(segment.header.una)"])
 			context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 		}
 		
@@ -259,6 +257,8 @@ extension KCPSegment.Handler {
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)
+		if context.channel.isWritable == false {
+		}
 		if writtenStack.stack(segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, context:context, handler:self) == true {
 			outboundOutCount += 1
 		}
