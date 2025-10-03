@@ -144,10 +144,10 @@ extension WireguardSwiftTests {
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, listeningPort: 36001)
 
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.trace, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.debug, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -208,7 +208,7 @@ extension WireguardSwiftTests {
 				try await peerInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.asyncWrite(publicKey: peerPublicKey, data: payload1)
+				try await myInterface.write(publicKey: peerPublicKey, data: payload1)
 				
 				cliLogger.info("Sending second data packet...")
 				try await myInterface.write(publicKey: peerPublicKey, data: payload2)

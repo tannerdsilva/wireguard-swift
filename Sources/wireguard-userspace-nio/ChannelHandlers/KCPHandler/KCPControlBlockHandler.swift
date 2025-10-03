@@ -13,9 +13,19 @@ internal struct MagicID:Sendable {}
 internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
 
 internal final class KCPLivePeer {
-	private var magicControlBlock:KCPControlBlock? = nil
 	/// the rolling set of control blocks associated with this peer. index 0 is the newest control block.
 	private var controlBlocks:[KCPControlBlock] = []
+	
+	private let logger:Logger
+	private let mtu:Int
+	
+	init(mtu:Int, logLevel:Logger.Level) {
+		var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
+		buildLogger.logLevel = logLevel
+		logger = buildLogger
+		
+		self.mtu = mtu
+	}
 	
 	internal var count:Int {
 		get {
@@ -25,6 +35,15 @@ internal final class KCPLivePeer {
 
 	internal func insertLatestControlBlock(_ block:KCPControlBlock) {
 		controlBlocks.insert(block, at:0)
+		if(controlBlocks.count == 1) {
+			controlBlocks[0].isActiveReceiver = true
+		}
+		for i in 0..<controlBlocks.count {
+			if(controlBlocks[i].isActiveReceiver) {
+				logger.debug("Inserting new control block", metadata: ["activeBlock": "\(i)"])
+			}
+		}
+		
 	}
 
 	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws {
@@ -40,10 +59,33 @@ internal final class KCPLivePeer {
 				continue
 			}
 		}
+		rotateActiveControlBlock(context: context, handler: handler)
 	}
 
 	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
-		controlBlocks[0].resendAndProbe(context: context, handler: handler)
+		for i in  0..<controlBlocks.count {
+			controlBlocks[i].resendAndProbe(context: context, handler: handler)
+		}
+		context.flush()
+	}
+	
+	internal func rotateActiveControlBlock(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
+		guard controlBlocks.count >= 2 else {
+			guard controlBlocks.count == 1 else {
+				return
+			}
+			controlBlocks[0].isActiveReceiver = true
+			return 
+		}
+		for i in 1..<(controlBlocks.count) {
+			if (controlBlocks[i].isActiveReceiver && controlBlocks[i].isInactive) {
+				controlBlocks[i].isActiveReceiver = false
+				controlBlocks[i-1].isActiveReceiver = true
+				controlBlocks[i-1].writeAllInboundOut(handler: handler, context: context)
+				logger.debug("Rotating control block", metadata: ["newActiveIndex": "\(i-1)"])
+				return
+			}
+		}
 	}
 }
 
@@ -83,14 +125,11 @@ extension KCPControlBlock {
 			}
 			
 			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
-				[weak self, l = logger, c = ContextContainer(context:context)] _ in
+				[weak self, c = ContextContainer(context:context)] _ in
 				guard let self = self else { return }
 				for (key, _) in kcp {
 					c.accessContext({ contextPointer in
-						for i in  0..<kcp[key]!.count {
-							kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self)
-						}
-						contextPointer.pointee.flush()
+						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self)
 					})
 				}
 			}
@@ -105,6 +144,7 @@ extension KCPControlBlock {
 extension KCPControlBlock.Handler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		logger.trace("handler added to NIO pipeline.")
+		scheduleRepeatedKCPUpdates(context: context)
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
@@ -129,13 +169,13 @@ extension KCPControlBlock.Handler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
-			kcp[key, default: KCPLivePeer()].insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
-			scheduleRepeatedKCPUpdates(context: context)
+			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 		}
 		
-		// imp segment
+		// input segment
 		logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
-		try kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data)
+		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data)
 	}
 }
 
@@ -143,14 +183,14 @@ extension KCPControlBlock.Handler {
 extension KCPControlBlock.Handler {
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		var data = unwrapOutboundIn(data)
+		let data = unwrapOutboundIn(data)
 		let key = data.publicKey
 		// Check if control block exists
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
-			kcp[key, default: KCPLivePeer()].insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
-			scheduleRepeatedKCPUpdates(context: context)
+			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 		}
 
 		// Send data to control block
@@ -172,6 +212,15 @@ extension KCPControlBlock.Handler {
 				logger.debug("Resetting kcp", metadata: ["public-key_remote":"\(evt.publicKey)"])
 				// Need to figure out how to make this into a conversation id
 				let key = evt.publicKey
+				let convID = evt.geometry.initiator.RAW_native()
+				// Check if control block exists
+				if (kcp[key] == nil) {
+					// Create the magic id control block
+					let magicID = try! magicID(key1: ourKey, key2: key)
+					kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
+					kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
+				}
+				kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: convID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 				
 			default:
 				context.fireUserInboundEventTriggered(event)

@@ -232,7 +232,7 @@ struct CLI:AsyncParsableCommand {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey:respondersPublicKey, ipAddress:ipAddress, port: port, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()

@@ -143,6 +143,12 @@ internal struct KCPControlBlock {
 
 	/// counts the number of kcp segments that were written to the outboundInBuffer for each cycle of reading. used at `channelReadComplete` to determine if a flush is needed
 	internal var outboundOutSegmentsWrittenSinceChannelReadComplete:Int = 0
+	
+	/// info on whether the kcpcb has seen recent activity. Can only becomes false when a probe is received.
+	public var isInactive:Bool = false
+	
+	/// info on whether this control block is the active receiver. kcpcb can only write inboundOut if it's the active receiver
+	public var isActiveReceiver = false
 
 	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, logLevel:Logger.Level) {
 		#if DEBUG
@@ -202,7 +208,6 @@ internal struct KCPControlBlock {
 				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:0, frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:associatedSegment.associatedValue.header.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
 				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
-				
 				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
 					parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
 				}
@@ -211,8 +216,12 @@ internal struct KCPControlBlock {
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackResponseSeg)), promise:nil)
 				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
 			case KCPSegment.Command.probeResponse:
-				// nothing to do here
+				// Nothing to do
 			break;
+		}
+		// Check for inactivity
+		if(associatedSegment.associatedValue.header.sequenceNumber == rcv_nxt && associatedSegment.associatedValue.header.una == snd_nxt) {
+			isInactive = true
 		}
 	}
 }
@@ -247,9 +256,13 @@ extension KCPControlBlock {
 				inboundInBuffer.add(segment)
 			}
 		}
-
+		
+		writeAllInboundOut(handler: handler, context: context)
+	}
+	
+	public mutating func writeAllInboundOut(handler:KcpControlBlockHandler, context:ChannelHandlerContext) {
 		// loop through any continuous segments in the receive buffer and write them to the outbound out byte buffer
-		while let firstNode = inboundInBuffer.front, firstNode.value!.header.sequenceNumber == rcv_nxt  {
+		while let firstNode = inboundInBuffer.front, firstNode.value!.header.sequenceNumber == rcv_nxt, isActiveReceiver  {
 			// remove the node from the receive buffer and add it to the receive queue
 			// start by popping it from the receive buffer
 			inboundInBuffer.remove(firstNode)
@@ -359,6 +372,7 @@ extension KCPControlBlock {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
 		}
+		isInactive = false
 	}
 
 	// KCP Flush
@@ -383,7 +397,8 @@ extension KCPControlBlock {
 					probeInfo.probe_wait = IKCP_PROBE_LIMIT
 				}
 				probeInfo.ts_probe = now + probeInfo.probe_wait
-				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:0, frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
+				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:0, frg:0, sn:snd_nxt, ts:0, una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
+				log.trace("writing probe request")
 			}
 		} else {
 			probeInfo.ts_probe = 0
