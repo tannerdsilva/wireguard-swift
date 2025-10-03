@@ -5,19 +5,48 @@ import RAW_blake2
 import Logging
 import wireguard_crypto_core
 
-enum KCPError:Swift.Error {
-	/// The connection has been declared dead (max retransmits hit).
-	case deadLink
-	/// There are no control blocks active
-	case noControlBlocks
+@RAW_staticbuff(bytes: 4)
+@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
+internal struct MagicID:Sendable {}
+
+@available(*, deprecated, renamed:"KCPControlBlock.Handler")
+internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
+
+internal final class KCPLivePeer {
+	private var magicControlBlock:KCPControlBlock? = nil
+	/// the rolling set of control blocks associated with this peer. index 0 is the newest control block.
+	private var controlBlocks:[KCPControlBlock] = []
+	
+	internal var count:Int {
+		get {
+			return controlBlocks.count
+		}
+	}
+
+	internal func insertLatestControlBlock(_ block:KCPControlBlock) {
+		controlBlocks.insert(block, at:0)
+	}
+
+	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws {
+		controlBlocks[0].handleWrite(context: context, handler: handler, message: message, writePromise: writePromise, ackPromise: ackPromise)
+	}
+
+	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>) {
+		cbLoop: for i in 0..<controlBlocks.count {
+			do {
+				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment)
+				break cbLoop
+			} catch {
+				continue
+			}
+		}
+	}
+
+	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
+		controlBlocks[0].resendAndProbe(context: context, handler: handler)
+	}
 }
 
-@RAW_staticbuff(bytes: 4)
-@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian: true)
-struct MagicID:Sendable {}
-
-@available(*, deprecated, renamed:"KCPControlBlockHandler")
-internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
 
 extension KCPControlBlock {
 	internal final class Handler:ChannelDuplexHandler, @unchecked Sendable {
@@ -28,7 +57,7 @@ extension KCPControlBlock {
 		internal typealias OutboundOut = PeerAssociated<KCPSegment>
 		
 		// kcp control blocks: index 0 is the newest control block
-		private var kcp:[PublicKey:[KCPControlBlock]] = [:]
+		private var kcp:[PublicKey:KCPLivePeer] = [:]
 		private var updateTask:RepeatedTask?
 		private var kcpUpdateTime:TimeAmount = .milliseconds(30)
 		
@@ -39,11 +68,11 @@ extension KCPControlBlock {
 		var count = 0
 			
 		internal init(key:MemoryGuarded<PrivateKey>, mtu:Int = 1400, logLevel:Logger.Level) {
-			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			logger = buildLogger
 
-			ourKey = PublicKey(privateKey: key)
+			ourKey = PublicKey(privateKey:key)
 			self.mtu = mtu
 		}
 
@@ -59,7 +88,7 @@ extension KCPControlBlock {
 				for (key, _) in kcp {
 					c.accessContext({ contextPointer in
 						for i in  0..<kcp[key]!.count {
-							kcp[key]![i].resendAndProbe(context: contextPointer.pointee, handler: self)
+							kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self)
 						}
 						contextPointer.pointee.flush()
 					})
@@ -100,24 +129,18 @@ extension KCPControlBlock.Handler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
-			kcp[key, default: []].append(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
+			kcp[key, default: KCPLivePeer()].insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 			scheduleRepeatedKCPUpdates(context: context)
 		}
 		
 		// imp segment
 		logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
-		for i in 0..<kcp[key]!.count {
-			do {
-				try kcp[key]![i].handleChannelRead(context: context, handler: self, associatedSegment: data)
-			} catch {
-				continue
-			}
-		}
+		try kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data)
 	}
 }
 
 // Channel Write
-extension KcpControlBlockHandler {
+extension KCPControlBlock.Handler {
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var data = unwrapOutboundIn(data)
@@ -126,14 +149,14 @@ extension KcpControlBlockHandler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
-			kcp[key, default: []].append(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
+			kcp[key, default: KCPLivePeer()].insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
 			scheduleRepeatedKCPUpdates(context: context)
 		}
 
 		// Send data to control block
 		do {
 			logger.trace("Sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
-			self.kcp[key]![0].handleWrite(context: context, handler: self, message: data.associatedValue, writePromise: promise)
+			try kcp[key]!.handleWrite(context: context, handler: self, message: data.associatedValue, writePromise: promise, ackPromise:nil)
 		} catch {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
@@ -141,7 +164,7 @@ extension KcpControlBlockHandler {
 }
 
 // Channel user events
-extension KcpControlBlockHandler {
+extension KCPControlBlock.Handler {
 	// Inbound events (Handshake Reset)
 	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
 		switch event {
@@ -157,7 +180,7 @@ extension KcpControlBlockHandler {
 	}
 }
 
-extension KcpControlBlockHandler {
+extension KCPControlBlock.Handler {
 	func channelWritabilityChanged(context: ChannelHandlerContext) {
 		defer {
 			context.fireChannelWritabilityChanged()
@@ -175,8 +198,7 @@ extension KcpControlBlockHandler {
 }
 
 // Control Block Helper Functions
-extension KcpControlBlockHandler {
-
+extension KCPControlBlock.Handler {
 	private func magicID(key1:PublicKey, key2:PublicKey) throws -> UInt32 {
 		var hasher = try WGHasher<MagicID>()
 		try hasher.update(key1)

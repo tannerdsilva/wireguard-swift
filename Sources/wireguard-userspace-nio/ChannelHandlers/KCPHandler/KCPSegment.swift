@@ -31,14 +31,14 @@ internal struct KCPSegment:Sendable, Hashable {
 
 		// not sure which of these stored instance varaibles should be `var` vs `let`, I would like to make a conclusive decision on this when the timing is right.
 
-		internal init(conv:UInt32, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt32, una:UInt32, len:UInt32) {
+		internal init(conv:UInt32, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt32, una unacknowledged:UInt32, len:UInt32) {
 			conversationID = conv
 			command = cmd
 			fragmentID = frg
 			receiveWindowSize = rcv_wnd_size
 			timestamp = ts
 			sequenceNumber = sn
-			self.una = una
+			una = unacknowledged
 			dataLength = len
 		}
 
@@ -131,7 +131,7 @@ extension KCPSegment {
 		internal var resendts:UInt32 = 0
 		/// retransmission timeout. computed based on the round trip time.
 		internal var rto:UInt32 = 0
-		/// fast ack counter. incremented when duplicate packets are received.
+		/// fast ack counter.
 		internal var fastack:UInt32 = 0
 		/// transmit count. incremented when this segment is sent.
 		internal var xmit:UInt32 = 0

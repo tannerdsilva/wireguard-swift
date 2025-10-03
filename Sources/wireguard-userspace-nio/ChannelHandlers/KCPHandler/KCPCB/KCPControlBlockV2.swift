@@ -68,10 +68,11 @@ nocwnd NEVER. there WILL be a congestion window under ALL circumstances.
 */
 
 extension KCPControlBlock {
+	/// thrown when a kcp control block reaches a dead link state.
 	internal struct DeadlinkError:Swift.Error {}
 }
 
-internal final class KCPControlBlock {
+internal struct KCPControlBlock {
 	/// the public key of the peer this control block is associated with
 	internal let peerPublicKey:PublicKey
 	/// the context of the channel this control block is associated with
@@ -157,7 +158,7 @@ internal final class KCPControlBlock {
 		self.mtu = mtu
 	}
 
-	internal func handleChannelReadComplete(context:ChannelHandlerContext, handler:KcpControlBlockHandler) {
+	internal mutating func handleChannelReadComplete(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -165,13 +166,13 @@ internal final class KCPControlBlock {
 		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
 			context.flush()
 			outboundOutSegmentsWrittenSinceChannelReadComplete = 0
-			logger.trace("flushed \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments written since last channel read complete")
+			logger.trace("flushed \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments written since last \"channel read complete\" event.")
 		} else {
-			logger.trace("no segments written since last channel read complete; skipping flush", metadata: ["segments_written":"\(outboundOutSegmentsWrittenSinceChannelReadComplete)"])
+			logger.trace("no segments written since last \"channel read complete\" event; skipping flush .", metadata: ["segments_written":"\(outboundOutSegmentsWrittenSinceChannelReadComplete)"])
 		}
 	}
 
-	internal func handleChannelRead(context:ChannelHandlerContext, handler:KcpControlBlockHandler, associatedSegment:PeerAssociated<KCPSegment>) throws {
+	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -181,8 +182,6 @@ internal final class KCPControlBlock {
 		var logger = log
 		logger.trace("handling channel read")
 		let now = iclock()
-		let previousUna = snd_una
-
 		guard conv == associatedSegment.associatedValue.header.conversationID else {
 			throw InputError.convValueMismatch
 		}
@@ -218,10 +217,11 @@ internal final class KCPControlBlock {
 	}
 }
 
+// parse data, ack, una.
 // MARK: Parse Inbound
 extension KCPControlBlock {
 	/// parse inbound data segment from a handler with its context
-	private func parseInbound(data segment:KCPSegment, handler:KcpControlBlockHandler, context:ChannelHandlerContext) {
+	private mutating func parseInbound(data segment:KCPSegment, handler:KcpControlBlockHandler, context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -275,7 +275,7 @@ extension KCPControlBlock {
 	}
 
 	/// parse inbound una data
-	private func parseInbound(una:UInt32) {
+	private mutating func parseInbound(una:UInt32) {
 		for (node, seg) in outboundInBuffer.makeIterator() {
 			// guard isAcked == true
 			guard Int32(bitPattern: una &- seg.data.header.sequenceNumber) > 0 else {
@@ -289,7 +289,7 @@ extension KCPControlBlock {
 	}
 
 	/// parse inbound ack data
-	private func parseInbound(ack sn:UInt32) {
+	private mutating func parseInbound(ack sn:UInt32) {
 		guard Int32(bitPattern:sn &- snd_una) >= 0 && Int32(bitPattern:sn &- snd_nxt) < 0 else {
 			return
 		}
@@ -312,7 +312,7 @@ extension KCPControlBlock {
 		}
 	}
 
-	private func updateInbound(rtt: UInt32) {
+	private mutating func updateInbound(rtt: UInt32) {
 		if rttInfo.rx_srtt == 0 {
 			rttInfo.rx_srtt = rtt
 			rttInfo.rx_rttval = rtt / 2
@@ -335,7 +335,7 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
-	public func handleWrite(context:ChannelHandlerContext, handler:KcpControlBlockHandler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) {
+	public mutating func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) {
 		let now = iclock()
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
 
@@ -366,7 +366,7 @@ extension KCPControlBlock {
 	// - Sends any pending Probes
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
-	public func resendAndProbe(context:ChannelHandlerContext, handler:KcpControlBlockHandler) {
+	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KcpControlBlockHandler) {
 		let now = iclock()
 
 		// only manage probes if we have nothing to receive

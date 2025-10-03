@@ -206,6 +206,7 @@ extension KCPSegment.Handler {
 	/// the standard swiftnio channel read function that is called when data is read from the previous handler in the pipeline.
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
+		logger.trace("channel read called.")
 		var encodedInbound = unwrapInboundIn(data)
 		var i = 0
 		while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {
