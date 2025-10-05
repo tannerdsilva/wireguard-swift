@@ -139,7 +139,7 @@ extension WireguardSwiftTests {
 			(myPublicKey, myPrivateKey) = try dhGenerate()
 			(peerPublicKey, peerPrivateKey) = try dhGenerate()
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = .info
+			buildLogger.logLevel = .trace
 			cliLogger = buildLogger
 		}
 		

@@ -104,7 +104,14 @@ extension KCPControlBlock {
 		
 		// kcp control blocks: index 0 is the newest control block
 		private var kcp:[PublicKey:KCPLivePeer] = [:]
-		private var updateTask:RepeatedTask?
+		private var updateTask:RepeatedTask? {
+			didSet {
+				if oldValue != nil && oldValue !== updateTask {
+					oldValue!.cancel()
+					logger.trace("kcp update task task cancelled")
+				}
+			}
+		}
 		private var kcpUpdateTime:TimeAmount = .milliseconds(30)
 		
 		private let ourKey:PublicKey
@@ -112,6 +119,9 @@ extension KCPControlBlock {
 
 		let mtu:Int
 		var count = 0
+
+		private var readWindow:Int!
+		private var writeWindow:Int!
 			
 		internal init(key:MemoryGuarded<PrivateKey>, mtu:Int = 1400, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
@@ -123,11 +133,6 @@ extension KCPControlBlock {
 		}
 
 		private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
-			if updateTask != nil {
-				updateTask!.cancel()
-				logger.trace("kcp update task task cancelled")
-			}
-			
 			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
 				[weak self, c = ContextContainer(context:context)] _ in
 				guard let self = self else { return }
@@ -145,10 +150,20 @@ extension KCPControlBlock {
 	}
 }
 
-// Basic Events
+// MARK: Basic Events
 extension KCPControlBlock.Handler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		logger.trace("handler added to NIO pipeline.")
+		context.channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenSuccess { [weak self, l = logger] value in
+			guard let self = self else { return }
+			readWindow = value
+			l.debug("loaded read buffer size", metadata: ["so_rcvbuf":"\(value)"])
+		}
+		context.channel.getOption(ChannelOptions.socketOption(.so_sndbuf)).whenSuccess { [weak self, l = logger] value in
+			guard let self = self else { return }
+			writeWindow = value
+			l.debug("loaded write buffer size", metadata: ["so_sndbuf":"\(value)"])
+		}
 		scheduleRepeatedKCPUpdates(context: context)
 	}
 	
@@ -157,7 +172,7 @@ extension KCPControlBlock.Handler {
 	}	
 }
 
-// Channel Read
+// MARK: Read
 extension KCPControlBlock.Handler {
 	internal func channelReadComplete(context: ChannelHandlerContext) {
 		#if DEBUG
@@ -175,7 +190,7 @@ extension KCPControlBlock.Handler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
-			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
 		
 		// input segment
@@ -184,7 +199,7 @@ extension KCPControlBlock.Handler {
 	}
 }
 
-// Channel Write
+// MARK: Write
 extension KCPControlBlock.Handler {
 	// Receiving data which needs to be sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
@@ -195,7 +210,7 @@ extension KCPControlBlock.Handler {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: key, key2: ourKey)
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
-			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
 
 		// Send data to control block
@@ -206,9 +221,20 @@ extension KCPControlBlock.Handler {
 			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
 	}
+	func channelWritabilityChanged(context: ChannelHandlerContext) {
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
+		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
+		if (context.channel.isWritable) {
+			scheduleRepeatedKCPUpdates(context: context)
+		} else {
+			updateTask = nil // cancellation happens automatically via didSet block on the stored property
+		}
+	}
 }
 
-// Channel user events
+// MARK: User Events
 extension KCPControlBlock.Handler {
 	// Inbound events (Handshake Reset)
 	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
@@ -223,30 +249,13 @@ extension KCPControlBlock.Handler {
 					// Create the magic id control block
 					let magicID = try! magicID(key1: ourKey, key2: key)
 					kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
-					kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), logLevel: logger.logLevel))
+					kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 				}
-				kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: convID, mtu: UInt32(mtu), logLevel: logger.logLevel))
-				
+				kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: convID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+
 			default:
 				context.fireUserInboundEventTriggered(event)
 				return
-		}
-	}
-}
-
-extension KCPControlBlock.Handler {
-	func channelWritabilityChanged(context: ChannelHandlerContext) {
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
-		if (context.channel.isWritable) {
-			scheduleRepeatedKCPUpdates(context: context)
-		} else {
-			if (updateTask != nil) {
-				logger.debug("Cancelling repeated scheduled task")
-				updateTask!.cancel()
-			}
 		}
 	}
 }

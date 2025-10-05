@@ -98,6 +98,36 @@ nocwnd NEVER. there WILL be a congestion window under ALL circumstances.
 */
 
 extension KCPControlBlock {
+	@available(*, deprecated, renamed:"writeWindow")
+	internal var snd_wnd:UInt32 {
+		get {
+			return writeWindow
+		}
+		set {
+			writeWindow = newValue
+		}
+	}
+	@available(*, deprecated, renamed:"readWindow")
+	internal var rcv_wnd:UInt32 {
+		get {
+			return readWindow
+		}
+		set {
+			readWindow = newValue
+		}
+	}
+	@available(*, deprecated, renamed:"remoteWindow")
+	internal var rmt_wnd:UInt32 {
+		get {
+			return remoteWindow
+		}
+		set {
+			remoteWindow = newValue
+		}
+	}
+}
+
+extension KCPControlBlock {
 	/// thrown when a kcp control block reaches a dead link state.
 	internal struct DeadlinkError:Swift.Error {}
 }
@@ -187,12 +217,12 @@ internal struct KCPControlBlock {
 	public var isActiveReceiver = false
 
 	// window stuff
-	internal var snd_wnd:UInt32
-	internal var rcv_wnd:UInt32
-	internal var rmt_wnd:UInt32
-	internal var flightBytes:Int = 0
+	internal var writeWindow:UInt32
+	internal var readWindow:UInt32
+	internal var remoteWindow:UInt32
+	internal var flightBytes:UInt32 = 0
 
-	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, snd_wnd:UInt32 = IKCP_WND_SND, rcv_wnd:UInt32 = IKCP_WND_RCV, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
+	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, writeWindow:UInt32, readWindow:UInt32, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -205,9 +235,9 @@ internal struct KCPControlBlock {
 		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * UInt32(UInt8.max) /* UInt8.max represents the maximum number of fragments possible */)))
 		self.conv = conv
 		self.mtu = mtu
-		self.snd_wnd = snd_wnd
-		self.rcv_wnd = rcv_wnd
-		self.rmt_wnd = rmt_wnd
+		self.writeWindow = writeWindow
+		self.readWindow = readWindow
+		self.remoteWindow = rmt_wnd
 		self.mssMeter = MSSMeter(maxSamples:128)
 	}
 
@@ -436,7 +466,7 @@ extension KCPControlBlock {
 			} else {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
-			flightBytes &+= fragSize
+			flightBytes &+= UInt32(fragSize)
 			mssMeter.record(mss: UInt64(fragSize))
 		}
 		isInactive = false
@@ -508,15 +538,14 @@ extension KCPControlBlock {
 
 extension KCPControlBlock {
 	internal mutating func recomputeEffectiveWindow(context:borrowing ChannelHandlerContext, now: UInt32) {
-		fatalError("THIS IS EXPERIMENTAL CODE -- NEEDS FURTHER WORK")
-		let watermark = try! context.channel.getOption(ChannelOptions.writeBufferWaterMark).wait()
-		let freeBytes = UInt32(watermark.high - flightBytes)
+		return
+		let freeBytes = UInt32(writeWindow - flightBytes)
 		guard freeBytes > 0 else {
-			snd_wnd = 0
+			writeWindow = 0
 			return
 		}
 		let avgMSS = max(1, mssMeter.currentMSS() ?? mss)
 		let pktBudget = freeBytes / avgMSS
-		snd_wnd = min(UInt32(cwndInfo.cwnd), pktBudget)
+		writeWindow = min(UInt32(cwndInfo.cwnd), pktBudget)
 	}
 }
