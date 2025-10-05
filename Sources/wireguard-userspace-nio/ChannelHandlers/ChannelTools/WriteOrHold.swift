@@ -50,8 +50,6 @@ internal struct WriteOrHold<ExchangedType:LenghExpressibleExchangeType>:Sendable
 			for message in allMessages {
 				holdOrWrite(context: context, handler: handler, message.0, writePromise: message.1)
 			}
-		} else {
-			log.trace("channel is not writable, no action taken.")
 		}
 	}
 

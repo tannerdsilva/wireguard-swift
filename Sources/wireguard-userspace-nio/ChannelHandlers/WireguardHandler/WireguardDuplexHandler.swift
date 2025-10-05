@@ -392,7 +392,7 @@ extension WireguardHandler {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var peerPayload = unwrapOutboundIn(data)
-		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.buffer)
+		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.associatedValue)
 		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
 	}
 }

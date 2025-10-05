@@ -79,7 +79,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let ph:PacketHandler
 	private let wgh:WireguardHandler
 	private let kcpsh:KCPSegment.Handler
-	private let kcpcbh:KcpControlBlockHandler
+	private let kcpcbh:KCPControlBlock.Handler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
@@ -93,7 +93,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.ph = PacketHandler(mtu: &mtuStep, logLevel: logger.logLevel)
 		self.wgh = WireguardHandler(privateKey: staticPrivateKey, mtu: &mtuStep, initialPeers: initialConfiguration, logLevel: logger.logLevel)
 		self.kcpsh = KCPSegment.Handler(mtu: &mtuStep, logLevel: logger.logLevel)
-		self.kcpcbh = KcpControlBlockHandler(key: staticPrivateKey, logLevel: logger.logLevel)
+		self.kcpcbh = KCPControlBlock.Handler(key: staticPrivateKey, logLevel: logger.logLevel)
 	}
 
 	public func waitForChannelInit() async throws {
@@ -109,8 +109,8 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value: 1 << 23)
-					.channelOption(ChannelOptions.socketOption(.so_sndbuf), value: 1 << 23)
+					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value:8<<20)
+					.channelOption(ChannelOptions.socketOption(.so_sndbuf), value:8<<20)
 					.channelOption(ChannelOptions.writeBufferWaterMark, value: ChannelOptions.Types.WriteBufferWaterMark(low: 1<<20, high:8<<20))
 					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
 						channel.pipeline.addHandlers([

@@ -65,6 +65,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
 		var logger = log
 		var envelope = unwrapInboundIn(data)
 		let endpoint:Endpoint

@@ -26,7 +26,7 @@ fileprivate func iclock(_ delay:UInt64 = 0) -> UInt32 {
 	let now = NIODeadline.now().uptimeNanoseconds - delay
 	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
 }
-fileprivate func iclock(_ time:NIODeadline) -> UInt32 {
+internal func iclock(_ time:NIODeadline) -> UInt32 {
 	let now = time.uptimeNanoseconds
 	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
 }
@@ -59,7 +59,33 @@ let IKCP_THRESH_MIN:UInt32 = 2
 let IKCP_PROBE_INIT:UInt32 = 7000
 let IKCP_PROBE_LIMIT:UInt32 = 120000
 
+extension KCPControlBlock {
+	fileprivate struct MSSMeter {
+		private var total: UInt64 = 0
+		private var count: UInt64 = 0
+		private let maxSamples:UInt64
 
+		fileprivate init(maxSamples:UInt64) {
+			self.maxSamples = maxSamples
+		}
+
+		internal mutating func record(mss value: UInt64) {
+			total &+= value
+			count &+= 1
+			if count > maxSamples {
+				total >>= 1
+				count >>= 1
+			}
+		}
+
+		internal func currentMSS() -> UInt32? {
+			guard count > 0 else {
+				return nil
+			}
+			return UInt32(total / count)
+		}
+	}
+}
 /*
 
 LAW OF THE LAND
@@ -92,6 +118,8 @@ internal struct KCPControlBlock {
 			return mtu - IKCP_OVERHEAD
 		}
 	}
+	/// the rolling mss meter.
+	private var mssMeter:MSSMeter
 	
 	/// - *purpose*: oldest unacknowledged sequence number
 	/// - *read/written when*: written when an ack is received, read when sending data
@@ -159,9 +187,10 @@ internal struct KCPControlBlock {
 	public var isActiveReceiver = false
 
 	// window stuff
-	internal let snd_wnd:UInt32
-	internal let rcv_wnd:UInt32
-	internal let rmt_wnd:UInt32
+	internal var snd_wnd:UInt32
+	internal var rcv_wnd:UInt32
+	internal var rmt_wnd:UInt32
+	internal var flightBytes:Int = 0
 
 	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, snd_wnd:UInt32 = IKCP_WND_SND, rcv_wnd:UInt32 = IKCP_WND_RCV, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
 		#if DEBUG
@@ -171,7 +200,6 @@ internal struct KCPControlBlock {
 		buildLogger.logLevel = logLevel
 		buildLogger[metadataKey: "public-key_peer"] = "\(peerPublicKey)"
 		buildLogger[metadataKey: "conversation_id"] = "\(conv)"
-		buildLogger[metadataKey: "mtu"] = "\(mtu)"
 		self.log = buildLogger
 		self.peerPublicKey = peerPublicKey
 		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * UInt32(UInt8.max) /* UInt8.max represents the maximum number of fragments possible */)))
@@ -180,6 +208,7 @@ internal struct KCPControlBlock {
 		self.snd_wnd = snd_wnd
 		self.rcv_wnd = rcv_wnd
 		self.rmt_wnd = rmt_wnd
+		self.mssMeter = MSSMeter(maxSamples:128)
 	}
 
 	internal mutating func handleChannelReadComplete(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
@@ -188,11 +217,11 @@ internal struct KCPControlBlock {
 		#endif
 		var logger = log
 		logger[metadataKey:"_func"] = "\(#function)"
-//		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
+		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
 			context.flush()
 			outboundOutSegmentsWrittenSinceChannelReadComplete = 0
 			logger.trace("done reading \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments.")
-//		} 
+		}
 	}
 
 	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) throws {
@@ -397,7 +426,6 @@ extension KCPControlBlock {
 			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size: 0, frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:now, una:rcv_nxt, len: UInt32(fragSize))
 			snd_nxt &+= 1
 			var seg = KCPSegment(header: header, data: view!.readableBytesView)
-			
 			seg.runtimeMetadata.xmit = 1
 			seg.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
 			seg.runtimeMetadata.resendts = now &+ seg.runtimeMetadata.rto
@@ -408,6 +436,8 @@ extension KCPControlBlock {
 			} else {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
+			flightBytes &+= fragSize
+			mssMeter.record(mss: UInt64(fragSize))
 		}
 		isInactive = false
 	}
@@ -425,8 +455,7 @@ extension KCPControlBlock {
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
 	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
-		let now = iclock()
-
+		let now = iclock(now)
 		// only manage probes if we have nothing to receive
 		if inboundInBuffer.count == 0 {
 			// Update probe time variables and prepare send ask_probe if needed
@@ -454,6 +483,7 @@ extension KCPControlBlock {
 			defer {
 				count &+= 1
 			}
+
 			if itimeDiff(later:now, earlier:seg.data.runtimeMetadata.resendts) >= 0 {
 				node.value!.data.runtimeMetadata.xmit &+= 1
 				node.value!.data.runtimeMetadata.rto = node.value!.data.runtimeMetadata.rto &+ (node.value!.data.runtimeMetadata.rto / 2)
@@ -473,5 +503,20 @@ extension KCPControlBlock {
 				}
 			}
 		}
+	}
+}
+
+extension KCPControlBlock {
+	internal mutating func recomputeEffectiveWindow(context:borrowing ChannelHandlerContext, now: UInt32) {
+		fatalError("THIS IS EXPERIMENTAL CODE -- NEEDS FURTHER WORK")
+		let watermark = try! context.channel.getOption(ChannelOptions.writeBufferWaterMark).wait()
+		let freeBytes = UInt32(watermark.high - flightBytes)
+		guard freeBytes > 0 else {
+			snd_wnd = 0
+			return
+		}
+		let avgMSS = max(1, mssMeter.currentMSS() ?? mss)
+		let pktBudget = freeBytes / avgMSS
+		snd_wnd = min(UInt32(cwndInfo.cwnd), pktBudget)
 	}
 }

@@ -68,6 +68,7 @@ internal final class KCPLivePeer {
 	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
 		for i in  0..<controlBlocks.count {
 			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now)
+			controlBlocks[i].recomputeEffectiveWindow(context:context, now:iclock(now))
 		}
 		context.flush()
 	}
