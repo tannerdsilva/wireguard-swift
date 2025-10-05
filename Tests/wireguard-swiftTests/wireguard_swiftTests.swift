@@ -132,11 +132,15 @@ extension WireguardSwiftTests {
 		let peerPublicKey:PublicKey
 		let peerPrivateKey:MemoryGuarded<PrivateKey>
 
-		let cliLogger = Logger(label: "wg-test-tool.initiator")
+		let cliLogger:Logger
+
 		
 		init() throws {
 			(myPublicKey, myPrivateKey) = try dhGenerate()
 			(peerPublicKey, peerPrivateKey) = try dhGenerate()
+			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			buildLogger.logLevel = .info
+			cliLogger = buildLogger
 		}
 		
 		@Test func sendSingleString() async throws {
@@ -144,10 +148,10 @@ extension WireguardSwiftTests {
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.debug, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -189,10 +193,10 @@ extension WireguardSwiftTests {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -245,10 +249,10 @@ extension WireguardSwiftTests {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -289,10 +293,10 @@ extension WireguardSwiftTests {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -334,10 +338,10 @@ extension WireguardSwiftTests {
 			
 			_ = try await withThrowingTaskGroup(of:Void.self, returning:Void.self) { foo in
 				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.info, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.info, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()

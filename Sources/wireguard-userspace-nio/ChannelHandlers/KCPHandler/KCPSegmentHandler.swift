@@ -52,8 +52,6 @@ extension KCPSegment {
 		/// stores the byte buffers that are being built for each public key
 		private var segmentStack:[PublicKey:ByteBuffer] = [:]
 
-		private var pendingWrites:[(payload:PeerPayload, promise:[EventLoopPromise<Void>])] = []
-
 		internal init(transmitMTU:UInt16) {
 			self.transmitMTU = transmitMTU
 		}
@@ -67,24 +65,19 @@ extension KCPSegment {
 				// we have an existing buffer, see if we can append to it...
 				if hasExistingBuffer.writableBytes < Int(expectedEncodedLength) {
 					// mtu would be exceeded if we used the existing buffer, so we need to allocate a new one and flush the existing one.
-					if context.channel.isWritable == false {
-						pendingWrites.append((payload:PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer), promise:promiseStack[publicKey]!))
-						return didWrite
-					} else {
-						context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
-							switch result {
-								case .failure(let error):
-									for curElement in promises {
-										curElement.fail(error)
-									}
-								case .success():
-									for curElement in promises {
-										curElement.succeed(())
-									}
-									break
-							}
-						})
-					}
+					context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
+						switch result {
+							case .failure(let error):
+								for curElement in promises {
+									curElement.fail(error)
+								}
+							case .success():
+								for curElement in promises {
+									curElement.succeed(())
+								}
+								break
+						}
+					})
 					hasExistingBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 					didWrite = true
 					promiseStack[publicKey] = []
@@ -108,15 +101,11 @@ extension KCPSegment {
 			return didWrite
 		}
 
-		fileprivate mutating func completeAll(context:ChannelHandlerContext, handler:KCPSegment.Handler) {
+		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
 			for (publicKey, buffer) in segmentStack {
-				guard context.channel.isWritable == true else {
-					pendingWrites.append((payload:PeerPayload(publicKey:publicKey, buffer:buffer), promise:promiseStack[publicKey]!))
-					continue
-				}
 				context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:buffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
 					switch result {
 						case .failure(let error):
@@ -142,14 +131,14 @@ extension KCPSegment {
 	internal final class Handler:ChannelDuplexHandler, @unchecked Sendable {
 
 		/// the type that comes into the channel from the previous handler
-		internal typealias InboundIn = PeerPayload
+		internal typealias InboundIn = PeerAssociated<ByteBuffer>
 		/// the type that goes out of the channel to the next handler
-		internal typealias InboundOut = PeerSegment
+		internal typealias InboundOut = PeerAssociated<KCPSegment>
 
 		/// the type that comes into the channel from the previous writer
-		internal typealias OutboundIn = PeerSegment
+		internal typealias OutboundIn = PeerAssociated<KCPSegment>
 		/// the type that goes out of the channel to the next writer
-		internal typealias OutboundOut = PeerPayload
+		internal typealias OutboundOut = PeerAssociated<ByteBuffer>
 
 		/// the logger that is used for logging within this handler
 		private let log:Logger
@@ -214,14 +203,6 @@ extension KCPSegment.Handler {
 			logger.trace("decoded kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)", "segment_sequence_number":"\(segment.header.sequenceNumber)", "segment_command":"\(segment.header.command)", "segment_data_length":"\(segment.header.dataLength)", "segment_fragment_id":"\(segment.header.fragmentID)", "segment_timestamp":"\(segment.header.timestamp)", "segment_una":"\(segment.header.una)"])
 			context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 		}
-		
-		// guard let segment = KCPSegment(decode:&encodedInbound.buffer) else {
-		// 	logger.error("failed to decode kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)"])
-		// 	context.fireErrorCaught(ParseFailure())
-		// 	return
-		// }
-		
-		// context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
 	}
 
 	internal func channelReadComplete(context:ChannelHandlerContext) {
@@ -235,7 +216,6 @@ extension KCPSegment.Handler {
 
 // MARK: Channel Write
 extension KCPSegment.Handler {
-
 	internal func channelWritabilityChanged(context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()

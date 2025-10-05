@@ -54,7 +54,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		internal var activeSessionIndicies:MPeerIndex
 	}
 
-	/// NOTE: do not touch - the live peer instances will mutate these for you.
+	/// WARNING: do not touch - the live peer instances will mutate these for you.
 	internal var automaticallyUpdatedVariables:AutomaticallyUpdated
 	/// the primary storage for the active peers that the interface will connect to.
 	private var peerDeltaEngine:PeerDeltaEngine!
@@ -62,6 +62,9 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var encodeBuffer:ByteBuffer!
 	/// the current operational state of the handler.
 	private var operatingState:State
+
+	/// used to indicate that a flush should be performed after channelReadComplete is called. returns back to false after channelReadComplete is called.
+	internal var flushAfterChannelReadComplete:Bool = false
 
 	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout UInt16, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
@@ -78,7 +81,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
 		
-		log.trace("instance initialized", metadata:["peer_count":"\(initialPeers.count)"])
+		log.trace("instance initialized.", metadata:["peer_count":"\(initialPeers.count)", "mtu":"\(mtu)"])
 		operatingState = .initialized(initialPeers)
 		mtu -= UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size)
 	}
@@ -141,6 +144,19 @@ extension WireguardHandler {
 
 // swift nio read handler function
 extension WireguardHandler {
+	internal func channelReadComplete(context: ChannelHandlerContext) {
+		defer {
+			flushAfterChannelReadComplete = false
+			context.fireChannelReadComplete()
+		}
+		#if DEBUG
+		context.eventLoop.assertInEventLoop() 
+		#endif
+		if flushAfterChannelReadComplete == true {
+			log.trace("flushing after channel read complete.")
+			context.flush()
+		}
+	}
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -170,7 +186,7 @@ extension WireguardHandler {
 							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
 							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
-							context.flush()
+							flushAfterChannelReadComplete = true
 							return
 						}
 					}
@@ -190,7 +206,7 @@ extension WireguardHandler {
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
-					context.flush()
+					flushAfterChannelReadComplete = true
 					break;
 			
 				case .response(let payload):
