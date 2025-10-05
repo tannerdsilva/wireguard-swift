@@ -144,11 +144,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 	}
 
-	private var pendingDataWrites:[AddressedEnvelope<ByteBuffer>] = []
-	private var writtenSinceLastFlush:Int = 0
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let envelope = unwrapOutboundIn(data)
-		if context.channel.isWritable == false {
+		/*if context.channel.isWritable == false {
 			// there is backpressure on the channel, so only send handshake packets in this state.
 			switch envelope.data.readableBytesView.first {
 				case 0x1, 0x2, 0x3:
@@ -161,10 +159,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					fatalError("fatal internal error: packet handler should not be sending unrecognized packet types.")
 
 			}
-		} else {
-			
+		} else {*/
 			context.write(wrapOutboundOut(envelope), promise:promise)
-		}
+		// }
 		
 	}
 }

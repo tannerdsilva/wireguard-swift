@@ -50,10 +50,13 @@ internal final class KCPLivePeer {
 		controlBlocks[0].handleWrite(context: context, handler: handler, message: message, writePromise: writePromise, ackPromise: ackPromise)
 	}
 
-	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>) {
+	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) {
 		cbLoop: for i in 0..<controlBlocks.count {
 			do {
-				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment)
+				guard associatedSegment.associatedValue.header.conversationID == controlBlocks[i].conv else {
+					continue cbLoop
+				}
+				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now)
 				break cbLoop
 			} catch {
 				continue
@@ -62,9 +65,9 @@ internal final class KCPLivePeer {
 		rotateActiveControlBlock(context: context, handler: handler)
 	}
 
-	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
+	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
 		for i in  0..<controlBlocks.count {
-			controlBlocks[i].resendAndProbe(context: context, handler: handler)
+			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now)
 		}
 		context.flush()
 	}
@@ -127,9 +130,10 @@ extension KCPControlBlock {
 			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
 				[weak self, c = ContextContainer(context:context)] _ in
 				guard let self = self else { return }
+				let now = NIODeadline.now()
 				for (key, _) in kcp {
 					c.accessContext({ contextPointer in
-						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self)
+						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self, now:now)
 					})
 				}
 			}
@@ -164,7 +168,7 @@ extension KCPControlBlock.Handler {
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let data = unwrapInboundIn(data)
 		let key = data.publicKey
-
+		let now = NIODeadline.now()
 		// Check if control block exists
 		if (kcp[key] == nil) {
 			// Create the magic id control block
@@ -175,7 +179,7 @@ extension KCPControlBlock.Handler {
 		
 		// input segment
 		logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
-		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data)
+		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now)
 	}
 }
 

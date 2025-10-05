@@ -22,8 +22,12 @@ public enum InputError:Swift.Error {
 	case invalidCMD
 }
 
-public func iclock(_ delay:UInt64 = 0) -> UInt32 {
+fileprivate func iclock(_ delay:UInt64 = 0) -> UInt32 {
 	let now = NIODeadline.now().uptimeNanoseconds - delay
+	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
+}
+fileprivate func iclock(_ time:NIODeadline) -> UInt32 {
+	let now = time.uptimeNanoseconds
 	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
 }
 @inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
@@ -33,7 +37,7 @@ public func iclock(_ delay:UInt64 = 0) -> UInt32 {
 	return min(max(value, lower), upper)
 }
 @inline(__always) private func itimeDiff(later a:UInt32, earlier b:UInt32) -> Int32 {
-return Int32(bitPattern: a &- b)
+	return Int32(bitPattern: a &- b)
 }
 
 let IKCP_RTO_NDL:UInt32 = 30
@@ -116,6 +120,7 @@ internal struct KCPControlBlock {
 	
 	/// used to track the round trip time and retransmission information for this control block
 	internal var rttInfo:RoundTripTimeInfo = RoundTripTimeInfo()
+
 	/// used to track the congestion window state for this control block
 	internal var cwndInfo:CongestionWindowInfo = CongestionWindowInfo()
 
@@ -132,13 +137,16 @@ internal struct KCPControlBlock {
 	internal struct InboundOutInfo:Sendable {
 		/// boolean flag to indicate if the buffer should be cleared on next use
 		internal var inboundOutByteByfferClearOnNextUse = false
+
 		/// the buffer that will eventually make up a complete message that gets passed to inbound out
 		internal var inboundOutByteBuffer:ByteBuffer
 	}
 	/// the info associated with the inbound out buffer.
+	/// - NOTE: previously known as `rcv_buf`
 	internal var inboundOutInfo:InboundOutInfo
 	
-	/// segments that are waiting to be assembled in the correct order
+	/// segments that are waiting to be assembled in the correct order.
+	/// - NOTE: previously known as `rcv_queue`
 	internal var inboundInBuffer = LinkedList<KCPSegment>()
 
 	/// counts the number of kcp segments that were written to the outboundInBuffer for each cycle of reading. used at `channelReadComplete` to determine if a flush is needed
@@ -150,18 +158,28 @@ internal struct KCPControlBlock {
 	/// info on whether this control block is the active receiver. kcpcb can only write inboundOut if it's the active receiver
 	public var isActiveReceiver = false
 
-	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, logLevel:Logger.Level) {
+	// window stuff
+	internal let snd_wnd:UInt32
+	internal let rcv_wnd:UInt32
+	internal let rmt_wnd:UInt32
+
+	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, snd_wnd:UInt32 = IKCP_WND_SND, rcv_wnd:UInt32 = IKCP_WND_RCV, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		buildLogger[metadataKey: "public-key_peer"] = "\(peerPublicKey)"
+		buildLogger[metadataKey: "conversation_id"] = "\(conv)"
+		buildLogger[metadataKey: "mtu"] = "\(mtu)"
 		self.log = buildLogger
 		self.peerPublicKey = peerPublicKey
 		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * UInt32(UInt8.max) /* UInt8.max represents the maximum number of fragments possible */)))
 		self.conv = conv
 		self.mtu = mtu
+		self.snd_wnd = snd_wnd
+		self.rcv_wnd = rcv_wnd
+		self.rmt_wnd = rmt_wnd
 	}
 
 	internal mutating func handleChannelReadComplete(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
@@ -169,32 +187,32 @@ internal struct KCPControlBlock {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var logger = log
-		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
+		logger[metadataKey:"_func"] = "\(#function)"
+//		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
 			context.flush()
 			outboundOutSegmentsWrittenSinceChannelReadComplete = 0
-			logger.trace("flushed \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments written since last \"channel read complete\" event.")
-		} else {
-			logger.trace("no segments written since last \"channel read complete\" event; skipping flush .", metadata: ["segments_written":"\(outboundOutSegmentsWrittenSinceChannelReadComplete)"])
-		}
+			logger.trace("done reading \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments.")
+//		} 
 	}
 
-	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>) throws {
+	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		let previousUna = snd_una
 		guard associatedSegment.publicKey == peerPublicKey else {
 			fatalError("internal logic error: associated segment public key does not match control block public key. \(#file):\(#line)")
 		}
 		var logger = log
-		logger.trace("handling channel read")
-		let now = iclock()
+		logger[metadataKey:"_func"] = "\(#function)"
+		let now = iclock(now)
 		guard conv == associatedSegment.associatedValue.header.conversationID else {
-			throw InputError.convValueMismatch
+			fatalError("conversation id mismatch. expected \(conv), got \(associatedSegment.associatedValue.header.conversationID). \(#file):\(#line)")
 		}
 		guard associatedSegment.associatedValue.data.count == associatedSegment.associatedValue.header.dataLength else {
 			throw InputError.partialTrailingData
 		}
-
+		logger.trace("handling inbound kcp segment.", metadata:["segment_sn":"\(associatedSegment.associatedValue.header.sequenceNumber)", "data_length":"\(associatedSegment.associatedValue.data.count)"])
 		parseInbound(una:associatedSegment.associatedValue.header.una)
 
 		switch associatedSegment.associatedValue.header.command {
@@ -219,9 +237,28 @@ internal struct KCPControlBlock {
 				// Nothing to do
 			break;
 		}
-		// Check for inactivity
-		if(associatedSegment.associatedValue.header.sequenceNumber == rcv_nxt && associatedSegment.associatedValue.header.una == snd_nxt) {
-			isInactive = true
+
+		if itimeDiff(later:snd_una, earlier:previousUna) > 0 {
+			if cwndInfo.cwnd < rmt_wnd {
+				let mss = self.mss
+				if cwndInfo.cwnd < cwndInfo.ssthresh {
+					cwndInfo.cwnd &+= 1
+					cwndInfo.incr &+= mss
+				} else {
+					if cwndInfo.incr < mss {
+						cwndInfo.incr = mss
+					}
+					cwndInfo.incr &+= (mss * mss) / cwndInfo.incr + (mss / 16)
+					if ((cwndInfo.cwnd &+ 1) &* mss <= cwndInfo.incr) {
+						cwndInfo.cwnd = (cwndInfo.incr &+ mss &- 1) / (mss > 0 ? mss : 1)
+					}
+				}
+
+				if cwndInfo.cwnd > rmt_wnd {
+					cwndInfo.cwnd = rmt_wnd
+					cwndInfo.incr = rmt_wnd &* mss
+				}
+			}
 		}
 	}
 }
@@ -375,12 +412,19 @@ extension KCPControlBlock {
 		isInactive = false
 	}
 
+	private func wndUnused() -> UInt16 {
+		if (inboundInBuffer.count < rcv_wnd) {
+			return UInt16(rcv_wnd - inboundInBuffer.count)
+		}
+		return 0
+	}
+
 	// KCP Flush
 	// - Sends any pending ACKs
 	// - Sends any pending Probes
 	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
-	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KcpControlBlockHandler) {
+	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
 		let now = iclock()
 
 		// only manage probes if we have nothing to receive
