@@ -147,22 +147,4 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 				return
 		}
 	}
-
-	/*internal func channelWritabilityChanged(context:borrowing ChannelHandlerContext) {
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		log.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
-		outboundOutDriver.writabilityChanged(context:context, handler:self)
-	}
-
-	internal func write(context:borrowing ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		let envelope = unwrapOutboundIn(data)
-		guard envelope.data.readableBytes <= datagramMTU else {
-			log.error("datagram mtu exceeded", metadata:["mtu_user":"\(datagramMTU)", "packet_size":"\(envelope.data.readableBytes)"])
-			promise?.fail(Error.mtuExceeded)
-			return
-		}
-		outboundOutDriver.holdOrWrite(context:context, handler:self, envelope, writePromise:promise)
-	}*/
 }

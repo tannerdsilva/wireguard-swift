@@ -22,7 +22,6 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias InboundOut = PeerAssociated<ByteBuffer>
 	internal typealias OutboundIn = PeerAssociated<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
-	private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	internal static let keepaliveTimeout = TimeAmount.seconds(10)
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
@@ -87,7 +86,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		operatingState = .initialized(initialPeers)
 		self.mtu = mtu
 		mtu -= UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size)
-		outboundOutDriver = WriteOrHold(logLevel:log.logLevel, limit:2048)
+		// outboundOutDriver = WriteOrHold(logLevel:log.logLevel, limit:2048)
 	}
 
 	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) -> WriteOrHold<OutboundOut>.Result {
@@ -102,7 +101,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		}
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
 		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
-		return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
+		return .written
+		// return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
 	}
 }
 
@@ -353,7 +353,7 @@ extension WireguardHandler {
 		context.eventLoop.execute { [weak self, c = ContextContainer(context:context)] in
 			guard let self else { return }
 			c.accessContext { contextPtr in
-				outboundOutDriver.writabilityChanged(context:contextPtr.pointee, handler:self)
+				// outboundOutDriver.writabilityChanged(context:contextPtr.pointee, handler:self)
 			}
 		}
 	}
@@ -404,7 +404,8 @@ extension WireguardHandler {
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
 				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes) bytes", "public-key_remote":"\(publicKey)"])
-				return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
+				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+				return .written
 		}
 	}
 	
