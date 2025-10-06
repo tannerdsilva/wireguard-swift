@@ -34,8 +34,6 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	private let spliceByteLength:Int
 
-	private var pendingWrites:[(payload:(PublicKey, ByteBuffer), promise:EventLoopPromise<Void>?)] = []
-
 	internal init(logLevel:Logger.Level, spliceByteLength:Int) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel

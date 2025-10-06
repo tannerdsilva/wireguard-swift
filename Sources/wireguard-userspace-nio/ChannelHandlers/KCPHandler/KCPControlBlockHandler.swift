@@ -13,8 +13,8 @@ internal struct MagicID:Sendable {}
 internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
 
 internal final class KCPLivePeer {
-	/// the rolling set of control blocks associated with this peer. index 0 is the newest control block.
-	private var controlBlocks:[KCPControlBlock] = []
+	/// the rolling set of control blocks associated with this peer. index 0 is the newest control block. Index count-1 reserved for the magic ID control block
+	internal var controlBlocks:[KCPControlBlock] = []
 	
 	private let logger:Logger
 	private let mtu:UInt16
@@ -37,12 +37,12 @@ internal final class KCPLivePeer {
 
 	internal func insertLatestControlBlock(_ block:KCPControlBlock) {
 		controlBlocks.insert(block, at:0)
-		if(controlBlocks.count == 1) {
+		if(count == 1) {
 			controlBlocks[0].isActiveReceiver = true
 		}
-		for i in 0..<controlBlocks.count {
+		for i in 0..<count {
 			if(controlBlocks[i].isActiveReceiver) {
-				logger.debug("Inserting new control block", metadata: ["activeBlock": "\(i)"])
+				logger.debug("Inserting new control block", metadata: ["activeConvID": "\(controlBlocks[i].conv)"])
 			}
 		}
 		
@@ -52,23 +52,28 @@ internal final class KCPLivePeer {
 		controlBlocks[0].handleWrite(context: context, handler: handler, mssMeter: &mssMeter, message: message, writePromise: writePromise, ackPromise: ackPromise)
 	}
 
-	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) {
-		cbLoop: for i in 0..<controlBlocks.count {
+	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) -> Bool {
+		cbLoop: for i in 0..<count {
 			do {
 				guard associatedSegment.associatedValue.header.conversationID == controlBlocks[i].conv else {
 					continue cbLoop
 				}
 				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now)
+				// Check for disconnection via magicID
+				if(i == count - 1 && !controlBlocks[count - 1].isActiveReceiver) {
+					return false
+				}
 				break cbLoop
 			} catch {
 				continue
 			}
 		}
 		rotateActiveControlBlock(context: context, handler: handler)
+		return true
 	}
 
 	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
-		for i in  0..<controlBlocks.count {
+		for i in  0..<count {
 			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now)
 			controlBlocks[i].recomputeEffectiveWindow(context:context, mssMeter:&mssMeter)
 		}
@@ -76,19 +81,19 @@ internal final class KCPLivePeer {
 	}
 	
 	internal func rotateActiveControlBlock(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
-		guard controlBlocks.count >= 2 else {
-			guard controlBlocks.count == 1 else {
+		guard count >= 2 else {
+			guard count == 1 else {
 				return
 			}
 			controlBlocks[0].isActiveReceiver = true
 			return 
 		}
-		for i in 1..<(controlBlocks.count) {
+		for i in 1..<(count) {
 			if (controlBlocks[i].isActiveReceiver && controlBlocks[i].isInactive) {
 				controlBlocks[i].isActiveReceiver = false
 				controlBlocks[i-1].isActiveReceiver = true
 				controlBlocks[i-1].writeAllInboundOut(handler: handler, context: context)
-				logger.debug("Rotating control block", metadata: ["newActiveIndex": "\(i-1)"])
+				logger.debug("Rotating control block", metadata: ["newActiveConvID": "\(controlBlocks[i-1].conv)"])
 				return
 			}
 		}
@@ -157,12 +162,12 @@ extension KCPControlBlock.Handler {
 		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu + UInt16(IKCP_OVERHEAD))", "mtu_user":"\(mtu)"])
 		context.channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
-			readWindow = value
+			readWindow = Int(value)
 			l.trace("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
 		}
 		context.channel.getOption(ChannelOptions.socketOption(.so_sndbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
-			writeWindow = value
+			writeWindow = Int(value)
 			l.trace("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
 		}
 		scheduleRepeatedKCPUpdates(context: context)
@@ -193,7 +198,9 @@ extension KCPControlBlock.Handler {
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
-		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now)
+		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now) != true) {
+			// handle 'Disconnected' scenario
+		}
 	}
 }
 
@@ -206,7 +213,7 @@ extension KCPControlBlock.Handler {
 		// Check if control block exists
 		if (kcp[key] == nil) {
 			// Create the magic id control block
-			let magicID = try! magicID(key1: key, key2: ourKey)
+			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
@@ -242,7 +249,7 @@ extension KCPControlBlock.Handler {
 				// Need to figure out how to make this into a conversation id
 				let key = evt.publicKey
 				let convID = evt.geometry.initiator.RAW_native()
-				// Check if control block exists
+				 Check if control block exists
 				if (kcp[key] == nil) {
 					// Create the magic id control block
 					let magicID = try! magicID(key1: ourKey, key2: key)
@@ -261,10 +268,18 @@ extension KCPControlBlock.Handler {
 // Control Block Helper Functions
 extension KCPControlBlock.Handler {
 	private func magicID(key1:PublicKey, key2:PublicKey) throws -> UInt32 {
-		var hasher = try WGHasher<MagicID>()
-		try hasher.update(key1)
-		try hasher.update(key2)
-		var h = try hasher.finish()
-		return h.RAW_native()
+		if(key1 < key2) {
+			var hasher = try WGHasher<MagicID>()
+			try hasher.update(key1)
+			try hasher.update(key2)
+			let h = try hasher.finish()
+			return h.RAW_native()
+		} else {
+			var hasher = try WGHasher<MagicID>()
+			try hasher.update(key2)
+			try hasher.update(key1)
+			let h = try hasher.finish()
+			return h.RAW_native()
+		}
 	}
 }

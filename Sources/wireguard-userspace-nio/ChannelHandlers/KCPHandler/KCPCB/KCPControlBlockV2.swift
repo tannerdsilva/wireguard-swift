@@ -292,6 +292,10 @@ internal struct KCPControlBlock {
 				// Nothing to do
 			break;
 		}
+		// Check for inactivity
+		if(associatedSegment.associatedValue.header.sequenceNumber == rcv_nxt && associatedSegment.associatedValue.header.una == snd_nxt) {
+			isInactive = true
+		}
 
 		if itimeDiff(later:snd_una, earlier:previousUna) > 0 {
 			if cwndInfo.cwnd < rmt_wnd {

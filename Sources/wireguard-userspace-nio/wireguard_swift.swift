@@ -125,7 +125,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 								return
 							}
 							let sndBuf = ceil(Double(result) * 0.75)
-							channel.setOption(ChannelOptions.socketOption(.so_sndbuf), value:Int(sndBuf)).whenComplete { setResult in
+							channel.setOption(ChannelOptions.socketOption(.so_sndbuf), value:ChannelOptions.Types.SocketOption.Value(Int(sndBuf))).whenComplete { setResult in
 								guard case .success(_) = setResult else {
 									l.error("failed to set send buffer size.")
 									initializationFuture.fail(ChannelInitializationError.soSendBufferSetFailed)
