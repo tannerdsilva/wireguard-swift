@@ -15,10 +15,11 @@ internal enum PacketTypeOutbound {
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
 
-internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
+internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
+	
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
-		/// specifies that the packet length does not match the expected length for the given packet type
+		/// specifies that the packet length does not match the expected length for the giveC, @unchecked Sendabn packet type
 		/// - parameter type: the type of packet that was expected
 		/// - parameter length: the length of the packet that was received
 		case invalidPacketLengthForType(type:UInt8, length:Int)
@@ -31,40 +32,45 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	/// the type of data that this handler will receive from upstream in the inbound pipeline. this is a datagram packet with an associated remote address.
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
-
 	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
-
+	/*
 	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
-
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
+	private var outboundOutDriver:WriteOrHold<OutboundOut>
+	*/
 
+	/// logger instance for this handler
 	private let log:Logger
-	private let datagramMTU:UInt16
+
+	/// the mtu for datagram packets that will be sent to the network. this is used to ensure that packets sent by the user do not exceed the mtu of the underlying transport.
+	private let mtu:UInt16
 
 	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
-	internal init(mtu:inout UInt16, logLevel:Logger.Level) {
+	internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout UInt16, logLevel:consuming Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
+		buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
 		buildLogger.logLevel = logLevel
 		log = buildLogger
-		datagramMTU = mtu
+		self.mtu = mtu
+		// outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:256)
 	}
 
-	internal func handlerAdded(context:ChannelHandlerContext) {
-		log.debug("handler added to NIO pipeline.", metadata:["mtu":"\(datagramMTU)"])
+	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
+		log.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu)", "mtu_user":"\(mtu)"])
 	}
 	
-	internal func handlerRemoved(context:ChannelHandlerContext) {
+	internal func handlerRemoved(context:borrowing ChannelHandlerContext) {
 		log.debug("handler removed from NIO pipeline.")
 	}
 
-	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+	internal func userInboundEventTriggered(context:borrowing ChannelHandlerContext, event:Any) {
 		log.trace("user inbound event triggered. this handler is not user configurable in this way, so the passed event instance will be passed downstream...", metadata:["event_instance_type":"\(String(describing:type(of:event)))"])
 		context.fireUserInboundEventTriggered(event)
 	}
-	
-	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+
+	internal func channelRead(context:borrowing ChannelHandlerContext, data:NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -120,7 +126,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 			case 0x4:
 				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Payload>.size + MemoryLayout<Tag>.size) else {
-					logger.error("datagram mtu exceeded", metadata:["mtu":"\(datagramMTU)", "packet_size":"\(envelope.data.readableBytes)"])
+					logger.error("datagram mtu exceeded", metadata:["mtu_user":"\(mtu)", "packet_size":"\(envelope.data.readableBytes)"])
 					context.fireErrorCaught(Error.mtuExceeded)
 					return
 				}
@@ -131,11 +137,6 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let peerIndex = PeerIndex(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<PeerIndex>.size)!)
 				let counterValue = Counter(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<Counter>.size)!)
-				guard envelope.data.readableBytes >= MemoryLayout<Tag>.size else {
-					logger.error("datagram mtu exceeded", metadata:["mtu":"\(datagramMTU)", "packet_size":"\(envelope.data.readableBytes)"])
-					context.fireErrorCaught(Error.mtuExceeded)
-					return
-				}
 				let availableBytes = envelope.data.readableBytes - MemoryLayout<Tag>.size
 				wireBytes = availableBytes
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
@@ -147,24 +148,21 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		}
 	}
 
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		let envelope = unwrapOutboundIn(data)
-		/*if context.channel.isWritable == false {
-			// there is backpressure on the channel, so only send handshake packets in this state.
-			switch envelope.data.readableBytesView.first {
-				case 0x1, 0x2, 0x3:
-					break // allow handshake or cookie packets to be sent
-				case 0x4:
-					// this is a data packet, so buffer it until writability is restored
-					log.trace("channel is not writable. buffering outbound packet until writability is restored.", metadata:["buffered_packet_size":"\(envelope.data.readableBytes)"])
-					pendingDataWrites.append(envelope)
-				default:
-					fatalError("fatal internal error: packet handler should not be sending unrecognized packet types.")
-
-			}
-		} else {*/
-			context.write(wrapOutboundOut(envelope), promise:promise)
-		// }
-		
+	/*internal func channelWritabilityChanged(context:borrowing ChannelHandlerContext) {
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
+		log.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
+		outboundOutDriver.writabilityChanged(context:context, handler:self)
 	}
+
+	internal func write(context:borrowing ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		let envelope = unwrapOutboundIn(data)
+		guard envelope.data.readableBytes <= datagramMTU else {
+			log.error("datagram mtu exceeded", metadata:["mtu_user":"\(datagramMTU)", "packet_size":"\(envelope.data.readableBytes)"])
+			promise?.fail(Error.mtuExceeded)
+			return
+		}
+		outboundOutDriver.holdOrWrite(context:context, handler:self, envelope, writePromise:promise)
+	}*/
 }

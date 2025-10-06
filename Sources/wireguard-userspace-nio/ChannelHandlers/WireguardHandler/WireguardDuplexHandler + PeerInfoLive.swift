@@ -44,7 +44,7 @@ extension PeerInfo {
 			context.eventLoop.assertInEventLoop()
 			#endif
 
-			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			var buildLogger = Logger(label:"\(String(describing:PeerInfo.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			buildLogger[metadataKey:"public-key_peer"] = "\(peerInfo.publicKey)"
 			log = buildLogger
@@ -57,7 +57,6 @@ extension PeerInfo {
 			let um = handler
 			wireguardHandler = um
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
-			buildLogger.trace("created live peer info instance.")
 		}
 				
 		deinit {
@@ -415,9 +414,14 @@ extension PeerInfo.Live {
 		// flush any pending data
 		while var (pendingPacket) = postHandshakePackets.dequeue() {
 			logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(publicKey)"])
-			wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
+			switch wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise) {
+				case .written:
+					wireguardHandler.flushAfterChannelReadComplete = true
+					break
+				default:
+					break
+			}
 		}
-		wireguardHandler.flushAfterChannelReadComplete = true
 		
 		// cancel the scheduled handshake initiation task
 		handshakeInitiationTask = nil

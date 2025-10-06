@@ -17,14 +17,16 @@ internal final class KCPLivePeer {
 	private var controlBlocks:[KCPControlBlock] = []
 	
 	private let logger:Logger
-	private let mtu:Int
+	private let mtu:UInt16
+
+	private var mssMeter:KCPControlBlock.MSSMeter
 	
-	init(mtu:Int, logLevel:Logger.Level) {
+	init(mtu:UInt16, logLevel:Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
-		
 		self.mtu = mtu
+		self.mssMeter = KCPControlBlock.MSSMeter(maxSamples:128)
 	}
 	
 	internal var count:Int {
@@ -47,7 +49,7 @@ internal final class KCPLivePeer {
 	}
 
 	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws {
-		controlBlocks[0].handleWrite(context: context, handler: handler, message: message, writePromise: writePromise, ackPromise: ackPromise)
+		controlBlocks[0].handleWrite(context: context, handler: handler, mssMeter: &mssMeter, message: message, writePromise: writePromise, ackPromise: ackPromise)
 	}
 
 	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) {
@@ -68,7 +70,7 @@ internal final class KCPLivePeer {
 	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
 		for i in  0..<controlBlocks.count {
 			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now)
-			controlBlocks[i].recomputeEffectiveWindow(context:context, now:iclock(now))
+			controlBlocks[i].recomputeEffectiveWindow(context:context, mssMeter:&mssMeter)
 		}
 		context.flush()
 	}
@@ -106,7 +108,7 @@ extension KCPControlBlock {
 		private var kcp:[PublicKey:KCPLivePeer] = [:]
 		private var updateTask:RepeatedTask? {
 			didSet {
-				if oldValue != nil && oldValue !== updateTask {
+				if oldValue != nil {
 					oldValue!.cancel()
 					logger.trace("kcp update task task cancelled")
 				}
@@ -117,25 +119,27 @@ extension KCPControlBlock {
 		private let ourKey:PublicKey
 		private let logger:Logger
 
-		let mtu:Int
+		let mtu:UInt16
 		var count = 0
 
 		private var readWindow:Int!
 		private var writeWindow:Int!
 			
-		internal init(key:MemoryGuarded<PrivateKey>, mtu:Int = 1400, logLevel:Logger.Level) {
+		internal init(key:MemoryGuarded<PrivateKey>, mtu:inout UInt16, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
+			buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:key))"
 			logger = buildLogger
-
 			ourKey = PublicKey(privateKey:key)
+			mtu -= UInt16(IKCP_OVERHEAD)
 			self.mtu = mtu
 		}
 
 		private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
-			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) {
-				[weak self, c = ContextContainer(context:context)] _ in
-				guard let self = self else { return }
+			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) { [weak self, c = ContextContainer(context:context)] _ in
+				guard let self = self else {
+					return
+				}
 				let now = NIODeadline.now()
 				for (key, _) in kcp {
 					c.accessContext({ contextPointer in
@@ -143,26 +147,23 @@ extension KCPControlBlock {
 					})
 				}
 			}
-
-			logger.debug("kcp update task scheduled")
 		}
-		
 	}
 }
 
 // MARK: Basic Events
 extension KCPControlBlock.Handler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		logger.trace("handler added to NIO pipeline.")
+		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu + UInt16(IKCP_OVERHEAD))", "mtu_user":"\(mtu)"])
 		context.channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
 			readWindow = value
-			l.debug("loaded read buffer size", metadata: ["so_rcvbuf":"\(value)"])
+			l.trace("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
 		}
 		context.channel.getOption(ChannelOptions.socketOption(.so_sndbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
 			writeWindow = value
-			l.debug("loaded write buffer size", metadata: ["so_sndbuf":"\(value)"])
+			l.trace("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
 		}
 		scheduleRepeatedKCPUpdates(context: context)
 	}
@@ -192,9 +193,6 @@ extension KCPControlBlock.Handler {
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
-		
-		// input segment
-		logger.trace("Received kcp segment", metadata: ["seg len": "\(data.associatedValue.header.dataLength) bytes"])
 		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now)
 	}
 }
@@ -215,18 +213,18 @@ extension KCPControlBlock.Handler {
 
 		// Send data to control block
 		do {
-			logger.trace("Sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
+			logger.trace("sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
 			try kcp[key]!.handleWrite(context: context, handler: self, message: data.associatedValue, writePromise: promise, ackPromise:nil)
 		} catch {
-			logger.error("Error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
+			logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
 	}
 	func channelWritabilityChanged(context: ChannelHandlerContext) {
 		defer {
 			context.fireChannelWritabilityChanged()
 		}
-		logger.debug("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
-		if (context.channel.isWritable) {
+		logger.trace("kcp handler writability changed", metadata: ["isWritable":"\(context.channel.isWritable)"])
+		if (context.channel.isWritable == true) {
 			scheduleRepeatedKCPUpdates(context: context)
 		} else {
 			updateTask = nil // cancellation happens automatically via didSet block on the stored property
@@ -237,10 +235,10 @@ extension KCPControlBlock.Handler {
 // MARK: User Events
 extension KCPControlBlock.Handler {
 	// Inbound events (Handshake Reset)
-	func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
 		switch event {
 			case let evt as WireguardHandler.WireguardHandshakeNotification:
-				logger.debug("Resetting kcp", metadata: ["public-key_remote":"\(evt.publicKey)"])
+				logger.debug("resetting kcp", metadata: ["public-key_remote":"\(evt.publicKey)"])
 				// Need to figure out how to make this into a conversation id
 				let key = evt.publicKey
 				let convID = evt.geometry.initiator.RAW_native()

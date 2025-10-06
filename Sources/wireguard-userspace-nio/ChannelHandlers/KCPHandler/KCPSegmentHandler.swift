@@ -44,6 +44,9 @@ extension PeerAssociated where AssociatedType == ByteBuffer {
 extension KCPSegment {
 	/// used to stack multiple kcp segments into a single payload less than MTU size
 	fileprivate struct MTUStacking:Sendable {
+		/// the logger that is used for logging within this struct
+		private let log:Logger
+
 		/// the maximum transmission unit that is configured for this handler
 		private let transmitMTU:UInt16
 
@@ -52,32 +55,29 @@ extension KCPSegment {
 		/// stores the byte buffers that are being built for each public key
 		private var segmentStack:[PublicKey:ByteBuffer] = [:]
 
-		internal init(transmitMTU:UInt16) {
-			self.transmitMTU = transmitMTU
+		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, logLevel:consuming Logger.Level) {
+			self.transmitMTU = mtu
+			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			buildLogger.logLevel = logLevel
+			buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
+			log = buildLogger
+			buildLogger.trace("instance initialized.", metadata:["mtu_wire":"\(transmitMTU)", "mtu_user":"\(transmitMTU)"])
 		}
 
 		/// adds a segment to the stack for the given public key. if the segment would cause the mtu to be exceeded, the existing buffer is flushed first.
 		/// - returns: true if outbound data was written to the context, false otherwise.
-		@discardableResult fileprivate mutating func stack(segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, context:ChannelHandlerContext, handler:KCPSegment.Handler) -> Bool {
+		@discardableResult fileprivate mutating func stack(context:ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler, driver:inout WriteOrHold<PeerAssociated<ByteBuffer>>) -> Bool {
 			let expectedEncodedLength = segment.header.dataLength + UInt32(IKCP_OVERHEAD)
 			var didWrite = false
 			if var hasExistingBuffer = segmentStack[publicKey] {
 				// we have an existing buffer, see if we can append to it...
 				if hasExistingBuffer.writableBytes < Int(expectedEncodedLength) {
-					// mtu would be exceeded if we used the existing buffer, so we need to allocate a new one and flush the existing one.
-					context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:hasExistingBuffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
-						switch result {
-							case .failure(let error):
-								for curElement in promises {
-									curElement.fail(error)
-								}
-							case .success():
-								for curElement in promises {
-									curElement.succeed(())
-								}
-								break
-						}
-					})
+					// initialize a new promise that will be used to track the completion of the write
+					let writePromise = context.channel.eventLoop.makePromise(of:Void.self)
+					for curElement in promiseStack[publicKey]! {
+						writePromise.futureResult.cascade(to:curElement)
+					}
+					driver.holdOrWrite(context:context, handler:handler, PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:hasExistingBuffer), writePromise:writePromise)
 					hasExistingBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 					didWrite = true
 					promiseStack[publicKey] = []
@@ -101,12 +101,12 @@ extension KCPSegment {
 			return didWrite
 		}
 
-		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler) {
+		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler, driver:inout WriteOrHold<PeerAssociated<ByteBuffer>>) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
 			for (publicKey, buffer) in segmentStack {
-				context.write(handler.wrapOutboundOut(PeerPayload(publicKey:publicKey, buffer:buffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
+				context.write(handler.wrapOutboundOut(PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:buffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
 					switch result {
 						case .failure(let error):
 							for curElement in promises {
@@ -139,6 +139,7 @@ extension KCPSegment {
 		internal typealias OutboundIn = PeerAssociated<KCPSegment>
 		/// the type that goes out of the channel to the next writer
 		internal typealias OutboundOut = PeerAssociated<ByteBuffer>
+		private var outboundOutDriver:WriteOrHold<OutboundOut>
 
 		/// the logger that is used for logging within this handler
 		private let log:Logger
@@ -153,15 +154,14 @@ extension KCPSegment {
 		private var writtenStack:MTUStacking
 		private var outboundOutCount:Int = 0
 
-		private var pendingWrites:[(encoded:PeerPayload, promise:EventLoopPromise<Void>?)] = []
-
-		internal init(mtu:inout UInt16, logLevel:Logger.Level) {
+		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout UInt16, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:KCPSegment.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
+			buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
 			log = buildLogger
 			dataMTU = mtu
-			writtenStack = MTUStacking(transmitMTU: mtu)
-			mtu -= UInt16(IKCP_OVERHEAD)
+			writtenStack = MTUStacking(privateKey:privateKey, mtu: mtu, logLevel: logLevel)
+			outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:8192)
 		}
 
 		deinit {
@@ -174,7 +174,7 @@ extension KCPSegment {
 extension KCPSegment.Handler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		encodeBuffer = context.channel.allocator.buffer(capacity:Int(dataMTU))
-		log.debug("handler added to NIO pipeline.", metadata:["mtu":"\(dataMTU)"])
+		log.debug("handler added to NIO pipeline.", metadata:["mtu_user":"\(dataMTU)", "mtu_wire":"\(dataMTU)"])
 	}
 
 	internal func handlerRemoved(context:ChannelHandlerContext) {
@@ -201,7 +201,7 @@ extension KCPSegment.Handler {
 		while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {
 			i += 1
 			logger.trace("decoded kcp segment from byte buffer.", metadata:["public_key":"\(encodedInbound.publicKey)", "segment_sequence_number":"\(segment.header.sequenceNumber)", "segment_command":"\(segment.header.command)", "segment_data_length":"\(segment.header.dataLength)", "segment_fragment_id":"\(segment.header.fragmentID)", "segment_timestamp":"\(segment.header.timestamp)", "segment_una":"\(segment.header.una)"])
-			context.fireChannelRead(wrapInboundOut(PeerSegment(publicKey:encodedInbound.publicKey, segment:segment)))
+			context.fireChannelRead(wrapInboundOut(PeerAssociated<KCPSegment>(publicKey:encodedInbound.publicKey, segment:segment)))
 		}
 	}
 
@@ -224,23 +224,16 @@ extension KCPSegment.Handler {
 			context.fireChannelWritabilityChanged()
 		}
 		guard context.channel.isWritable else {
-			log.notice("backpressure in channel detected.")
+			log.trace("backpressure present.")
 			return
 		}
 		log.trace("channel is writable, flushing buffered writes...")
-		for (envelope, promise) in pendingWrites {
-			log.trace("writing buffered packet...", metadata:["bytes_written":"\(envelope.associatedValue.readableBytes)"])
-			context.write(wrapOutboundOut(envelope), promise:promise)
-		}
-		pendingWrites.removeAll()
 	}
 
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)
-		if context.channel.isWritable == false {
-		}
-		if writtenStack.stack(segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, context:context, handler:self) == true {
+		if writtenStack.stack(context:context, segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, handler:self, driver:&outboundOutDriver) == true {
 			outboundOutCount += 1
 		}
 		stackedSegmentCount += 1
@@ -248,10 +241,9 @@ extension KCPSegment.Handler {
 	}
 
 	internal func flush(context:ChannelHandlerContext) {
-		log.trace("flushing...", metadata:["stacked_segments_written":"\(stackedSegmentCount)"])
 		outboundOutCount = 0
 		stackedSegmentCount = 0
-		writtenStack.completeAll(context:context, handler:self)
+		writtenStack.completeAll(context:context, handler:self, driver:&outboundOutDriver)
 		context.flush()
 	}
 }

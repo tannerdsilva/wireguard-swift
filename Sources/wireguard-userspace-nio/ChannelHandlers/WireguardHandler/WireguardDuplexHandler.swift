@@ -22,6 +22,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal typealias InboundOut = PeerAssociated<ByteBuffer>
 	internal typealias OutboundIn = PeerAssociated<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
+	private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	internal static let keepaliveTimeout = TimeAmount.seconds(10)
 	internal static let rekeyTimeout = TimeAmount.seconds(5)
@@ -54,6 +55,9 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		internal var activeSessionIndicies:MPeerIndex
 	}
 
+	/// the maximum transmission unit that is configured for this handler.
+	private let mtu:UInt16
+
 	/// WARNING: do not touch - the live peer instances will mutate these for you.
 	internal var automaticallyUpdatedVariables:AutomaticallyUpdated
 	/// the primary storage for the active peers that the interface will connect to.
@@ -80,13 +84,13 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update([UInt8]("cookie--".utf8))
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
-		
-		log.trace("instance initialized.", metadata:["peer_count":"\(initialPeers.count)", "mtu":"\(mtu)"])
 		operatingState = .initialized(initialPeers)
+		self.mtu = mtu
 		mtu -= UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size)
+		outboundOutDriver = WriteOrHold(logLevel:log.logLevel, limit:2048)
 	}
 
-	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
+	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) -> WriteOrHold<OutboundOut>.Result {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
@@ -98,6 +102,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		}
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
 		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+		return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
 	}
 }
 
@@ -116,20 +121,20 @@ extension WireguardHandler {
 				}, removalHandler: { [weak self, l = log] removedPublicKey, _ in
 					// when peer is removed
 					guard let _ = self else { return }
-					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
+					l.debug("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
 				})
 				operatingState = .channelEngaged
 			default:
 				fatalError("this should never happen \(#file):\(#line)")
 		}
-		logger.trace("handler added to NIO pipeline.")
+		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu)", "mtu_user":"\(mtu - UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size))"])
 	}
 	internal func handlerRemoved(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
 		let logger = log
-		logger.trace("handler removed from NIO pipeline.")
+		logger.debug("handler removed from NIO pipeline.")
 		operatingState = .terminated
 		peerDeltaEngine.setPeers(context:context, [], handler:self)
 	}
@@ -185,9 +190,13 @@ extension WireguardHandler {
 						} catch {
 							// create and send the cookie
 							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
-							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
-							flushAfterChannelReadComplete = true
-							return
+							switch writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil) {
+								case .written:
+									flushAfterChannelReadComplete = true
+								default:
+									// held - no need to flush now.
+									break
+							}
 						}
 					}
 					
@@ -205,8 +214,13 @@ extension WireguardHandler {
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
-					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
-					flushAfterChannelReadComplete = true
+					switch writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil) {
+						case .written:
+							flushAfterChannelReadComplete = true
+						default:
+							// held - no need to flush now.
+							break
+					}
 					break;
 			
 				case .response(let payload):
@@ -329,18 +343,26 @@ extension WireguardHandler {
 	}
 	
 	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
+		defer {
+			context.fireChannelWritabilityChanged()
+		}
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		log.trace("channel writability changed")
-		context.fireChannelWritabilityChanged()
+		log.trace("channel writability changed.")
+		context.eventLoop.execute { [weak self, c = ContextContainer(context:context)] in
+			guard let self else { return }
+			c.accessContext { contextPtr in
+				outboundOutDriver.writabilityChanged(context:contextPtr.pointee, handler:self)
+			}
+		}
 	}
 }
 
 // swift nio write handler function
 extension WireguardHandler {
 	/// applies an immediate encryption and writing of the given payload to the given public key.
-	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) {
+	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) -> WriteOrHold<OutboundOut>.Result? {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -350,19 +372,19 @@ extension WireguardHandler {
 		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
 			logger.error("peer is not configured. can not write data.")
 			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
-			return
+			return nil
 		}
 		guard let ep = peerInfoLive.endpoint() else {
 			logger.error("trying to write data to a peer with no known endpoint.")
 			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
-			return
+			return nil
 		}
 		switch peerInfoLive.getSendStrategy(context:context, now:now, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep)) {
 			case .queueForInitiatingHandshake:
 				fallthrough
 			case .queueWhileAwaitingKeyRotation:
 				peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
-				return
+				return nil
 			case .sendImmediately(var sendValues):
 				do {
 					var forgedLength = 0
@@ -377,13 +399,12 @@ extension WireguardHandler {
 					logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
 					context.fireErrorCaught(error)
 					promise?.fail(error)
-					return
+					return nil
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
 				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes) bytes", "public-key_remote":"\(publicKey)"])
-				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
-				break
+				return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
 		}
 	}
 	
@@ -391,8 +412,8 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var peerPayload = unwrapOutboundIn(data)
+		let peerPayload = unwrapOutboundIn(data)
 		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.associatedValue)
-		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
+		_ = writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
 	}
 }

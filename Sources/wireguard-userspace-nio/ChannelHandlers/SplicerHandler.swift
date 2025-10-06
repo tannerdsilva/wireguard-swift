@@ -5,7 +5,7 @@ import Logging
 
 extension Array {
 	func split(intoChunksOf chunkSize: Int) -> [[Element]] {
-		guard chunkSize > 0 else { return [self] }	// safety guard
+		guard chunkSize > 0 else { return [self] }
 		var chunks: [[Element]] = []
 		var startIndex = 0
 		while startIndex < self.count {
@@ -25,6 +25,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
 	internal typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
+	private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	private var logger:Logger
 	
@@ -40,6 +41,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 		self.spliceByteLength = spliceByteLength
+		outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:nil)
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
@@ -101,42 +103,22 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		defer {
 			context.fireChannelWritabilityChanged()
 		}
-		logger.trace("channel writability changed: \(context.channel.isWritable)")
-		guard context.channel.isWritable == true else {
-			logger.notice("backpressure in channel detected.")
-			return
-		}
-		logger.trace("channel is writable, flushing buffered writes...")
-		for ((publicKey, buffer), promise) in pendingWrites {
-			logger.trace("writing buffered packet...", metadata:["bytes_written":"\(buffer.readableBytes)", "remote_address":"\(publicKey)"])
-			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey: publicKey, associatedValue: buffer)), promise:promise)
-		}
-		// context.flush()
-		pendingWrites.removeAll()
-	}
-
-	private func writeOrStore(context:ChannelHandlerContext, key:PublicKey, buffer:ByteBuffer, promise:EventLoopPromise<Void>?) {
-		if context.channel.isWritable == false {
-			logger.notice("channel is not writable, buffering packet write...", metadata:["buffered_writes":"\(pendingWrites.count + 1)"])
-			pendingWrites.append((payload:(key, buffer), promise:promise))
-		} else {
-			logger.trace("writing spliced packet...", metadata:["bytes_written":"\(buffer.readableBytes)"])
-			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey: key, associatedValue: buffer)), promise: promise)
-		}
+		logger.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
+		outboundOutDriver.writabilityChanged(context:context, handler:self)
 	}
 	
 	// Receiving data which needs to be spliced and sent
 	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
 		var (key, data) = unwrapOutboundIn(data)
 		
-		logger.debug("Splicing \(data.count) bytes")
+		logger.debug("splicing \(data.count) bytes")
 		
 		// Data doesn't need to be spliced, add a header signifying 0 length
 		if (data.count <= spliceByteLength) {
 			let footerBytes = [UInt8](repeating: 0, count: 4)
 			data.append(contentsOf: footerBytes)
 			let buf = context.channel.allocator.buffer(bytes:data)
-			writeOrStore(context:context, key:key, buffer:buf, promise:promise)
+			outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
 		} else {
 			let splices = data.split(intoChunksOf: spliceByteLength)
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
@@ -149,9 +131,9 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let buf = context.channel.allocator.buffer(bytes:segment)
 				if (i == splices.count-1) {
-					writeOrStore(context:context, key:key, buffer:buf, promise:promise)
+					outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
 				} else {
-					writeOrStore(context:context, key:key, buffer:buf, promise:nil)
+					outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:nil)
 				}
 			}
 		}

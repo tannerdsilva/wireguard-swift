@@ -60,17 +60,17 @@ let IKCP_PROBE_INIT:UInt32 = 7000
 let IKCP_PROBE_LIMIT:UInt32 = 120000
 
 extension KCPControlBlock {
-	fileprivate struct MSSMeter {
-		private var total: UInt64 = 0
-		private var count: UInt64 = 0
+	internal struct MSSMeter:Sendable {
+		private var total:UInt64 = 0
+		private var count:UInt64 = 0
 		private let maxSamples:UInt64
 
-		fileprivate init(maxSamples:UInt64) {
+		internal init(maxSamples:UInt64) {
 			self.maxSamples = maxSamples
 		}
 
-		internal mutating func record(mss value: UInt64) {
-			total &+= value
+		internal mutating func record(mss value: UInt32) {
+			total &+= UInt64(value)
 			count &+= 1
 			if count > maxSamples {
 				total >>= 1
@@ -148,9 +148,6 @@ internal struct KCPControlBlock {
 			return mtu - IKCP_OVERHEAD
 		}
 	}
-	/// the rolling mss meter.
-	private var mssMeter:MSSMeter
-	
 	/// - *purpose*: oldest unacknowledged sequence number
 	/// - *read/written when*: written when an ack is received, read when sending data
 	/// - *how it affects ack processing*: any segments with a sequence number less than snd_una can be removed from the send buffer
@@ -238,7 +235,6 @@ internal struct KCPControlBlock {
 		self.writeWindow = writeWindow
 		self.readWindow = readWindow
 		self.remoteWindow = rmt_wnd
-		self.mssMeter = MSSMeter(maxSamples:128)
 	}
 
 	internal mutating func handleChannelReadComplete(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
@@ -257,6 +253,9 @@ internal struct KCPControlBlock {
 	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
+		guard conv == associatedSegment.associatedValue.header.conversationID else {
+			fatalError("conversation id mismatch. expected \(conv), got \(associatedSegment.associatedValue.header.conversationID). \(#file):\(#line)")
+		}
 		#endif
 		let previousUna = snd_una
 		guard associatedSegment.publicKey == peerPublicKey else {
@@ -265,9 +264,6 @@ internal struct KCPControlBlock {
 		var logger = log
 		logger[metadataKey:"_func"] = "\(#function)"
 		let now = iclock(now)
-		guard conv == associatedSegment.associatedValue.header.conversationID else {
-			fatalError("conversation id mismatch. expected \(conv), got \(associatedSegment.associatedValue.header.conversationID). \(#file):\(#line)")
-		}
 		guard associatedSegment.associatedValue.data.count == associatedSegment.associatedValue.header.dataLength else {
 			throw InputError.partialTrailingData
 		}
@@ -444,7 +440,7 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
-	public mutating func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) {
+	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, mssMeter:inout MSSMeter, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?) {
 		let now = iclock()
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
 
@@ -467,7 +463,7 @@ extension KCPControlBlock {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
 			flightBytes &+= UInt32(fragSize)
-			mssMeter.record(mss: UInt64(fragSize))
+			mssMeter.record(mss:UInt32(fragSize))
 		}
 		isInactive = false
 	}
@@ -537,8 +533,11 @@ extension KCPControlBlock {
 }
 
 extension KCPControlBlock {
-	internal mutating func recomputeEffectiveWindow(context:borrowing ChannelHandlerContext, now: UInt32) {
-		return
+	internal mutating func recomputeEffectiveWindow(context:borrowing ChannelHandlerContext, mssMeter:inout MSSMeter) {
+		// this is a stupid thing that is needed now but probably not needed by the time you raed this I hope (if not, plz fix)
+		guard flightBytes < writeWindow else {
+			return
+		}
 		let freeBytes = UInt32(writeWindow - flightBytes)
 		guard freeBytes > 0 else {
 			writeWindow = 0

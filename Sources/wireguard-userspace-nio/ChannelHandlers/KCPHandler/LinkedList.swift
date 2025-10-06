@@ -116,7 +116,7 @@ extension LinkedList {
 	}
 }
 
-extension LinkedList: Sequence {
+extension LinkedList:Sequence {
 	internal struct Iterator:IteratorProtocol, Sequence {
 		// The node that will be returned on the next call to `next()`.
 		private var nextNode: LinkedList<Element>.Node?
