@@ -61,7 +61,7 @@ internal struct WriteOrHold<ExchangedType:LenghExpressibleExchangeType>:Sendable
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		if context.channel.isWritable {
+		if true || context.channel.isWritable {
 			context.write(handler.wrapOutboundOut(message), promise:writePromise)
 			return .written
 		} else {

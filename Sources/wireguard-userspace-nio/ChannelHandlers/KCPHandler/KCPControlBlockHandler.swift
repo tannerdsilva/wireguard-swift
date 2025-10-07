@@ -18,15 +18,23 @@ internal final class KCPLivePeer {
 	
 	private let logger:Logger
 	private let mtu:UInt16
+	
+	// Congestion Window variables
+	private let minCongestionWindow:Int
+	private var congestionWindow:Int
+	private var maxCongestionWindow:Int
 
 	private var mssMeter:KCPControlBlock.MSSMeter
 	
-	init(mtu:UInt16, logLevel:Logger.Level) {
+	init(mtu:UInt16, logLevel:Logger.Level, maxCongestionWindow:Int) {
 		var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 		self.mtu = mtu
 		self.mssMeter = KCPControlBlock.MSSMeter(maxSamples:128)
+		self.maxCongestionWindow = maxCongestionWindow
+		self.minCongestionWindow = Int(mtu)
+		self.congestionWindow = Int(mtu)
 	}
 	
 	internal var count:Int {
@@ -49,7 +57,10 @@ internal final class KCPLivePeer {
 	}
 
 	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise: EventLoopPromise<Void>? = nil, ackPromise: EventLoopPromise<Void>? = nil) throws {
+		let now = NIODeadline.now()
 		controlBlocks[0].handleWrite(context: context, handler: handler, mssMeter: &mssMeter, message: message, writePromise: writePromise, ackPromise: ackPromise)
+		controlBlocks[0].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow)
+		context.flush()
 	}
 
 	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) -> Bool {
@@ -58,9 +69,12 @@ internal final class KCPLivePeer {
 				guard associatedSegment.associatedValue.header.conversationID == controlBlocks[i].conv else {
 					continue cbLoop
 				}
-				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now)
+				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now, congestionWindow: &congestionWindow, maxCongestionWindow: &maxCongestionWindow)
+				if(congestionWindow > maxCongestionWindow) {
+					congestionWindow = maxCongestionWindow
+				}
 				// Check for disconnection via magicID
-				if(i == count - 1 && !controlBlocks[count - 1].isActiveReceiver) {
+				if(i == count - 1 && !controlBlocks[count - 1].isActiveReceiver && associatedSegment.associatedValue.header.command == .push) {
 					return false
 				}
 				break cbLoop
@@ -72,10 +86,10 @@ internal final class KCPLivePeer {
 		return true
 	}
 
-	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
+	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
+		let now = NIODeadline.now()
 		for i in  0..<count {
-			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now)
-			controlBlocks[i].recomputeEffectiveWindow(context:context, mssMeter:&mssMeter)
+			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow)
 		}
 		context.flush()
 	}
@@ -97,6 +111,17 @@ internal final class KCPLivePeer {
 				return
 			}
 		}
+	}
+	
+	internal func reset(_ block:KCPControlBlock) {
+		// Keep new block from handshake
+		controlBlocks = [controlBlocks[0]]
+		// Append magic control block
+		controlBlocks.append(block)
+		// Set active/inactive
+		controlBlocks[0].isActiveReceiver = false
+		controlBlocks[1].isActiveReceiver = true
+		logger.info("Connection reset. Recreating kcp control blocks.")
 	}
 }
 
@@ -145,10 +170,9 @@ extension KCPControlBlock {
 				guard let self = self else {
 					return
 				}
-				let now = NIODeadline.now()
 				for (key, _) in kcp {
 					c.accessContext({ contextPointer in
-						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self, now:now)
+						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self)
 					})
 				}
 			}
@@ -195,11 +219,14 @@ extension KCPControlBlock.Handler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
-			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
+			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
 		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now) != true) {
 			// handle 'Disconnected' scenario
+			let magicID = try! magicID(key1: ourKey, key2: key)
+			kcp[key]!.reset(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+			_ = kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now)
 		}
 	}
 }
@@ -214,7 +241,7 @@ extension KCPControlBlock.Handler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			let magicID = try! magicID(key1: ourKey, key2: key)
-			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
+			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
 
@@ -249,11 +276,11 @@ extension KCPControlBlock.Handler {
 				// Need to figure out how to make this into a conversation id
 				let key = evt.publicKey
 				let convID = evt.geometry.initiator.RAW_native()
-				 Check if control block exists
+				// Check if control block exists
 				if (kcp[key] == nil) {
 					// Create the magic id control block
 					let magicID = try! magicID(key1: ourKey, key2: key)
-					kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel)
+					kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 					kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 				}
 				kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: convID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))

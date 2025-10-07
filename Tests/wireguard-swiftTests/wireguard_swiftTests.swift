@@ -139,7 +139,7 @@ extension WireguardSwiftTests {
 			(myPublicKey, myPrivateKey) = try dhGenerate()
 			(peerPublicKey, peerPrivateKey) = try dhGenerate()
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = .trace
+			buildLogger.logLevel = .info
 			cliLogger = buildLogger
 		}
 		
@@ -236,14 +236,15 @@ extension WireguardSwiftTests {
 		}
 		
 		@Test func sendManySmallMessages() async throws {
-			let payloadSize: Int = 2_000
+			let payloadSize: Int = 20_000
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
 				payload[i] = UInt8(i%256)
 			}
 			
+			let payloadCount = 9_000
 			var payloads:[[UInt8]] = []
-			for _ in 0..<1_000 {
+			for _ in 0..<payloadCount {
 				payloads.append(payload)
 			}
 			
@@ -279,7 +280,7 @@ extension WireguardSwiftTests {
 					#expect(key == myPublicKey)
 					#expect(incomingData == payloads[count])
 					count += 1
-					if (count == 999) {
+					if (count == payloadCount - 1) {
 						foo.cancelAll()
 					}
 				}
@@ -287,7 +288,7 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func sendSingleLargeMessage() async throws {
-			let payloadSize: Int = 20_000_000
+			let payloadSize: Int = 1_000_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
