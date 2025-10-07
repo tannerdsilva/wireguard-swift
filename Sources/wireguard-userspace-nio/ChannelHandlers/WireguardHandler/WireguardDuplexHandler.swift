@@ -29,6 +29,9 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal static let rekeyAfterTime = TimeAmount.seconds(120)
 	internal static let rejectAfterTime = TimeAmount.seconds(300)
 
+	/// used to specify the wireguard overhead for mtu calculations.
+	internal static let wireguardDataOverhead = MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size
+
 	private enum State {
 		case initialized([PeerInfo])
 		case channelEngaged
@@ -55,7 +58,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 
 	/// the maximum transmission unit that is configured for this handler.
-	private let mtu:UInt16
+	private let mtu:MTULimits
 
 	/// WARNING: do not touch - the live peer instances will mutate these for you.
 	internal var automaticallyUpdatedVariables:AutomaticallyUpdated
@@ -84,9 +87,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
 		operatingState = .initialized(initialPeers)
-		self.mtu = mtu
-		mtu -= UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size)
-		// outboundOutDriver = WriteOrHold(logLevel:log.logLevel, limit:2048)
+		self.mtu = MTULimits(mtuInboundIn:mtu, mtuOutboundOut:mtu, mtuOutboundIn:mtu - UInt16(Self.wireguardDataOverhead))
+		mtu -= UInt16(Self.wireguardDataOverhead)
 	}
 
 	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) -> WriteOrHold<OutboundOut>.Result {
@@ -100,9 +102,15 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 			return outputBuffer.baseAddress!.distance(to:message.RAW_encode(dest:outputBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 		}
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
+		#if DEBUG
+		guard (asAddressedEnvelope.data.readableBytes) <= mtu.mtuOutboundIn else {
+			log.error("attempted to write packet that exceeds the configured mtu.", metadata:["attempted_size":"\(asAddressedEnvelope.data.readableBytes + (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size))", "mtu_limit":"\(mtu.mtuOutboundOut)"])
+			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize: asAddressedEnvelope.data.readableBytes + (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size), mtuLimitOutbound: Int(mtu.mtuOutboundOut)))
+			fatalError("attempted to write packet that exceeds the configured mtu. \(#file):\(#line)")
+		}
+		#endif
 		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 		return .written
-		// return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
 	}
 }
 
@@ -127,7 +135,7 @@ extension WireguardHandler {
 			default:
 				fatalError("this should never happen \(#file):\(#line)")
 		}
-		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu)", "mtu_user":"\(mtu - UInt16(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size))"])
+		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu.mtuOutboundOut)", "mtu_user":"\(mtu.mtuOutboundIn)"])
 	}
 	internal func handlerRemoved(context: ChannelHandlerContext) {
 		#if DEBUG
@@ -149,7 +157,7 @@ extension WireguardHandler {
 
 // swift nio read handler function
 extension WireguardHandler {
-	internal func channelReadComplete(context: ChannelHandlerContext) {
+	internal func channelReadComplete(context:ChannelHandlerContext) {
 		defer {
 			flushAfterChannelReadComplete = false
 			context.fireChannelReadComplete()
@@ -284,7 +292,8 @@ extension WireguardHandler {
 //							logger.error("failed to validate cookie and create msgMac2")
 //							return
 						}
-						/*let nioNow = NIODeadline.now()
+						/*
+						let nioNow = NIODeadline.now()
 						selfInitiatedIndexes.rekey(context:context, indexM:cookiePayload.receiverIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)) { [weak self, ap = chainingData.authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = endpoint] timer in
 							// rekey attempt task.
 							guard let self = self, NIODeadline.now() - start < Self.rekeyAttemptTime else {
@@ -296,11 +305,16 @@ extension WireguardHandler {
 							c.accessContext { contextPointer in
 								self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 							}
-						}*/
+						}
+						*/
 					}
 					break;
 				
 				case .data(recipientIndex: let recipientIndex, counter: let counter, payload: let payload):
+					guard payload.count <= mtu.mtuInboundIn else {
+						logger.trace("packet dropped due to exceeding mtu.", metadata:["size":"\(payload.count)", "mtu_limit":"\(mtu.mtuInboundIn)"])
+						return
+					}
 					// verify that a current peer index exists for the public key already.
 					guard let identifiedPublicKey = automaticallyUpdatedVariables.activeSessionIndicies.seek(indexM:recipientIndex) else {
 						logger.warning("could not find matching traffic for inbound data peer index m \(recipientIndex)")
@@ -339,22 +353,6 @@ extension WireguardHandler {
 		} catch let error {
 			logger.error("error processing packet: \(error)")
 			context.fireErrorCaught(error)
-		}
-	}
-	
-	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		log.trace("channel writability changed.")
-		context.eventLoop.execute { [weak self, c = ContextContainer(context:context)] in
-			guard let self else { return }
-			c.accessContext { contextPtr in
-				// outboundOutDriver.writabilityChanged(context:contextPtr.pointee, handler:self)
-			}
 		}
 	}
 }
@@ -403,7 +401,7 @@ extension WireguardHandler {
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
-				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes) bytes", "public-key_remote":"\(publicKey)"])
+				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes)", "public-key_remote":"\(publicKey)"])
 				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 				return .written
 		}
@@ -414,7 +412,12 @@ extension WireguardHandler {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		let peerPayload = unwrapOutboundIn(data)
-		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.associatedValue)
-		_ = writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
+		guard peerPayload.associatedValue.readableBytes <= mtu.mtuOutboundIn else {
+			log.error("attempted to write packet that exceeds the configured mtu of \(mtu) bytes", metadata:["size":"\(peerPayload.associatedValue.readableBytes)"])
+			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:peerPayload.associatedValue.readableBytes + Self.wireguardDataOverhead, mtuLimitOutbound:Int(mtu.mtuOutboundOut)))
+			return
+		}
+		var payload = peerPayload.associatedValue
+		_ = writeBytes(context:context, publicKey:peerPayload.publicKey, payload:&payload, promise:promise)
 	}
 }

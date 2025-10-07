@@ -21,16 +21,16 @@ extension Array {
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	internal typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
-	public typealias InboundOut = (PublicKey, [UInt8]) // Send to the Handoff handler
+	public typealias InboundOut = PeerAssociated<ByteBuffer> // Send to the Handoff handler
 	
-	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
+	internal typealias OutboundIn = PeerAssociated<ByteBuffer> // From writes from user
 	internal typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
-	private var outboundOutDriver:WriteOrHold<OutboundOut>
+	// private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	private var logger:Logger
 	
 	private var storedLengths:[PublicKey:Int] = [:]
-	private var storedPayload:[PublicKey:[UInt8]] = [:]
+	private var storedPayload:[PublicKey:ByteBuffer] = [:]
 	
 	private let spliceByteLength:Int
 
@@ -39,7 +39,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 		self.spliceByteLength = spliceByteLength
-		outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:nil)
+		// outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:nil)
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
@@ -62,29 +62,31 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			
 			// Remove the first 4 bytes from the array
 			let payload = Array(data.dropLast(4))
+
+			var buf = context.channel.allocator.buffer(bytes:payload)
+			buf.writeBytes(payload)
 			
 			// Only this one segment
 			if (value == 0) {
 				logger.debug("Sending single message to DHH")
-				context.fireChannelRead(wrapInboundOut((key, payload)))
+				context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: buf)))
 				return
 			}
 			
 			// Add to stored segments cause there are more coming!
 			storedLengths[key] = Int(value) - 1
-			storedPayload[key] = payload
-			
+			storedPayload[key] = buf
 			return
 		}
-		
-		storedPayload[key]!.append(contentsOf: data)
+
+		storedPayload[key]!.writeBytes(data)
 		storedLengths[key]! -= 1
 		
 		// if it's the last segment, then send the whole thing to handoff handler
 		if (storedLengths[key]! == 0) {
 			storedLengths[key] = nil
 			logger.debug("Sending reforged message to DHH")
-			context.fireChannelRead(wrapInboundOut((key, storedPayload[key]!)))
+			context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: storedPayload[key]!)))
 			storedPayload[key] = nil
 		}
 	}
@@ -97,28 +99,27 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		context.fireChannelReadComplete()
 	}
 
-	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		logger.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
-		outboundOutDriver.writabilityChanged(context:context, handler:self)
-	}
+	// internal func channelWritabilityChanged(context: ChannelHandlerContext) {
+	// 	defer {
+	// 		context.fireChannelWritabilityChanged()
+	// 	}
+	// 	logger.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
+	// 	// outboundOutDriver.writabilityChanged(context:context, handler:self)
+	// }
 	
 	// Receiving data which needs to be spliced and sent
 	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
-		var (key, data) = unwrapOutboundIn(data)
+		var associatedData = unwrapOutboundIn(data)
 		
-		logger.debug("splicing \(data.count) bytes")
+		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
 		
 		// Data doesn't need to be spliced, add a header signifying 0 length
-		if (data.count <= spliceByteLength) {
+		if (associatedData.associatedValue.readableBytes <= spliceByteLength) {
 			let footerBytes = [UInt8](repeating: 0, count: 4)
-			data.append(contentsOf: footerBytes)
-			let buf = context.channel.allocator.buffer(bytes:data)
-			outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+			associatedData.associatedValue.writeBytes(footerBytes)
+			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
 		} else {
-			let splices = data.split(intoChunksOf: spliceByteLength)
+			let splices = [UInt8](associatedData.associatedValue.readableBytesView).split(intoChunksOf: spliceByteLength)
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
 			for i in 0..<splices.count {
 				var segment = Array(splices[i])
@@ -129,9 +130,11 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let buf = context.channel.allocator.buffer(bytes:segment)
 				if (i == splices.count-1) {
-					outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+					// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
 				} else {
-					outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:nil)
+					// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:nil)
+					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:nil)
 				}
 			}
 		}

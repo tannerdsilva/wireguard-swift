@@ -125,7 +125,7 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
 				}
 			case 0x4:
-				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Payload>.size + MemoryLayout<Tag>.size) else {
+				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size) else {
 					logger.error("datagram mtu exceeded", metadata:["mtu_user":"\(mtu)", "packet_size":"\(envelope.data.readableBytes)"])
 					context.fireErrorCaught(Error.mtuExceeded)
 					return

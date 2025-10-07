@@ -66,7 +66,7 @@ extension KCPSegment {
 
 		/// adds a segment to the stack for the given public key. if the segment would cause the mtu to be exceeded, the existing buffer is flushed first.
 		/// - returns: true if outbound data was written to the context, false otherwise.
-		@discardableResult fileprivate mutating func stack(context:ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler, driver:inout WriteOrHold<PeerAssociated<ByteBuffer>>) -> Bool {
+		@discardableResult fileprivate mutating func stack(context:ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler) -> Bool {
 			let expectedEncodedLength = segment.header.dataLength + UInt32(IKCP_OVERHEAD)
 			var didWrite = false
 			if var hasExistingBuffer = segmentStack[publicKey] {
@@ -77,7 +77,8 @@ extension KCPSegment {
 					for curElement in promiseStack[publicKey]! {
 						writePromise.futureResult.cascade(to:curElement)
 					}
-					driver.holdOrWrite(context:context, handler:handler, PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:hasExistingBuffer), writePromise:writePromise)
+					// driver.holdOrWrite(context:context, handler:handler, PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:hasExistingBuffer), writePromise:writePromise)
+					context.write(handler.wrapOutboundOut(PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:hasExistingBuffer)), promise:writePromise)
 					hasExistingBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 					didWrite = true
 					promiseStack[publicKey] = []
@@ -101,7 +102,7 @@ extension KCPSegment {
 			return didWrite
 		}
 
-		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler, driver:inout WriteOrHold<PeerAssociated<ByteBuffer>>) {
+		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -139,7 +140,6 @@ extension KCPSegment {
 		internal typealias OutboundIn = PeerAssociated<KCPSegment>
 		/// the type that goes out of the channel to the next writer
 		internal typealias OutboundOut = PeerAssociated<ByteBuffer>
-		private var outboundOutDriver:WriteOrHold<OutboundOut>
 
 		/// the logger that is used for logging within this handler
 		private let log:Logger
@@ -161,7 +161,6 @@ extension KCPSegment {
 			log = buildLogger
 			dataMTU = mtu
 			writtenStack = MTUStacking(privateKey:privateKey, mtu: mtu, logLevel: logLevel)
-			outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:8192)
 		}
 
 		deinit {
@@ -216,24 +215,10 @@ extension KCPSegment.Handler {
 
 // MARK: Channel Write
 extension KCPSegment.Handler {
-	internal func channelWritabilityChanged(context:ChannelHandlerContext) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		guard context.channel.isWritable else {
-			log.trace("backpressure present.")
-			return
-		}
-		log.trace("channel is writable, flushing buffered writes...")
-	}
-
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)
-		if writtenStack.stack(context:context, segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, handler:self, driver:&outboundOutDriver) == true {
+		if writtenStack.stack(context:context, segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, handler:self) == true {
 			outboundOutCount += 1
 		}
 		stackedSegmentCount += 1
@@ -243,7 +228,41 @@ extension KCPSegment.Handler {
 	internal func flush(context:ChannelHandlerContext) {
 		outboundOutCount = 0
 		stackedSegmentCount = 0
-		writtenStack.completeAll(context:context, handler:self, driver:&outboundOutDriver)
+		log.trace("flushing...")
+		/*writtenStack.completeAll(context:context, handler:self)*/
 		context.flush()
+	}
+}
+
+
+
+extension KCPSegment {
+	internal final class StupidHandler:ChannelDuplexHandler, @unchecked Sendable {
+		public typealias InboundIn = PeerAssociated<ByteBuffer>
+		public typealias InboundOut = PeerAssociated<KCPSegment>
+		public typealias OutboundIn = PeerAssociated<KCPSegment>
+		public typealias OutboundOut = PeerAssociated<ByteBuffer>
+
+		public func handlerAdded(context:ChannelHandlerContext) {
+			// no-op
+		}
+		public func handlerRemoved(context:ChannelHandlerContext) {
+			// no-op
+		}
+		public func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
+			context.fireUserInboundEventTriggered(event)
+		}
+		public func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+			var encodedInbound = unwrapInboundIn(data)
+			while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {
+				context.fireChannelRead(wrapInboundOut(PeerAssociated<KCPSegment>(publicKey:encodedInbound.publicKey, segment:segment)))
+			}
+		}
+		public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+			let decodedOutbound = unwrapOutboundIn(data)
+			var encodeBuffer = context.channel.allocator.buffer(capacity:Int(decodedOutbound.associatedValue.header.dataLength) + Int(IKCP_OVERHEAD))
+			decodedOutbound.associatedValue.encode(to:&encodeBuffer)
+			context.write(wrapOutboundOut(PeerAssociated<ByteBuffer>(publicKey:decodedOutbound.publicKey, associatedValue:encodeBuffer)), promise:promise)
+		}
 	}
 }
