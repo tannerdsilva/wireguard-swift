@@ -5,7 +5,7 @@ import RAW_blake2
 import Logging
 import wireguard_crypto_core
 
-@RAW_staticbuff(bytes: 4)
+@RAW_staticbuff(bytes:4)
 @RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
 internal struct MagicID:Sendable {}
 

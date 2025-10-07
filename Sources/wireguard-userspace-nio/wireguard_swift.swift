@@ -139,7 +139,7 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 										initializationFuture.fail(ChannelInitializationError.soWriteBufferWaterMarkSetFailed)
 										return
 									}
-									l.debug("initializing channel pipeline...", metadata: ["so_sndbuf":"\(Int(sndBuf))", "so_rcvbuf":"\(result)", "wbwm_low":"\(Int(sndBuf*0.3))", "wbwm_high":"\(Int(sndBuf*0.75))"])
+									l.notice("channel parameters determined.", metadata: ["so_sndbuf":"\(Int(sndBuf))", "so_rcvbuf":"\(result)", "wbwm_low":"\(Int(sndBuf*0.3))", "wbwm_high":"\(Int(sndBuf*0.75))"])
 									channel.pipeline.addHandlers([
 										self.ph,
 										wgh,

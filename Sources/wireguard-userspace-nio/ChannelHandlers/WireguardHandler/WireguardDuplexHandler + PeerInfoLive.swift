@@ -163,7 +163,7 @@ extension PeerInfo.Live {
 		return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
 	}
 
-	/// called after bytes have been received. updates various counters and schedules any tasks as needed.
+	/// called after bytes have been read from the inbound pipeline. updates various counters and schedules any tasks as needed.
 	internal borrowing func nRecvUpdate(context:borrowing ChannelHandlerContext, now:NIODeadline, _ newValue:SlidingWindow<Counter>, geometry inputPositionExplicit:Rotating<Session>.Positioned, mStaticPrivateKey ourStaticPrivateKey:borrowing MemoryGuarded<PrivateKey>) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -194,11 +194,14 @@ extension PeerInfo.Live {
 				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
 				applyRotation(context:context, now:now)
 				if rotation.previous == nil {
+					var writeResult:WriteOrHold<WireguardHandler.OutboundOut>.Result? = nil
 					while var nextPacket = postHandshakePackets.dequeue() {
 						logger.trace("writing post-handshake queued packet after applying key rotation.", metadata:["size":"\(nextPacket.data.readableBytes) bytes"])
-						wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise)
+						writeResult = wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise)
 					}
-					wireguardHandler.flushAfterChannelReadComplete = true
+					if case .held = writeResult {
+						wireguardHandler.flushAfterChannelReadComplete = true
+					}
 				}
 		}
 	}
@@ -407,6 +410,9 @@ extension PeerInfo.Live {
 			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
 		}
 		wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
+	
+		// cancel the scheduled handshake initiation task
+		handshakeInitiationTask = nil
 
 		// fire the handshake information to the channel
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))
@@ -416,15 +422,14 @@ extension PeerInfo.Live {
 			logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(publicKey)"])
 			switch wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise) {
 				case .written:
-					wireguardHandler.flushAfterChannelReadComplete = true
+					if wireguardHandler.flushAfterChannelReadComplete == false {
+						wireguardHandler.flushAfterChannelReadComplete = true
+					}
 					break
 				default:
 					break
 			}
 		}
-		
-		// cancel the scheduled handshake initiation task
-		handshakeInitiationTask = nil
 	}
 }
 

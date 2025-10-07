@@ -187,7 +187,7 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func sendSmallStringSerialized() async throws {
-			let stringToSend = "Hello, world!"
+			let stringToSend = "Hello world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
@@ -211,7 +211,7 @@ extension WireguardSwiftTests {
 				foo.addTask {
 					for i in 0..<512 {
 						cliLogger.trace("alice is writing a message...")
-						try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
+						try! await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
 					}
 				}
 

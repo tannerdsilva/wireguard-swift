@@ -439,7 +439,7 @@ extension KCPControlBlock {
 			seg.runtimeMetadata.xmit = 1
 			seg.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
 			seg.runtimeMetadata.resendts = now &+ seg.runtimeMetadata.rto
-			log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(seg.header.sequenceNumber)", "segment_command":"\(seg.header.command)", "segment_data_length":"\(seg.header.dataLength)", "segment_fragment_id":"\(seg.header.fragmentID)", "segment_timestamp":"\(seg.header.timestamp)", "segment_una":"\(seg.header.una)"])
+			log.notice("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(seg.header.sequenceNumber)", "segment_command":"\(seg.header.command)", "segment_data_length":"\(seg.header.dataLength)", "segment_fragment_id":"\(seg.header.fragmentID)", "segment_timestamp":"\(seg.header.timestamp)", "segment_una":"\(seg.header.una)"])
 			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:seg)), promise:writePromise)
 			writeCounter += 1
 			if (offset/Int(mss) == count-1) {

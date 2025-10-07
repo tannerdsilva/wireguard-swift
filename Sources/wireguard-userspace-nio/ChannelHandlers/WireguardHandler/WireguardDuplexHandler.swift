@@ -397,6 +397,11 @@ extension WireguardHandler {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		let peerPayload = unwrapOutboundIn(data)
+		guard peerPayload.associatedValue.readableBytes + MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size <= mtu else {
+			log.error("attempted to write packet that exceeds the configured mtu of \(mtu) bytes", metadata:["size":"\(peerPayload.associatedValue.readableBytes)"])
+			promise?.fail(WireguardHandlerError.mtuExceeded)
+			return
+		}
 		var (publicKey, payload) = (peerPayload.publicKey, peerPayload.associatedValue)
 		_ = writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
 	}
