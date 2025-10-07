@@ -126,7 +126,7 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 								return
 							}
 							let sndBuf = ceil(Double(result) * 0.75)
-							channel.setOption(ChannelOptions.socketOption(.so_sndbuf), value:Int(sndBuf)).whenComplete { setResult in
+							channel.setOption(ChannelOptions.socketOption(.so_sndbuf), value:Int32(sndBuf)).whenComplete { setResult in
 								guard case .success(_) = setResult else {
 									l.error("failed to set send buffer size.")
 									initializationFuture.fail(ChannelInitializationError.soSendBufferSetFailed)
@@ -201,7 +201,6 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 extension WGInterface:AsyncSequence {
 	public struct AsyncIterator:AsyncIteratorProtocol {
 		private let inboundDataOut:FIFO<(PublicKey, [UInt8]), Swift.Error>.AsyncConsumerExplicit
-		
 		internal init(inboundData:FIFO<(PublicKey, [UInt8]), Swift.Error>) {
 			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
 		}

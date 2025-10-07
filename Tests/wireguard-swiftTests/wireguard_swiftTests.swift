@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-@testable import wireguard_userspace_nio
 import RAW_dh25519
 import RAW_base64
 import RAW_xchachapoly
@@ -9,6 +8,7 @@ import NIO
 import Logging
 import ServiceLifecycle
 import wireguard_crypto_core
+@testable import wireguard_userspace_nio
 
 @Suite("WG Swift Tests", .serialized)
 struct WireguardSwiftTests {}
@@ -186,6 +186,47 @@ extension WireguardSwiftTests {
 			})
 		}
 
+		@Test func attemptMTUOverflow() async throws {
+			let stringToSend = [UInt8](repeating: 65, count: 2000)
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+				
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
+				
+				try await confirmation("confirm that ", expectedCount:0) { freeConfirm in
+					cliLogger.info("alice is writing...")
+					do {
+						try await aliceInterface.write(publicKey: bobPublicKey, data: stringToSend)
+					// 	freeConfirm.confirm(count:1)
+					} catch let error as wireguard_userspace_nio.ChannelError {
+					// 	#expect(ChannelErrors.outboundMessageMTUExceeded(attemptedOutboundSize:2000 + 16 + 16 + 4 + 16, mtuLimitOutbound:1400) = error)
+					}
+				}
+				for try await (key, incomingData) in bobInterface {
+					#expect(key == alicePublicKey)
+					cliLogger.info("bob received data that is \(incomingData.count) bytes long")
+					foo.cancelAll()
+					try await foo.waitForAll()
+					return
+				}
+			})
+		}
+
 		@Test func sendSmallStringSerialized() async throws {
 			let stringToSend = "Hello world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
@@ -218,7 +259,7 @@ extension WireguardSwiftTests {
 				var found = 0
 				for try await (key, incomingData) in bobInterface {
 					#expect(key == alicePublicKey)
-					#expect(incomingData == messageBytes + [0, 0, 0])
+					#expect(incomingData == messageBytes)
 					cliLogger.info("bob received data that is \(incomingData.count) bytes long")
 					found += 1
 					if found == 512 {

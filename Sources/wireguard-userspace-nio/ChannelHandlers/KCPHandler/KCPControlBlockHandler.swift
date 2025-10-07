@@ -160,12 +160,12 @@ extension KCPControlBlock.Handler {
 		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu + UInt16(IKCP_OVERHEAD))", "mtu_user":"\(mtu)"])
 		context.channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
-			readWindow = value
+			readWindow = Int(value)
 			l.trace("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
 		}
 		context.channel.getOption(ChannelOptions.socketOption(.so_sndbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
-			writeWindow = value
+			writeWindow = Int(value)
 			l.trace("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
 		}
 		scheduleRepeatedKCPUpdates(context: context)
