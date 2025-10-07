@@ -296,33 +296,8 @@ internal struct KCPControlBlock {
 				// Nothing to do
 			break;
 		}
-		// Check for inactivity
-		if(associatedSegment.associatedValue.header.sequenceNumber == rcv_nxt && associatedSegment.associatedValue.header.una == snd_nxt) {
+		if (associatedSegment.associatedValue.header.sequenceNumber == rcv_nxt && associatedSegment.associatedValue.header.una == snd_nxt) {
 			isInactive = true
-			
-			if itimeDiff(later:snd_una, earlier:previousUna) > 0 {
-				if cwndInfo.cwnd < rmt_wnd {
-					let mss = self.mss
-					if cwndInfo.cwnd < cwndInfo.ssthresh {
-						cwndInfo.cwnd &+= 1
-						cwndInfo.incr &+= mss
-					} else {
-						if cwndInfo.incr < mss {
-							cwndInfo.incr = mss
-						}
-						cwndInfo.incr &+= (mss * mss) / cwndInfo.incr + (mss / 16)
-						if ((cwndInfo.cwnd &+ 1) &* mss <= cwndInfo.incr) {
-							cwndInfo.cwnd = (cwndInfo.incr &+ mss &- 1) / (mss > 0 ? mss : 1)
-						}
-					}
-	
-					if cwndInfo.cwnd > remoteWindow {
-						cwndInfo.cwnd = remoteWindow
-						cwndInfo.incr = remoteWindow &* mss
-					}
-				}
-			}
-			
 		}
 	}
 }

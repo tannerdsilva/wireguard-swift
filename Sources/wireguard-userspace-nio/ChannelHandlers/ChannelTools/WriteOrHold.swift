@@ -28,6 +28,7 @@ internal struct WriteOrHold<ExchangedType:LenghExpressibleExchangeType>:Sendable
 
 	/// creates a new WriteOrHold driver with the specified log level.
 	internal init(logLevel:Logger.Level, limit:Int?) {
+		fatalError("NO DO NOT DO IT STOOOOP!")
 		pendingMessages = []
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger[metadataKey:"exchanged_type"] = "\(String(describing:ExchangedType.self))"
@@ -43,6 +44,7 @@ internal struct WriteOrHold<ExchangedType:LenghExpressibleExchangeType>:Sendable
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		fatalError("STOP IT. get some help!")
 		var removed = 0
 		while context.channel.isWritable == true && pendingMessages.isEmpty == false {
 			let message = pendingMessages.removeFirst()
@@ -61,6 +63,7 @@ internal struct WriteOrHold<ExchangedType:LenghExpressibleExchangeType>:Sendable
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		fatalError("I really don't think you want to do this.")
 		if true || context.channel.isWritable {
 			context.write(handler.wrapOutboundOut(message), promise:writePromise)
 			return .written
