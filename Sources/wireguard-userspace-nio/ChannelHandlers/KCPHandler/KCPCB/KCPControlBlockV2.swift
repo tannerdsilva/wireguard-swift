@@ -237,20 +237,7 @@ internal struct KCPControlBlock {
 		self.remoteWindow = rmt_wnd
 	}
 
-	internal mutating func handleChannelReadComplete(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		var logger = log
-		logger[metadataKey:"_func"] = "\(#function)"
-		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
-			context.flush()
-			outboundOutSegmentsWrittenSinceChannelReadComplete = 0
-			logger.trace("done reading \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments.")
-		}
-	}
-
-	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline) throws {
+	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, writeCounter:inout Int) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		guard conv == associatedSegment.associatedValue.header.conversationID else {
@@ -280,14 +267,14 @@ internal struct KCPControlBlock {
 				// write the acknowledgement instead of pushing it to the acklist
 				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:0, frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:associatedSegment.associatedValue.header.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
-				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
+				writeCounter += 1
 				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
 					parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
 				}
 			case KCPSegment.Command.probeRequest:
 				let ackResponseSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeResponse, rcv_wnd_size:0, frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView())
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackResponseSeg)), promise:nil)
-				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
+				writeCounter += 1
 			case KCPSegment.Command.probeResponse:
 				// Nothing to do
 			break;
@@ -309,9 +296,9 @@ internal struct KCPControlBlock {
 					}
 				}
 
-				if cwndInfo.cwnd > rmt_wnd {
-					cwndInfo.cwnd = rmt_wnd
-					cwndInfo.incr = rmt_wnd &* mss
+				if cwndInfo.cwnd > remoteWindow {
+					cwndInfo.cwnd = remoteWindow
+					cwndInfo.incr = remoteWindow &* mss
 				}
 			}
 		}
@@ -352,7 +339,7 @@ extension KCPControlBlock {
 		writeAllInboundOut(handler: handler, context: context)
 	}
 	
-	public mutating func writeAllInboundOut(handler:KcpControlBlockHandler, context:ChannelHandlerContext) {
+	public mutating func writeAllInboundOut(handler:KCPControlBlock.Handler, context:ChannelHandlerContext) {
 		// loop through any continuous segments in the receive buffer and write them to the outbound out byte buffer
 		while let firstNode = inboundInBuffer.front, firstNode.value!.header.sequenceNumber == rcv_nxt, isActiveReceiver  {
 			// remove the node from the receive buffer and add it to the receive queue
@@ -440,51 +427,43 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
-	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, mssMeter:inout MSSMeter, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?) {
-		let now = iclock()
+	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, now:NIODeadline, mssMeter:inout MSSMeter, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int) {
+		let now = iclock(now)
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
-
 		for offset in stride(from: 0, to: message.readableBytes, by: Int(mss)) {
 			let fragSize = min(Int(mss), message.readableBytes - offset)
-			
-			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
-
-			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size: 0, frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:now, una:rcv_nxt, len: UInt32(fragSize))
+			let view = message.getSlice(at:message.readerIndex + offset, length:fragSize)
+			let header = KCPSegment.Header(conv:conv, cmd:.push, rcv_wnd_size: 0, frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:now, una:rcv_nxt, len: UInt32(fragSize))
 			snd_nxt &+= 1
-			var seg = KCPSegment(header: header, data: view!.readableBytesView)
+			var seg = KCPSegment(header:header, data:view!.readableBytesView)
 			seg.runtimeMetadata.xmit = 1
 			seg.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
 			seg.runtimeMetadata.resendts = now &+ seg.runtimeMetadata.rto
 			log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(seg.header.sequenceNumber)", "segment_command":"\(seg.header.command)", "segment_data_length":"\(seg.header.dataLength)", "segment_fragment_id":"\(seg.header.fragmentID)", "segment_timestamp":"\(seg.header.timestamp)", "segment_una":"\(seg.header.una)"])
 			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:seg)), promise:writePromise)
+			writeCounter += 1
 			if (offset/Int(mss) == count-1) {
 				outboundInBuffer.addTail((seg, writePromise, ackPromise))
 			} else {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
 			flightBytes &+= UInt32(fragSize)
-			mssMeter.record(mss:UInt32(fragSize))
 		}
 		isInactive = false
 	}
 
 	private func wndUnused() -> UInt16 {
-		if (inboundInBuffer.count < rcv_wnd) {
-			return UInt16(rcv_wnd - inboundInBuffer.count)
+		if (inboundInBuffer.count < readWindow) {
+			return UInt16(readWindow - inboundInBuffer.count)
 		}
 		return 0
 	}
 
-	// KCP Flush
-	// - Sends any pending ACKs
-	// - Sends any pending Probes
-	// - Sends any pending data packets that can be sent
-	@available(*, noasync)
 	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline) {
 		let now = iclock(now)
 		// only manage probes if we have nothing to receive
 		if inboundInBuffer.count == 0 {
-			// Update probe time variables and prepare send ask_probe if needed
+			// update probe time variables and prepare send ask_probe if needed
 			if probeInfo.probe_wait == 0 {
 				probeInfo.probe_wait = IKCP_PROBE_INIT
 			} else if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {
@@ -497,7 +476,7 @@ extension KCPControlBlock {
 				}
 				probeInfo.ts_probe = now + probeInfo.probe_wait
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:0, frg:0, sn:snd_nxt, ts:0, una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
-				log.trace("writing probe request")
+				log.trace("writing probe request.")
 			}
 		} else {
 			probeInfo.ts_probe = 0

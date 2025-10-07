@@ -25,7 +25,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
 	internal typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
-	private var outboundOutDriver:WriteOrHold<OutboundOut>
+	// private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	private var logger:Logger
 	
@@ -41,7 +41,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 		self.spliceByteLength = spliceByteLength
-		outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:nil)
+		// outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:nil)
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
@@ -99,13 +99,13 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		context.fireChannelReadComplete()
 	}
 
-	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		logger.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
-		outboundOutDriver.writabilityChanged(context:context, handler:self)
-	}
+	// internal func channelWritabilityChanged(context: ChannelHandlerContext) {
+	// 	defer {
+	// 		context.fireChannelWritabilityChanged()
+	// 	}
+	// 	logger.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
+	// 	// outboundOutDriver.writabilityChanged(context:context, handler:self)
+	// }
 	
 	// Receiving data which needs to be spliced and sent
 	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
@@ -118,7 +118,8 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			let footerBytes = [UInt8](repeating: 0, count: 4)
 			data.append(contentsOf: footerBytes)
 			let buf = context.channel.allocator.buffer(bytes:data)
-			outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+			// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:key, associatedValue:buf)), promise:promise)
 		} else {
 			let splices = data.split(intoChunksOf: spliceByteLength)
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
@@ -131,9 +132,11 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let buf = context.channel.allocator.buffer(bytes:segment)
 				if (i == splices.count-1) {
-					outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+					// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
+					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:key, associatedValue:buf)), promise:promise)
 				} else {
-					outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:nil)
+					// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:nil)
+					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:key, associatedValue:buf)), promise:nil)
 				}
 			}
 		}

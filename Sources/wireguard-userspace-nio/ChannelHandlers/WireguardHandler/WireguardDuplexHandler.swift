@@ -102,7 +102,6 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
 		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 		return .written
-		// return outboundOutDriver.holdOrWrite(context:context, handler:self, asAddressedEnvelope, writePromise:promise)
 	}
 }
 
@@ -341,22 +340,6 @@ extension WireguardHandler {
 			context.fireErrorCaught(error)
 		}
 	}
-	
-	internal func channelWritabilityChanged(context: ChannelHandlerContext) {
-		defer {
-			context.fireChannelWritabilityChanged()
-		}
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		log.trace("channel writability changed.")
-		context.eventLoop.execute { [weak self, c = ContextContainer(context:context)] in
-			guard let self else { return }
-			c.accessContext { contextPtr in
-				// outboundOutDriver.writabilityChanged(context:contextPtr.pointee, handler:self)
-			}
-		}
-	}
 }
 
 // swift nio write handler function
@@ -403,7 +386,7 @@ extension WireguardHandler {
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
-				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes) bytes", "public-key_remote":"\(publicKey)"])
+				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes)", "public-key_remote":"\(publicKey)"])
 				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
 				return .written
 		}

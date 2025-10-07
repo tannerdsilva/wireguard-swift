@@ -59,7 +59,7 @@ public struct PeerInfo:Sendable {
 }
 
 /// primary wireguard interface. this is how connections will be made.
-public final actor WGInterface<TransactableDataType>:Sendable, Service where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
+public final actor WGInterface<TransactableDataType>:Sendable where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
 	public enum State {
 		case initialized
 		case engaging
@@ -74,7 +74,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
+	public let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
 	private let listeningPort:Int
 
 	private let ph:PacketHandler
@@ -96,11 +96,12 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuStep, logLevel:logger.logLevel)
 		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuStep, logLevel:logger.logLevel)
 	}
+}
 
+extension WGInterface:Service where TransactableDataType == [UInt8] {
 	public func waitForChannelInit() async throws {
 		_ = try await bootstrappedFuture.result()!.get()
 	}
-
 
 	public enum ChannelInitializationError:Swift.Error, Sendable {
 		case soReceiveBufferRetrievalFailed
@@ -116,7 +117,7 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value:8<<20)
-					.channelInitializer { [wgh = wgh, dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel), l = logger] channel in
+					.channelInitializer { [wgh = wgh, dhh = DataHandoffHandler(handoff:inboundData, logLevel:logger.logLevel), l = logger] channel in
 						let initializationFuture = channel.eventLoop.makePromise(of:Void.self)
 						channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenComplete { [l = l] valueResult in
 							guard case .success(let result) = valueResult else {
@@ -142,9 +143,10 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 									channel.pipeline.addHandlers([
 										self.ph,
 										wgh,
-										self.kcpsh,
-										self.kcpcbh,
-										SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
+										// self.kcpsh,
+										// KCPSegment.StupidHandler(),
+										// self.kcpcbh,
+										// SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
 										dhh
 									]).cascade(to:initializationFuture)
 								}
@@ -186,7 +188,9 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .engaged(let channel):
 				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
+				var bytes = channel.allocator.buffer(capacity:data.count)
+				bytes.writeBytes(data)
+				channel.pipeline.writeAndFlush(PeerAssociated(publicKey:publicKey, associatedValue:bytes), promise:myWritePromise)
 				try await myWritePromise.futureResult.get()
 			default:
 				throw InvalidInterfaceStateError()
@@ -194,16 +198,14 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 	}
 }
 
-
 extension WGInterface:AsyncSequence {
 	public struct AsyncIterator:AsyncIteratorProtocol {
-		private let inboundDataOut:FIFO<(PublicKey, TransactableDataType), Swift.Error>.AsyncConsumerExplicit
+		private let inboundDataOut:FIFO<(PublicKey, [UInt8]), Swift.Error>.AsyncConsumerExplicit
 		
-		internal init(inboundData:FIFO<(PublicKey, TransactableDataType), Swift.Error>) {
+		internal init(inboundData:FIFO<(PublicKey, [UInt8]), Swift.Error>) {
 			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
 		}
-		
-		public func next() async throws -> (PublicKey, TransactableDataType)? {
+		public func next() async throws -> (PublicKey, [UInt8])? {
 			switch await inboundDataOut.next() {
 				case .element(let element):
 					return element

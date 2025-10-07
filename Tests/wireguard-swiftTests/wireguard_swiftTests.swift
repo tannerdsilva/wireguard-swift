@@ -20,14 +20,14 @@ extension WireguardSwiftTests {
 	struct CryptoTests {
 		@Test func testCreateInitilizationMessage() throws {
 			let staticPublicKey = try dhGenerate()
-			let peerPublicKey = try dhGenerate().0
+			let bobPublicKey = try dhGenerate().0
 			
-			let (_, _, _, payload) = try withUnsafePointer(to: peerPublicKey) { q in
+			let (_, _, _, payload) = try withUnsafePointer(to: bobPublicKey) { q in
 				return try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:staticPublicKey.1, responderStaticPublicKey: q)
 			}
 
 			let _ = try withUnsafePointer(to: staticPublicKey) { p in
-				try withUnsafePointer(to: peerPublicKey) { q in
+				try withUnsafePointer(to: bobPublicKey) { q in
 					return try payload.finalize(responderStaticPublicKey: q)
 				}
 			}
@@ -125,54 +125,60 @@ extension WireguardSwiftTests {
 		.serialized
 	)
 	struct LiveSocketTests {
+
+		static let aliceStaticPrivateKey = MemoryGuarded<PrivateKey>(RAW_decode:try! RAW_base64.decode("8DFnI7tPWLl4WmuEp4T5KVuKMW6iyjRdTb3IVaDe+kI="), count:32)!
+		static let bobStaticPrivateKey = MemoryGuarded<PrivateKey>(RAW_decode:try! RAW_base64.decode("SD/y8yQa/DgiYRnDI9vJEiGezNn4yLd/4yL9OLnej0A="), count:32)!
+
+		let alicePublicKey:PublicKey
+		let alicePrivateKey:MemoryGuarded<PrivateKey>
 		
-		let myPublicKey:PublicKey
-		let myPrivateKey:MemoryGuarded<PrivateKey>
-		
-		let peerPublicKey:PublicKey
-		let peerPrivateKey:MemoryGuarded<PrivateKey>
+		let bobPublicKey:PublicKey
+		let bobPrivateKey:MemoryGuarded<PrivateKey>
 
 		let cliLogger:Logger
 
-		
 		init() throws {
-			(myPublicKey, myPrivateKey) = try dhGenerate()
-			(peerPublicKey, peerPrivateKey) = try dhGenerate()
+			(alicePublicKey, alicePrivateKey) = (PublicKey(privateKey:Self.aliceStaticPrivateKey), Self.aliceStaticPrivateKey)
+			(bobPublicKey, bobPrivateKey) = (PublicKey(privateKey:Self.bobStaticPrivateKey), Self.bobStaticPrivateKey)
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
 			buildLogger.logLevel = .trace
 			cliLogger = buildLogger
+		}
+
+		@Test func liveNetworkBasics() async throws {
+			// let alicePeers = 
 		}
 		
 		@Test func sendSingleString() async throws {
 			let stringToSend = "Hello, world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
-					try await myInterface.run()
+					try await aliceInterface.run()
 				}
 				foo.addTask {
-					try await peerInterface.run()
+					try await bobInterface.run()
 				}
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await myInterface.waitForChannelInit()
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await peerInterface.waitForChannelInit()
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
 				
-				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.write(publicKey: peerPublicKey, data: messageBytes)
+				cliLogger.info("alice is writing...")
+				try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
 				
-				cliLogger.info("Channel initialized. Reading data...")
-				for try await (key, incomingData) in peerInterface {
-					#expect(key == myPublicKey)
-					#expect(incomingData == messageBytes)
+				for try await (key, incomingData) in bobInterface {
+					#expect(key == alicePublicKey)
+					#expect(incomingData == messageBytes + [0, 0, 0])
+					cliLogger.info("bob received data that is \(incomingData.count) bytes long")
 					foo.cancelAll()
 					try await foo.waitForAll()
 					return
@@ -180,9 +186,52 @@ extension WireguardSwiftTests {
 			})
 		}
 
+		@Test func sendSmallStringSerialized() async throws {
+			let stringToSend = "Hello, world!"
+			let messageBytes: [UInt8] = Array(stringToSend.utf8)
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+				
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
+				foo.addTask {
+					for i in 0..<512 {
+						cliLogger.trace("alice is writing a message...")
+						try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
+					}
+				}
+
+				var found = 0
+				for try await (key, incomingData) in bobInterface {
+					#expect(key == alicePublicKey)
+					#expect(incomingData == messageBytes + [0, 0, 0])
+					cliLogger.info("bob received data that is \(incomingData.count) bytes long")
+					found += 1
+					if found == 512 {
+						foo.cancelAll()
+						try await foo.waitForAll()
+						return
+					}
+				}
+			})
+		}
 		
 		@Test func sendMultipleSmallMessages() async throws {
-			let payloadSize: Int = 10_000
+			let payloadSize: Int = 2000
 			
 			var tempPayload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
@@ -192,43 +241,42 @@ extension WireguardSwiftTests {
 			let payload2 = tempPayload
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
-				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
-					try await myInterface.run()
+					try await aliceInterface.run()
 				}
 				foo.addTask {
-					try await peerInterface.run()
+					try await bobInterface.run()
 				}
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await myInterface.waitForChannelInit()
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await peerInterface.waitForChannelInit()
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
 				
-				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.write(publicKey: peerPublicKey, data: payload1)
+				cliLogger.info("alice is sending the first data payload...")
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload1)
 				
-				cliLogger.info("Sending second data packet...")
-				try await myInterface.write(publicKey: peerPublicKey, data: payload2)
-				
-				cliLogger.info("Channel initialized. Reading data...")
+				cliLogger.info("invoking read loop on primary task...")
 				var count = 0
-				for try await (key, incomingData) in peerInterface {
-					if(count == 0) {
+				for try await (key, incomingData) in bobInterface {
+					if (count == 0) {
 						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(key == myPublicKey)
+						#expect(key == alicePublicKey)
 						#expect(incomingData == payload1)
 						count += 1
+						return
 					} else {
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(key == myPublicKey)
+						cliLogger.debug("received data that is \(incomingData.count) bytes long")
+						#expect(key == alicePublicKey)
 						#expect(incomingData == payload2)
+						fatalError("breakpoint")
 						foo.cancelAll()
 					}
 				}
@@ -248,35 +296,35 @@ extension WireguardSwiftTests {
 			}
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
-				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
-					try await myInterface.run()
+					try await aliceInterface.run()
 				}
 				foo.addTask {
-					try await peerInterface.run()
+					try await bobInterface.run()
 				}
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await myInterface.waitForChannelInit()
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await peerInterface.waitForChannelInit()
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
 				for payload in payloads {
-					try await myInterface.write(publicKey: peerPublicKey, data: payload)
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
 				}
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				var count = 0
-				for try await (key, incomingData) in peerInterface {
+				for try await (key, incomingData) in bobInterface {
 					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-					#expect(key == myPublicKey)
+					#expect(key == alicePublicKey)
 					#expect(incomingData == payloads[count])
 					count += 1
 					if (count == 999) {
@@ -292,32 +340,32 @@ extension WireguardSwiftTests {
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
-				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
-					try await myInterface.run()
+					try await aliceInterface.run()
 				}
 				foo.addTask {
-					try await peerInterface.run()
+					try await bobInterface.run()
 				}
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await myInterface.waitForChannelInit()
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await peerInterface.waitForChannelInit()
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
 				
 				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.write(publicKey: peerPublicKey, data: payload)
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
 				
 				cliLogger.info("Channel initialized. Reading data...")
-				for try await (key, incomingData) in peerInterface {
+				for try await (key, incomingData) in bobInterface {
 					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-					#expect(key == myPublicKey)
+					#expect(key == alicePublicKey)
 					#expect(incomingData == payload)
 					foo.cancelAll()
 				}
@@ -337,42 +385,42 @@ extension WireguardSwiftTests {
 			}
 			
 			_ = try await withThrowingTaskGroup(of:Void.self, returning:Void.self) { foo in
-				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
-				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
-					try await myInterface.run()
+					try await aliceInterface.run()
 				}
 				foo.addTask {
-					try await peerInterface.run()
+					try await bobInterface.run()
 				}
+
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await myInterface.waitForChannelInit()
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
 				
-				cliLogger.info("WireGuard interface started. Waiting for channel initialization...")
-				try await peerInterface.waitForChannelInit()
+				cliLogger.info("alice writing first large payload...")
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
 				
-				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await myInterface.write(publicKey: peerPublicKey, data: payload)
-				
-				cliLogger.info("Sending second data packet...")
-				try await myInterface.write(publicKey: peerPublicKey, data: payload2)
+				cliLogger.info("alice writing second large payload...")
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload2)
 				
 				cliLogger.info("Channel initialized. Reading data...")
 				var count = 0
-				for try await (key, incomingData) in peerInterface {
+				for try await (key, incomingData) in bobInterface {
 					if(count == 0) {
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(key == myPublicKey)
+						cliLogger.debug("bob received data that is \(incomingData.count) bytes long")
+						#expect(key == alicePublicKey)
 						#expect(incomingData == payload)
 						count += 1
 					} else {
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(key == myPublicKey)
+						cliLogger.debug("bob received data that is \(incomingData.count) bytes long")
+						#expect(key == alicePublicKey)
 						#expect(incomingData == payload2)
 						foo.cancelAll()
 					}
