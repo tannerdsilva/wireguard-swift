@@ -506,11 +506,11 @@ extension KCPControlBlock {
 		}
 		// If resent at all, need to shorten congestion window
 		if(resend) {
-			congestionWindow = max(minCongestionWindow, congestionWindow - 3 * Int(mtu))
+			congestionWindow = max(minCongestionWindow, congestionWindow - 1 * Int(mtu))
 			log.trace("Shrinking congestion window", metadata:["newWindowSize":"\(congestionWindow)"])
 		}
 		// The higher the number of resends, the faster cwnd decreases
-		congestionWindow = max(minCongestionWindow, congestionWindow * (10 - resendCount) / 10)
+		//congestionWindow = max(minCongestionWindow, congestionWindow * (10 - resendCount) / 10)
 		
 		// Send probe with ts being the send buffer count
 		if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {

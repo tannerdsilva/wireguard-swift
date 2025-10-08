@@ -224,6 +224,7 @@ struct CLI:AsyncParsableCommand {
 						print("\(green)From peer \(key): \(incomingData.count))\(reset)")
 					}
 				}
+				try await foo.waitForAll()
 			})
 		}
 	}
