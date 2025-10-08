@@ -142,7 +142,7 @@ extension WireguardSwiftTests {
 			(alicePublicKey, alicePrivateKey) = (PublicKey(privateKey:Self.aliceStaticPrivateKey), Self.aliceStaticPrivateKey)
 			(bobPublicKey, bobPrivateKey) = (PublicKey(privateKey:Self.bobStaticPrivateKey), Self.bobStaticPrivateKey)
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = .trace
+			buildLogger.logLevel = .info
 			cliLogger = buildLogger
 		}
 		

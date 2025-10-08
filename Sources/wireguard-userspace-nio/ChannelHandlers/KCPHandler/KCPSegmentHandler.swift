@@ -71,7 +71,7 @@ extension KCPSegment {
 			var didWrite = false
 			if var hasExistingBuffer = segmentStack[publicKey] {
 				// we have an existing buffer, see if we can append to it...
-				if hasExistingBuffer.writableBytes < Int(expectedEncodedLength) {
+				if hasExistingBuffer.readableBytes + Int(expectedEncodedLength) > transmitMTU {
 					// initialize a new promise that will be used to track the completion of the write
 					let writePromise = context.channel.eventLoop.makePromise(of:Void.self)
 					for curElement in promiseStack[publicKey]! {
@@ -229,40 +229,7 @@ extension KCPSegment.Handler {
 		outboundOutCount = 0
 		stackedSegmentCount = 0
 		log.trace("flushing...")
-		/*writtenStack.completeAll(context:context, handler:self)*/
+		writtenStack.completeAll(context:context, handler:self)
 		context.flush()
-	}
-}
-
-
-
-extension KCPSegment {
-	internal final class StupidHandler:ChannelDuplexHandler, @unchecked Sendable {
-		public typealias InboundIn = PeerAssociated<ByteBuffer>
-		public typealias InboundOut = PeerAssociated<KCPSegment>
-		public typealias OutboundIn = PeerAssociated<KCPSegment>
-		public typealias OutboundOut = PeerAssociated<ByteBuffer>
-
-		public func handlerAdded(context:ChannelHandlerContext) {
-			// no-op
-		}
-		public func handlerRemoved(context:ChannelHandlerContext) {
-			// no-op
-		}
-		public func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
-			context.fireUserInboundEventTriggered(event)
-		}
-		public func channelRead(context:ChannelHandlerContext, data:NIOAny) {
-			var encodedInbound = unwrapInboundIn(data)
-			while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {
-				context.fireChannelRead(wrapInboundOut(PeerAssociated<KCPSegment>(publicKey:encodedInbound.publicKey, segment:segment)))
-			}
-		}
-		public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-			let decodedOutbound = unwrapOutboundIn(data)
-			var encodeBuffer = context.channel.allocator.buffer(capacity:Int(decodedOutbound.associatedValue.header.dataLength) + Int(IKCP_OVERHEAD))
-			decodedOutbound.associatedValue.encode(to:&encodeBuffer)
-			context.write(wrapOutboundOut(PeerAssociated<ByteBuffer>(publicKey:decodedOutbound.publicKey, associatedValue:encodeBuffer)), promise:promise)
-		}
 	}
 }

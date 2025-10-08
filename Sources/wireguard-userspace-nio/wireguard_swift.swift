@@ -145,7 +145,7 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 										wgh,
 										self.kcpsh,
 										self.kcpcbh,
-										// SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
+										 SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
 										dhh
 									]).cascade(to:initializationFuture)
 								}

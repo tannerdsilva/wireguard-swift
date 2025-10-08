@@ -458,14 +458,6 @@ extension KCPControlBlock {
 	@available(*, noasync)
 	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int, writerCount:inout Int) {
 		let now = iclock(now)
-
-		// Send probe with ts being the send buffer count
-		if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {
-			probeInfo.probe_wait = 500
-			probeInfo.ts_probe = now + probeInfo.probe_wait
-			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt32(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
-			log.trace("writing probe request")
-		}
 		
 		var resend = false
 		var resendCount = 0
@@ -519,6 +511,14 @@ extension KCPControlBlock {
 		}
 		// The higher the number of resends, the faster cwnd decreases
 		congestionWindow = max(minCongestionWindow, congestionWindow * (10 - resendCount) / 10)
+		
+		// Send probe with ts being the send buffer count
+		if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {
+			probeInfo.probe_wait = 500
+			probeInfo.ts_probe = now + probeInfo.probe_wait
+			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt32(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
+			log.trace("writing probe request")
+		}
 	}
 }
 
