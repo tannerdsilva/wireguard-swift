@@ -207,6 +207,9 @@ internal struct KCPControlBlock {
 	/// counts the number of kcp segments that were written to the outboundInBuffer for each cycle of reading. used at `channelReadComplete` to determine if a flush is needed
 	internal var outboundOutSegmentsWrittenSinceChannelReadComplete:Int = 0
 	
+	/// Signal that this block has control blocks waiting for it to finish
+	public var isStalling:Bool = false
+	
 	/// info on whether the kcpcb has seen recent activity. Can only becomes false when a probe is received.
 	public var isInactive:Bool = false
 	
@@ -257,7 +260,6 @@ internal struct KCPControlBlock {
 			fatalError("conversation id mismatch. expected \(conv), got \(associatedSegment.associatedValue.header.conversationID). \(#file):\(#line)")
 		}
 		#endif
-		let previousUna = snd_una
 		guard associatedSegment.publicKey == peerPublicKey else {
 			fatalError("internal logic error: associated segment public key does not match control block public key. \(#file):\(#line)")
 		}
@@ -292,12 +294,14 @@ internal struct KCPControlBlock {
 				let ackResponseSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeResponse, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:0, ts:0, una:rcv_nxt, len:0), data:ByteBufferView())
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackResponseSeg)), promise:nil)
 				writeCounter += 1
+				outboundOutSegmentsWrittenSinceChannelReadComplete += 1
+				// Check inactivity
+				if(associatedSegment.associatedValue.header.timestamp == 0 && inboundInBuffer.isEmpty && outboundInBuffer.isEmpty && isStalling) {
+					isInactive = true
+				}
 			case KCPSegment.Command.probeResponse:
 				// Nothing to do
 			break;
-		}
-		if (associatedSegment.associatedValue.header.sequenceNumber == rcv_nxt && associatedSegment.associatedValue.header.una == snd_nxt) {
-			isInactive = true
 		}
 	}
 }
@@ -306,7 +310,7 @@ internal struct KCPControlBlock {
 // MARK: Parse Inbound
 extension KCPControlBlock {
 	/// parse inbound data segment from a handler with its context
-	private mutating func parseInbound(data segment:KCPSegment, handler:KcpControlBlockHandler, context:ChannelHandlerContext) {
+	private mutating func parseInbound(data segment:KCPSegment, handler:KCPControlBlock.Handler, context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -447,29 +451,20 @@ extension KCPControlBlock {
 		isInactive = false
 	}
 
+	// KCP Flush
+	// - Sends any pending ACKs
+	// - Sends any pending Probes
+	// - Sends any pending data packets that can be sent
 	@available(*, noasync)
 	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int, writerCount:inout Int) {
 		let now = iclock(now)
-		// only manage probes if we have nothing to receive
-		if inboundInBuffer.count == 0 {
-			// update probe time variables and prepare send ask_probe if needed
-			if probeInfo.probe_wait == 0 {
-				probeInfo.probe_wait = IKCP_PROBE_INIT
-			} else if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {
-				if probeInfo.probe_wait < IKCP_PROBE_INIT {
-					probeInfo.probe_wait = IKCP_PROBE_INIT
-				}
-				probeInfo.probe_wait += probeInfo.probe_wait / 2
-				if probeInfo.probe_wait > IKCP_PROBE_LIMIT {
-					probeInfo.probe_wait = IKCP_PROBE_LIMIT
-				}
-				probeInfo.ts_probe = now + probeInfo.probe_wait
-				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:0, una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
-				log.trace("writing probe request")
-			}
-		} else {
-			probeInfo.ts_probe = 0
-			probeInfo.probe_wait = 0
+
+		// Send probe with ts being the send buffer count
+		if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {
+			probeInfo.probe_wait = 500
+			probeInfo.ts_probe = now + probeInfo.probe_wait
+			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt32(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
+			log.trace("writing probe request")
 		}
 		
 		var resend = false

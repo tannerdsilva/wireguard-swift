@@ -50,6 +50,7 @@ internal final class KCPLivePeer {
 		}
 		for i in 0..<count {
 			if(controlBlocks[i].isActiveReceiver) {
+				controlBlocks[i].isStalling = true
 				logger.debug("Inserting new control block", metadata: ["activeConvID": "\(controlBlocks[i].conv)"])
 			}
 		}
@@ -191,12 +192,12 @@ extension KCPControlBlock.Handler {
 		context.channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
 			readWindow = Int(value)
-			l.trace("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
+			l.notice("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
 		}
 		context.channel.getOption(ChannelOptions.socketOption(.so_sndbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
 			writeWindow = Int(value)
-			l.trace("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
+			l.notice("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
 		}
 		scheduleRepeatedKCPUpdates(context: context)
 	}
@@ -282,14 +283,14 @@ extension KCPControlBlock.Handler {
 				// Need to figure out how to make this into a conversation id
 				let key = evt.publicKey
 				let convID = evt.geometry.initiator.RAW_native()
-				// // Check if control block exists
-				// if (kcp[key] == nil) {
-				// 	// Create the magic id control block
-				// 	let magicID = try! magicID(key1: ourKey, key2: key)
-				// 	kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
-				// 	kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
-				// }
-				// kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: convID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+				 // Check if control block exists
+				 if (kcp[key] == nil) {
+				 	// Create the magic id control block
+				 	let magicID = try! magicID(key1: ourKey, key2: key)
+				 	kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
+				 	kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+				 }
+				 kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: convID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 
 			default:
 				context.fireUserInboundEventTriggered(event)
