@@ -50,6 +50,7 @@ internal final class KCPLivePeer {
 		}
 		for i in 0..<count {
 			if(controlBlocks[i].isActiveReceiver) {
+				controlBlocks[i].isStalling = true
 				logger.debug("Inserting new control block", metadata: ["activeConvID": "\(controlBlocks[i].conv)"])
 			}
 		}
@@ -187,12 +188,12 @@ extension KCPControlBlock.Handler {
 		context.channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
 			readWindow = Int(value)
-			l.trace("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
+			l.notice("loaded read buffer size.", metadata: ["so_rcvbuf":"\(value)"])
 		}
 		context.channel.getOption(ChannelOptions.socketOption(.so_sndbuf)).whenSuccess { [weak self, l = logger] value in
 			guard let self = self else { return }
 			writeWindow = Int(value)
-			l.trace("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
+			l.notice("loaded write buffer size.", metadata: ["so_sndbuf":"\(value)"])
 		}
 		scheduleRepeatedKCPUpdates(context: context)
 	}
