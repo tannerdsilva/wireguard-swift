@@ -424,41 +424,31 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
-	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, now:NIODeadline, mssMeter:inout MSSMeter, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int) {
-		let now = iclock(now)
+	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, mssMeter:inout MSSMeter, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?) {
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
+
 		for offset in stride(from: 0, to: message.readableBytes, by: Int(mss)) {
 			let fragSize = min(Int(mss), message.readableBytes - offset)
+			
 			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
+
 			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt32(fragSize))
 			snd_nxt &+= 1
-			var seg = KCPSegment(header:header, data:view!.readableBytesView)
-			seg.runtimeMetadata.xmit = 1
-			seg.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
-			seg.runtimeMetadata.resendts = now &+ seg.runtimeMetadata.rto
-			log.notice("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(seg.header.sequenceNumber)", "segment_command":"\(seg.header.command)", "segment_data_length":"\(seg.header.dataLength)", "segment_fragment_id":"\(seg.header.fragmentID)", "segment_timestamp":"\(seg.header.timestamp)", "segment_una":"\(seg.header.una)"])
-			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:seg)), promise:writePromise)
-			writeCounter += 1
+			let seg = KCPSegment(header: header, data: view!.readableBytesView)
+			
 			if (offset/Int(mss) == count-1) {
 				outboundInBuffer.addTail((seg, writePromise, ackPromise))
 			} else {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
 			mssMeter.record(mss:UInt32(fragSize))
-			flightBytes &+= UInt32(fragSize)
+			
 		}
 		isInactive = false
 	}
 
-	private func wndUnused() -> UInt16 {
-		if (inboundInBuffer.count < readWindow) {
-			return UInt16(readWindow - inboundInBuffer.count)
-		}
-		return 0
-	}
-
 	@available(*, noasync)
-	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int) {
+	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int, writerCount:inout Int) {
 		let now = iclock(now)
 		// only manage probes if we have nothing to receive
 		if inboundInBuffer.count == 0 {
@@ -501,6 +491,7 @@ extension KCPControlBlock {
 				node.value!.data.header.una = rcv_nxt
 				log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(node.value!.data.header.sequenceNumber)", "segment_command":"\(node.value!.data.header.command)", "segment_data_length":"\(node.value!.data.header.dataLength)", "segment_fragment_id":"\(node.value!.data.header.fragmentID)", "segment_timestamp":"\(node.value!.data.header.timestamp)", "segment_una":"\(node.value!.data.header.una)"])
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)
+				writerCount &+= 1
 				flightBytes &+= UInt32(seg.data.header.dataLength)
 			}
 			// Resending segments if enough time has passed
@@ -514,6 +505,7 @@ extension KCPControlBlock {
 				node.value!.data.header.una = rcv_nxt
 				log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(node.value!.data.header.sequenceNumber)", "segment_command":"\(node.value!.data.header.command)", "segment_data_length":"\(node.value!.data.header.dataLength)", "segment_fragment_id":"\(node.value!.data.header.fragmentID)", "segment_timestamp":"\(node.value!.data.header.timestamp)", "segment_una":"\(node.value!.data.header.una)"])
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)
+				writerCount &+= 1
 				
 				// Dead link occured. Wipe send queue
 				if node.value!.data.runtimeMetadata.xmit >= 20 {

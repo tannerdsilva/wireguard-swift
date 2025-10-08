@@ -63,8 +63,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			// Remove the first 4 bytes from the array
 			let payload = Array(data.dropLast(4))
 
-			var buf = context.channel.allocator.buffer(bytes:payload)
-			buf.writeBytes(payload)
+			let buf = context.channel.allocator.buffer(bytes:payload)
 			
 			// Only this one segment
 			if (value == 0) {
@@ -98,14 +97,6 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		logger.trace("channel read complete.")
 		context.fireChannelReadComplete()
 	}
-
-	// internal func channelWritabilityChanged(context: ChannelHandlerContext) {
-	// 	defer {
-	// 		context.fireChannelWritabilityChanged()
-	// 	}
-	// 	logger.trace("channel writability changed.", metadata:["is_writable":"\(context.channel.isWritable)"])
-	// 	// outboundOutDriver.writabilityChanged(context:context, handler:self)
-	// }
 	
 	// Receiving data which needs to be spliced and sent
 	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
@@ -130,10 +121,8 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let buf = context.channel.allocator.buffer(bytes:segment)
 				if (i == splices.count-1) {
-					// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:promise)
 					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
 				} else {
-					// outboundOutDriver.holdOrWrite(context:context, handler:self, PeerAssociated(publicKey:key, associatedValue:buf), writePromise:nil)
 					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:nil)
 				}
 			}

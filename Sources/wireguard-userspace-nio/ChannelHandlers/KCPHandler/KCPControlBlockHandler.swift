@@ -56,14 +56,15 @@ internal final class KCPLivePeer {
 		
 	}
 
-	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, message: ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int) throws {
+	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int) throws {
 		let now = NIODeadline.now()
-		controlBlocks[0].handleWrite(context: context, handler: handler, now:now, mssMeter: &mssMeter, message: message, writePromise: writePromise, ackPromise: ackPromise, writeCounter:&writeCounter)
-		controlBlocks[0].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow)
+		controlBlocks[0].handleWrite(context: context, handler: handler, mssMeter: &mssMeter, message: message, writePromise: writePromise, ackPromise: ackPromise)
+		controlBlocks[0].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow, writerCount: &writeCounter)
 		context.flush()
 	}
 
-	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, writeCounter:inout Int) -> Bool {
+	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, writeCounter:inout Int) -> Bool {
+		let now = NIODeadline.now()
 		cbLoop: for i in 0..<count {
 			do {
 				guard associatedSegment.associatedValue.header.conversationID == controlBlocks[i].conv else {
@@ -86,10 +87,10 @@ internal final class KCPLivePeer {
 		return true
 	}
 
-	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
+	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, writeCounter:inout Int) {
 		let now = NIODeadline.now()
 		for i in  0..<count {
-			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow)
+			controlBlocks[i].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow, writerCount: &writeCounter)
 		}
 		context.flush()
 	}
@@ -175,7 +176,7 @@ extension KCPControlBlock {
 				}
 				for (key, _) in kcp {
 					c.accessContext({ contextPointer in
-						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self)
+						kcp[key]!.resendAndProbe(context: contextPointer.pointee, handler: self, writeCounter: &writesSinceLastFlush)
 					})
 				}
 			}
@@ -210,41 +211,16 @@ extension KCPControlBlock.Handler {
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let data = unwrapInboundIn(data)
 		let key = data.publicKey
-		let now = NIODeadline.now()
 		if (kcp[key] == nil) {
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
-		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now, writeCounter:&writesSinceLastFlush)) {
+		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush) != true) {
 			// handle 'Disconnected' scenario
 			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key]!.reset(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
-			_ = kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now, writeCounter:&writesSinceLastFlush)
-
-/*
-=======
-		var iterationAdded = 0
-		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, now:now, writeCounter:&iterationAdded)
-		writesSinceLastFlush += iterationAdded
-		writesSinceChannelReadComplete += iterationAdded
-	}
-	internal func channelReadComplete(context:ChannelHandlerContext) {
-		defer {
-			context.fireChannelReadComplete()
-		}
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		if writesSinceChannelReadComplete > 0 {
-			logger.trace("channel read complete. triggering outbound flush.", metadata:["writes_since_channel_read_complete":"\(writesSinceChannelReadComplete)"])
-			context.flush()
-			writesSinceChannelReadComplete = 0
-			writesSinceLastFlush = 0
-		} else {
-			logger.trace("channel read complete.", metadata:["writes_since_channel_read_complete":"\(writesSinceChannelReadComplete)"])
->>>>>>> dev-kcp-marathon-ts
-*/
+			_ = kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush)
 		}
 	}
 }
@@ -255,7 +231,6 @@ extension KCPControlBlock.Handler {
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let data = unwrapOutboundIn(data)
 		let key = data.publicKey
-		let now = NIODeadline.now()
 		// Check if control block exists
 		if (kcp[key] == nil) {
 			// Create the magic id control block
@@ -268,7 +243,7 @@ extension KCPControlBlock.Handler {
 		var iterationAdded = 0
 		do {
 			logger.trace("sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
-			try kcp[key]!.handleWrite(context: context, handler:self, now:now, message: data.associatedValue, writePromise: promise, ackPromise:nil, writeCounter:&iterationAdded)
+			try kcp[key]!.handleWrite(context: context, handler:self, message: data.associatedValue, writePromise: promise, ackPromise:nil, writeCounter:&iterationAdded)
 		} catch {
 			logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}
