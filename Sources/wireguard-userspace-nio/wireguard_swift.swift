@@ -144,7 +144,7 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 										self.ph,
 										wgh,
 										// self.kcpsh,
-										// KCPSegment.StupidHandler(),
+										KCPSegment.StupidHandler(),
 										// self.kcpcbh,
 										// SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
 										dhh

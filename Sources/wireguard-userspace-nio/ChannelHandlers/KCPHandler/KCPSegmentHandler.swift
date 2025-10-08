@@ -243,11 +243,22 @@ extension KCPSegment {
 		public typealias OutboundIn = PeerAssociated<KCPSegment>
 		public typealias OutboundOut = PeerAssociated<ByteBuffer>
 
+		private let log:Logger
+
+		internal init(logLevel:Logger.Level) {
+			var buildLogger = Logger(label:"\(String(describing:KCPSegment.self)).\(String(describing:Self.self))")
+			buildLogger.logLevel = logLevel
+			log = buildLogger
+			log.debug("instance initialized.")
+		}
+
 		public func handlerAdded(context:ChannelHandlerContext) {
 			// no-op
+			log.debug("handler added to NIO pipeline.")
 		}
 		public func handlerRemoved(context:ChannelHandlerContext) {
 			// no-op
+			log.debug("handler removed from NIO pipeline.")
 		}
 		public func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
 			context.fireUserInboundEventTriggered(event)
