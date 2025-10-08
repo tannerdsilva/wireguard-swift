@@ -15,7 +15,7 @@ internal enum PacketTypeOutbound {
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
 
-internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
+internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
@@ -35,9 +35,12 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
-	/*
+	
 	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
+	private var bytesWrittenSinceLastFlush:Int = 0
+	private var packetsWrittenSinceLastFlush:Int = 0
+	/*
 	private var outboundOutDriver:WriteOrHold<OutboundOut>
 	*/
 
@@ -146,5 +149,42 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
 				return
 		}
+	}
+
+	internal func write(context:borrowing ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		var logger = log
+		let envelope = unwrapOutboundIn(data)
+		let payloadSize = envelope.data.readableBytes
+		logger[metadataKey:"remote_address"] = "\(envelope.remoteAddress)"
+		logger[metadataKey:"payload_size"] = "\(payloadSize)"
+		guard payloadSize <= mtu else {
+			logger.error("datagram mtu exceeded", metadata:["mtu_user":"\(mtu)", "packet_size":"\(payloadSize)"])
+			promise?.fail(Error.mtuExceeded)
+			return
+		}
+		promise?.futureResult.cascade(to:promise!)
+		bytesWrittenSinceLastFlush += payloadSize
+		packetsWrittenSinceLastFlush += 1
+		let writePromise = context.write(data)
+		if promise != nil {
+			writePromise.cascade(to:promise!)
+		}
+		writePromise.whenSuccess { [l = logger] in
+			l.trace("successfully wrote datagram packet to network.")
+		}
+	}
+
+	internal func flush(context:borrowing ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		var logger = log
+		logger.trace("flushing channel...", metadata:["bytes_written_since_last_flush":"\(bytesWrittenSinceLastFlush)", "packets_written_since_last_flush":"\(packetsWrittenSinceLastFlush)"])
+		bytesWrittenSinceLastFlush = 0
+		packetsWrittenSinceLastFlush = 0
+		context.flush()
 	}
 }

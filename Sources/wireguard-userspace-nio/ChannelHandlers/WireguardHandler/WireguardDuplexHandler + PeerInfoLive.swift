@@ -293,7 +293,7 @@ extension PeerInfo.Live {
 								case .success():
 									l.trace("transmitted handshake initiation message.", metadata:["public-key_remote":"\(pubKey)"])
 								case .failure(let error):
-									l.error("error occurred while transmitting handshake initiation message: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
+									l.critical("error occurred while transmitting handshake initiation message: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
 							}
 						}
 					}

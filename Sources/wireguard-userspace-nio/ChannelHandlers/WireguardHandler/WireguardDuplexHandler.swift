@@ -413,7 +413,7 @@ extension WireguardHandler {
 		#endif
 		let peerPayload = unwrapOutboundIn(data)
 		guard peerPayload.associatedValue.readableBytes <= mtu.mtuOutboundIn else {
-			log.error("attempted to write packet that exceeds the configured mtu of \(mtu) bytes", metadata:["size":"\(peerPayload.associatedValue.readableBytes)"])
+			log.error("attempted to write packet that exceeds the configured mtu of \(mtu) bytes", metadata:["size":"\(peerPayload.associatedValue.readableBytes)", "promise":"\(String(describing:promise))"])
 			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:peerPayload.associatedValue.readableBytes + Self.wireguardDataOverhead, mtuLimitOutbound:Int(mtu.mtuOutboundOut)))
 			return
 		}
