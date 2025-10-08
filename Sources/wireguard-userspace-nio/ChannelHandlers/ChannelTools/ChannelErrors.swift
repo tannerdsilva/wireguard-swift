@@ -10,7 +10,7 @@ internal enum ChannelError:Sendable {
 
 extension ChannelError {
 	/// expresses a scenario where an outbound message attempted to be sent exceeds the configured mtu for that step in the pipeline.
-	internal struct OutboundMessageMTUExceeded:Swift.Error, Sendable {
+	internal struct OutboundMessageMTUExceeded:Swift.Error, Sendable, Equatable, Hashable {
 		internal let attemptedOutboundSize:Int
 		internal let mtuLimitOutbound:Int
 		internal init(attemptedOutboundSize:Int, mtuLimitOutbound:Int) {

@@ -39,7 +39,6 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		buildLogger.logLevel = logLevel
 		logger = buildLogger
 		self.spliceByteLength = spliceByteLength
-		// outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:nil)
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
@@ -99,16 +98,14 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 	
 	// Receiving data which needs to be spliced and sent
-	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var associatedData = unwrapOutboundIn(data)
-		
 		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
-		
 		// Data doesn't need to be spliced, add a header signifying 0 length
 		if (associatedData.associatedValue.readableBytes <= spliceByteLength) {
 			let footerBytes = [UInt8](repeating: 0, count: 4)
 			associatedData.associatedValue.writeBytes(footerBytes)
-			context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
+			context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
 		} else {
 			let splices = [UInt8](associatedData.associatedValue.readableBytesView).split(intoChunksOf: spliceByteLength)
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
@@ -121,9 +118,11 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let buf = context.channel.allocator.buffer(bytes:segment)
 				if (i == splices.count-1) {
-					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
+					// last segment to be written for this message
+					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
 				} else {
-					context.writeAndFlush(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:nil)
+					// 1 of n message fragments
+					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf))).cascadeFailure(to:promise)
 				}
 			}
 		}

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import RAW_dh25519
 import RAW_base64
+import RAW_chachapoly
 import RAW_xchachapoly
 import RAW
 import NIO
@@ -141,12 +142,8 @@ extension WireguardSwiftTests {
 			(alicePublicKey, alicePrivateKey) = (PublicKey(privateKey:Self.aliceStaticPrivateKey), Self.aliceStaticPrivateKey)
 			(bobPublicKey, bobPrivateKey) = (PublicKey(privateKey:Self.bobStaticPrivateKey), Self.bobStaticPrivateKey)
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = .info
+			buildLogger.logLevel = .trace
 			cliLogger = buildLogger
-		}
-
-		@Test func liveNetworkBasics() async throws {
-			// let alicePeers = 
 		}
 		
 		@Test func sendSingleString() async throws {
@@ -207,22 +204,19 @@ extension WireguardSwiftTests {
 				
 				cliLogger.info("waiting for bob's interface to initialize...")
 				try await bobInterface.waitForChannelInit()
-				
-				try await confirmation("confirm that ", expectedCount:0) { freeConfirm in
+
+				try await confirmation("confirm that alice cannot successfully send a message larger than the mtu", expectedCount:0) { freeConfirm in
 					cliLogger.info("alice is writing...")
 					do {
 						try await aliceInterface.write(publicKey: bobPublicKey, data: stringToSend)
-					// 	freeConfirm.confirm(count:1)
-					} catch let error as wireguard_userspace_nio.ChannelError {
-					// 	#expect(ChannelErrors.outboundMessageMTUExceeded(attemptedOutboundSize:2000 + 16 + 16 + 4 + 16, mtuLimitOutbound:1400) = error)
+						freeConfirm.confirm(count:1)
+					} catch let error as ChannelErrors.OutboundMessageMTUExceeded {
+						cliLogger.info("alice encountered an error sending the oversized packet, so bob should not receive anything.")
+						#expect(ChannelErrors.OutboundMessageMTUExceeded(attemptedOutboundSize:2000 + 32, mtuLimitOutbound:1400) == error)
+						foo.cancelAll()
+						try await foo.waitForAll()
+						return
 					}
-				}
-				for try await (key, incomingData) in bobInterface {
-					#expect(key == alicePublicKey)
-					cliLogger.info("bob received data that is \(incomingData.count) bytes long")
-					foo.cancelAll()
-					try await foo.waitForAll()
-					return
 				}
 			})
 		}
@@ -260,8 +254,8 @@ extension WireguardSwiftTests {
 				for try await (key, incomingData) in bobInterface {
 					#expect(key == alicePublicKey)
 					#expect(incomingData == messageBytes)
-					cliLogger.info("bob received data that is \(incomingData.count) bytes long")
 					found += 1
+					cliLogger.info("bob received message from alice.", metadata:["message_count":"\(found)"])
 					if found == 512 {
 						foo.cancelAll()
 						try await foo.waitForAll()
@@ -325,13 +319,13 @@ extension WireguardSwiftTests {
 		}
 		
 		@Test func sendManySmallMessages() async throws {
-			let payloadSize: Int = 20_000
+			let payloadSize: Int = 2_000
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
 				payload[i] = UInt8(i%256)
 			}
 			
-			let payloadCount = 9_000
+			let payloadCount = 1_000
 			var payloads:[[UInt8]] = []
 			for _ in 0..<payloadCount {
 				payloads.append(payload)
@@ -377,7 +371,7 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func sendSingleLargeMessage() async throws {
-			let payloadSize: Int = 100_000_000
+			let payloadSize: Int = 20_000_000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			

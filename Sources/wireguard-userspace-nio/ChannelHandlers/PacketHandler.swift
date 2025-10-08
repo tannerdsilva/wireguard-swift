@@ -15,7 +15,7 @@ internal enum PacketTypeOutbound {
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
 
-internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
+internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
@@ -32,12 +32,17 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	
 	/// the type of data that this handler will receive from upstream in the inbound pipeline. this is a datagram packet with an associated remote address.
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
+	private var packetsReadSinceLastReadComplete:Int = 0
+	private var bytesReadSinceLastReadComplete:Int = 0
+
 	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
-	/*
+	
 	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
+	
+	/*
 	private var outboundOutDriver:WriteOrHold<OutboundOut>
 	*/
 
@@ -70,12 +75,28 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 		context.fireUserInboundEventTriggered(event)
 	}
 
+	internal func channelReadComplete(context:borrowing ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		if packetsReadSinceLastReadComplete > 0 {
+			log.trace("read complete.", metadata:["packets_read":"\(packetsReadSinceLastReadComplete)", "bytes_read":"\(bytesReadSinceLastReadComplete)"])
+			packetsReadSinceLastReadComplete = 0
+			bytesReadSinceLastReadComplete = 0
+			context.fireChannelReadComplete()
+		} else {
+			log.trace("read complete called, but no reads were performed since the last read complete. not passing downstream.")
+		}
+	}
+
 	internal func channelRead(context:borrowing ChannelHandlerContext, data:NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var logger = log
 		var envelope = unwrapInboundIn(data)
+		packetsReadSinceLastReadComplete += 1
+		bytesReadSinceLastReadComplete += envelope.bytesOnWire
 		let endpoint:Endpoint
 		do {
 			endpoint = try Endpoint(envelope.remoteAddress)
@@ -146,5 +167,27 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
 				return
 		}
+	}
+	
+	private var packetsWrittenSinceLastFlush:Int = 0
+	private var bytesWrittenSinceLastFlush:Int = 0
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		let unwrappedData = unwrapOutboundIn(data)
+		packetsWrittenSinceLastFlush += 1
+		bytesWrittenSinceLastFlush += unwrappedData.bytesOnWire
+		context.write(wrapOutboundOut(unwrappedData), promise:promise)
+	}
+
+	internal func flush(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		log.trace("flushing...", metadata:["packets_flushed":"\(packetsWrittenSinceLastFlush)", "bytes_flushed":"\(bytesWrittenSinceLastFlush)"])
+		packetsWrittenSinceLastFlush = 0
+		bytesWrittenSinceLastFlush = 0
+		context.flush()
 	}
 }
