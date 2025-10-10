@@ -67,7 +67,7 @@ extension KCPSegment {
 		/// adds a segment to the stack for the given public key. if the segment would cause the mtu to be exceeded, the existing buffer is flushed first.
 		/// - returns: true if outbound data was written to the context, false otherwise.
 		@discardableResult fileprivate mutating func stack(context:ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler) -> Bool {
-			let expectedEncodedLength = segment.header.dataLength + UInt32(IKCP_OVERHEAD)
+			let expectedEncodedLength = segment.header.dataLength + UInt16(IKCP_OVERHEAD)
 			var didWrite = false
 			if var hasExistingBuffer = segmentStack[publicKey] {
 				// we have an existing buffer, see if we can append to it...

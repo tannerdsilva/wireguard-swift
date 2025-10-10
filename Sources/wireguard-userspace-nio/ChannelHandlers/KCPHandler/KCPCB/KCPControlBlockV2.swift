@@ -22,28 +22,24 @@ public enum InputError:Swift.Error {
 	case invalidCMD
 }
 
-fileprivate func iclock(_ delay:UInt64 = 0) -> UInt32 {
-	let now = NIODeadline.now().uptimeNanoseconds - delay
-	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
-}
-internal func iclock(_ time:NIODeadline) -> UInt32 {
+internal func iclock(_ time:NIODeadline) -> UInt64 {
 	let now = time.uptimeNanoseconds
-	return UInt32(now / 1_000_000) // nanoseconds → milliseconds
+	return UInt64(now / 1_000_000) // nanoseconds → milliseconds
 }
 @inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
 	return a > b ? a : b
 }
-@inline(__always) private func ibound(_ lower: UInt32, _ value: UInt32, _ upper: UInt32) -> UInt32 {
+@inline(__always) private func ibound(_ lower: UInt64, _ value: UInt64, _ upper: UInt64) -> UInt64 {
 	return min(max(value, lower), upper)
 }
-@inline(__always) private func itimeDiff(later a:UInt32, earlier b:UInt32) -> Int32 {
-	return Int32(bitPattern: a &- b)
+@inline(__always) private func itimeDiff(later a:UInt64, earlier b:UInt64) -> Int64 {
+	return Int64(bitPattern: a &- b)
 }
 
 let IKCP_RTO_NDL:UInt32 = 30
-let IKCP_RTO_MIN:UInt32 = 100
-let IKCP_RTO_DEF:UInt32 = 200
-let IKCP_RTO_MAX:UInt32 = 60000
+let IKCP_RTO_MIN:UInt64 = 100
+let IKCP_RTO_DEF:UInt64 = 200
+let IKCP_RTO_MAX:UInt64 = 60000
 let IKCP_CMD_PUSH:UInt8 = 81
 let IKCP_CMD_ACK:UInt8 = 82
 let IKCP_CMD_WASK:UInt8 = 83
@@ -139,7 +135,7 @@ internal struct KCPControlBlock {
 	internal let log:Logger
 
 	/// conversation id.
-	internal let conv:UInt32
+	internal let conv:UInt16
 	/// maximum transmission unit: the largest udp packet accepted
 	internal let mtu:UInt32
 	/// maximum segment size: largest amount of data per segment
@@ -222,7 +218,7 @@ internal struct KCPControlBlock {
 	internal var remoteWindow:UInt32
 	internal var flightBytes:UInt32 = 0
 
-	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt32, mtu:UInt32, writeWindow:UInt32, readWindow:UInt32, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
+	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt16, mtu:UInt32, writeWindow:UInt32, readWindow:UInt32, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -405,23 +401,23 @@ extension KCPControlBlock {
 		}
 	}
 
-	private mutating func updateInbound(rtt: UInt32) {
+	private mutating func updateInbound(rtt: UInt64) {
 		if rttInfo.rx_srtt == 0 {
 			rttInfo.rx_srtt = rtt
 			rttInfo.rx_rttval = rtt / 2
 		} else {
-			var delta = Int32(rtt) - Int32(rttInfo.rx_srtt)
+			var delta = Int64(rtt) - Int64(rttInfo.rx_srtt)
 			if delta < 0 {
 				delta = -delta
 			}
-			rttInfo.rx_rttval = ((3 * rttInfo.rx_rttval + UInt32(delta)) / 4)
+			rttInfo.rx_rttval = ((3 * rttInfo.rx_rttval + UInt64(delta)) / 4)
 			rttInfo.rx_srtt = (7 * rttInfo.rx_srtt + rtt) / 8
 			if rttInfo.rx_srtt < 1 {
 				rttInfo.rx_srtt = 1
 			}
 		}
 		// calculate the retransmission time
-		let rtoUnbound:UInt32 = rttInfo.rx_srtt + 4 * rttInfo.rx_rttval
+		let rtoUnbound:UInt64 = rttInfo.rx_srtt + 4 * rttInfo.rx_rttval
 		rttInfo.rx_rto = ibound(rttInfo.rx_minrto, rtoUnbound, rttInfo.rx_maxrto)
 	}
 }
@@ -436,7 +432,7 @@ extension KCPControlBlock {
 			
 			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
 
-			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt32(fragSize))
+			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt16(fragSize))
 			snd_nxt &+= 1
 			let seg = KCPSegment(header: header, data: view!.readableBytesView)
 			
@@ -472,7 +468,7 @@ extension KCPControlBlock {
 			// Sending segments the first time
 			if(seg.data.runtimeMetadata.xmit == 0) {
 				node.value!.data.runtimeMetadata.xmit = 1
-				node.value!.data.runtimeMetadata.rto = UInt32(rttInfo.rx_rto)
+				node.value!.data.runtimeMetadata.rto = rttInfo.rx_rto
 				node.value!.data.runtimeMetadata.resendts = now &+ node.value!.data.runtimeMetadata.rto
 				node.value!.data.header.timestamp = now
 				node.value!.data.header.una = rcv_nxt
@@ -516,7 +512,7 @@ extension KCPControlBlock {
 		if itimeDiff(later:now, earlier:probeInfo.ts_probe) >= 0 {
 			probeInfo.probe_wait = 500
 			probeInfo.ts_probe = now + probeInfo.probe_wait
-			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt32(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
+			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt64(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
 			log.trace("writing probe request")
 		}
 	}

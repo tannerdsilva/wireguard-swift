@@ -5,10 +5,6 @@ import RAW_blake2
 import Logging
 import wireguard_crypto_core
 
-@RAW_staticbuff(bytes:4)
-@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-internal struct MagicID:Sendable {}
-
 @available(*, deprecated, renamed:"KCPControlBlock.Handler")
 internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
 
@@ -212,14 +208,12 @@ extension KCPControlBlock.Handler {
 		let data = unwrapInboundIn(data)
 		let key = data.publicKey
 		if (kcp[key] == nil) {
-			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
-			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
 		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush) != true) {
 			// handle 'Disconnected' scenario
-			let magicID = try! magicID(key1: ourKey, key2: key)
-			kcp[key]!.reset(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+			kcp[key]!.reset(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 			_ = kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush)
 		}
 	}
@@ -234,9 +228,8 @@ extension KCPControlBlock.Handler {
 		// Check if control block exists
 		if (kcp[key] == nil) {
 			// Create the magic id control block
-			let magicID = try! magicID(key1: ourKey, key2: key)
 			kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
-			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: magicID, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mtu: UInt32(mtu), writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
 		}
 
 		// Send data to control block
@@ -294,25 +287,6 @@ extension KCPControlBlock.Handler {
 			default:
 				context.fireUserInboundEventTriggered(event)
 				return
-		}
-	}
-}
-
-// Control Block Helper Functions
-extension KCPControlBlock.Handler {
-	private func magicID(key1:PublicKey, key2:PublicKey) throws -> UInt32 {
-		if(key1 < key2) {
-			var hasher = try WGHasher<MagicID>()
-			try hasher.update(key1)
-			try hasher.update(key2)
-			let h = try hasher.finish()
-			return h.RAW_native()
-		} else {
-			var hasher = try WGHasher<MagicID>()
-			try hasher.update(key2)
-			try hasher.update(key1)
-			let h = try hasher.finish()
-			return h.RAW_native()
 		}
 	}
 }

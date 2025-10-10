@@ -13,7 +13,7 @@ internal struct KCPSegment:Sendable, Hashable {
 	/// the header section of the kcp segment
 	internal struct Header:Sendable, Hashable {
 		/// the conversation ID that this segment belongs to
-		internal let conversationID:UInt32
+		internal let conversationID:UInt16
 		/// the command signal that this segment is carrying
 		internal var command:Command
 		/// the fragment number of this segment
@@ -21,17 +21,17 @@ internal struct KCPSegment:Sendable, Hashable {
 		/// the receive window size.
 		internal var receiveWindowSize:UInt16
 		/// the current timestamp of this segment. used for rtt calculations.
-		internal var timestamp:UInt32
+		internal var timestamp:UInt64
 		/// the sequence number of this segment
 		internal var sequenceNumber:UInt32
 		/// the earliest unacknowledged segment
 		internal var una:UInt32
 		/// the length of the data carried in this segment
-		internal let dataLength:UInt32
+		internal let dataLength:UInt16
 
 		// not sure which of these stored instance varaibles should be `var` vs `let`, I would like to make a conclusive decision on this when the timing is right.
 
-		internal init(conv:UInt32, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt32, una unacknowledged:UInt32, len:UInt32) {
+		internal init(conv:UInt16, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt64, una unacknowledged:UInt32, len:UInt16) {
 			conversationID = conv
 			command = cmd
 			fragmentID = frg
@@ -45,7 +45,7 @@ internal struct KCPSegment:Sendable, Hashable {
 		/// decode a kcp segment header from a byte buffer. the bytes will be read from the buffer.
 		internal init?(decode buffer:inout ByteBuffer) {
 			// read the conversation id
-			guard let cid = buffer.readInteger(endianness: .big, as:UInt32.self) else {
+			guard let cid = buffer.readInteger(endianness: .big, as:UInt16.self) else {
 				return nil
 			}
 			conversationID = cid
@@ -72,7 +72,7 @@ internal struct KCPSegment:Sendable, Hashable {
 			receiveWindowSize = wndParsed
 
 			// read the rest of the header fields
-			guard let tsParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
+			guard let tsParsed = buffer.readInteger(endianness: .big, as:UInt64.self) else {
 				return nil
 			}
 			timestamp = tsParsed
@@ -90,21 +90,21 @@ internal struct KCPSegment:Sendable, Hashable {
 			una = unaParsed
 
 			// read the data length
-			guard let lenParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
+			guard let lenParsed = buffer.readInteger(endianness: .big, as:UInt16.self) else {
 				return nil
 			}
 			dataLength = lenParsed
 		}
 
 		internal func encode(to buffer:inout ByteBuffer) {
-			buffer.writeInteger(conversationID, endianness:.big, as:UInt32.self)
+			buffer.writeInteger(conversationID, endianness:.big, as:UInt16.self)
 			buffer.writeInteger(command.rawValue, as:UInt8.self)
 			buffer.writeInteger(fragmentID, as:UInt8.self)
 			buffer.writeInteger(receiveWindowSize, endianness:.big, as:UInt16.self)
-			buffer.writeInteger(timestamp, endianness:.big, as:UInt32.self)
+			buffer.writeInteger(timestamp, endianness:.big, as:UInt64.self)
 			buffer.writeInteger(sequenceNumber, endianness:.big, as:UInt32.self)
 			buffer.writeInteger(una, endianness:.big, as:UInt32.self)
-			buffer.writeInteger(dataLength, endianness:.big, as:UInt32.self)
+			buffer.writeInteger(dataLength, endianness:.big, as:UInt16.self)
 		}
 	}
 }
@@ -128,9 +128,9 @@ extension KCPSegment {
 	/// runtime metadata associated with a kcp segment that is not transmitted on the wire.
 	internal struct RuntimeMetadata:Sendable, Hashable {
 		/// resend timestamp. the time to retransmit if no ACK is received
-		internal var resendts:UInt32 = 0
+		internal var resendts:UInt64 = 0
 		/// retransmission timeout. computed based on the round trip time.
-		internal var rto:UInt32 = 0
+		internal var rto:UInt64 = 0
 		/// fast ack counter.
 		internal var fastack:UInt32 = 0
 		/// transmit count. incremented when this segment is sent.

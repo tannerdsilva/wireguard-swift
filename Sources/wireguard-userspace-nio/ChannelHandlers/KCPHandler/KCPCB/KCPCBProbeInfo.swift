@@ -6,8 +6,8 @@ extension KCPControlBlock {
 		/// flags to indicate whether we need to send a window probe
 		internal var probe:UInt32 = 0
 		/// timestamp of the next scheduled probe
-		internal var ts_probe:UInt32 = 0
+		internal var ts_probe:UInt64 = 0
 		/// time to wait before probing again
-		internal var probe_wait:UInt32 = 0
+		internal var probe_wait:UInt64 = 0
 	}
 }
