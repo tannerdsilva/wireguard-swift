@@ -1,12 +1,11 @@
 import NIO
 import RAW
 import RAW_dh25519
-import kcp_swift
 import Logging
 
 extension Array {
 	func split(intoChunksOf chunkSize: Int) -> [[Element]] {
-		guard chunkSize > 0 else { return [self] }	// safety guard
+		guard chunkSize > 0 else { return [self] }
 		var chunks: [[Element]] = []
 		var startIndex = 0
 		while startIndex < self.count {
@@ -19,22 +18,19 @@ extension Array {
 	}
 }
 
-@RAW_staticbuff(bytes:4)
-@RAW_staticbuff_fixedwidthinteger_type<UInt32>(bigEndian:true)
-internal struct EncodedUInt32:Sendable {}
-
 // SIVA Splicers (0_0)
 internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
-	internal typealias InboundIn = (PublicKey, [UInt8]) // From kcp handler, needs to be stitched together
-	public typealias InboundOut = (PublicKey, [UInt8]) // Send to the Handoff handler
+	internal typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
+	public typealias InboundOut = PeerAssociated<ByteBuffer> // Send to the Handoff handler
 	
-	internal typealias OutboundIn = (PublicKey, [UInt8]) // From writes from user
-	internal typealias OutboundOut = (PublicKey, [UInt8]) // Send spliced data to kcp handler
+	internal typealias OutboundIn = PeerAssociated<ByteBuffer> // From writes from user
+	internal typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
+	// private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	private var logger:Logger
 	
 	private var storedLengths:[PublicKey:Int] = [:]
-	private var storedPayload:[PublicKey:[UInt8]] = [:]
+	private var storedPayload:[PublicKey:ByteBuffer] = [:]
 	
 	private let spliceByteLength:Int
 
@@ -46,77 +42,87 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
-		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
 		logger.trace("handler added to pipeline.")
 	}
 
 	// Received kcp segment. Need to stitch together and send to handoff handler
 	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-		let (key, data) = unwrapInboundIn(data)
+		let inboundIn = unwrapInboundIn(data)
+		let key = inboundIn.publicKey
+		let byteBuffer = inboundIn.associatedValue
+		let data: [UInt8] = byteBuffer.getBytes(at: byteBuffer.readerIndex, length: byteBuffer.readableBytes)!
 		
 		guard storedLengths[key] != nil else {
 			// Extract the UInt32 from the first 4 bytes
 			let value = data.RAW_access {
-                return EncodedUInt32(RAW_staticbuff:$0.baseAddress!.advanced(by: data.count-4)).RAW_native()
+				return EncodedUInt32(RAW_staticbuff:$0.baseAddress!.advanced(by: data.count-4)).RAW_native()
 			}
 			
 			// Remove the first 4 bytes from the array
 			let payload = Array(data.dropLast(4))
+
+			let buf = context.channel.allocator.buffer(bytes:payload)
 			
 			// Only this one segment
-			if(value == 0) {
+			if (value == 0) {
 				logger.debug("Sending single message to DHH")
-				context.fireChannelRead(wrapInboundOut((key, payload)))
+				context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: buf)))
 				return
 			}
 			
-			// Add to stored segments cause there are more coming!
+			// add to stored segments cause there are more coming!
 			storedLengths[key] = Int(value) - 1
-			storedPayload[key] = payload
-			
+			storedPayload[key] = buf
 			return
 		}
-		
-		storedPayload[key]!.append(contentsOf: data)
+
+		storedPayload[key]!.writeBytes(data)
 		storedLengths[key]! -= 1
 		
-		// If it's the last segment, then send the whole thing to handoff handler
-		if(storedLengths[key]! == 0) {
+		// if it's the last segment, then send the whole thing to handoff handler
+		if (storedLengths[key]! == 0) {
 			storedLengths[key] = nil
 			logger.debug("Sending reforged message to DHH")
-			context.fireChannelRead(wrapInboundOut((key, storedPayload[key]!)))
+			context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: storedPayload[key]!)))
 			storedPayload[key] = nil
 		}
 	}
+
+	internal func channelReadComplete(context: ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		logger.trace("channel read complete.")
+		context.fireChannelReadComplete()
+	}
 	
-	// Receiving data which needs to be spliced and sent
-	internal func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
-		var (key, data) = unwrapOutboundIn(data)
-		
-		logger.debug("Splicing \(data.count) bytes")
-		
-		// Data doesn't need to be spliced, add a header signifying 0 length
-		if(data.count <= spliceByteLength) {
-            let footerBytes = [UInt8](repeating: 0, count: 4)
-            data.append(contentsOf: footerBytes)
-			
-            context.writeAndFlush(wrapOutboundOut((key, data)), promise: promise)
-		}
-		// Data needs to be spliced and place a len header on first segment
-		else {
-			let splices = data.split(intoChunksOf: spliceByteLength)
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		var associatedData = unwrapOutboundIn(data)
+		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
+		// determine if the data needs to be spliced into smaller segments
+		if (associatedData.associatedValue.readableBytes <= spliceByteLength) {
+			// there is no need to create multiple segments so we can add a zero at the end of the data.
+			_ = EncodedUInt32(RAW_native:0).RAW_access { footerBytesPtr in
+				associatedData.associatedValue.writeBytes(footerBytesPtr)
+			}
+			context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
+		} else {
+			let splices = [UInt8](associatedData.associatedValue.readableBytesView).split(intoChunksOf: spliceByteLength)
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
 			for i in 0..<splices.count {
 				var segment = Array(splices[i])
-				if(i == 0) {
+				if (i == 0) {
 					footerBytes.RAW_access {
-                        segment.append(contentsOf: $0)
+						segment.append(contentsOf: $0)
 					}
 				}
-				if(i == splices.count-1) {
-                    context.writeAndFlush(wrapOutboundOut((key, segment)), promise: promise)
+				let buf = context.channel.allocator.buffer(bytes:segment)
+				if (i == splices.count-1) {
+					// last segment to be written for this message
+					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
 				} else {
-                    context.writeAndFlush(wrapOutboundOut((key, segment)), promise: nil)
+					// 1 of n message fragments
+					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf))).cascadeFailure(to:promise)
 				}
 			}
 		}

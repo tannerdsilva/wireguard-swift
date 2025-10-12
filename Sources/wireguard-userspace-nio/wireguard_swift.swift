@@ -59,7 +59,7 @@ public struct PeerInfo:Sendable {
 }
 
 /// primary wireguard interface. this is how connections will be made.
-public final actor WGInterface<TransactableDataType>:Sendable, Service where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
+public final actor WGInterface<TransactableDataType>:Sendable where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
 	public enum State {
 		case initialized
 		case engaging
@@ -67,29 +67,49 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		case terminated
 	}
 	public struct InvalidInterfaceStateError:Swift.Error {}
+	private let receiveRatio:Double = 0.25
 
 	private let logger:Logger
 	private let bootstrappedFuture:Future<Void, Swift.Error> = Future<Void, Swift.Error>()
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	public let inboundData = FIFO<(PublicKey, TransactableDataType), Swift.Error>()
+	public let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
 	private let listeningPort:Int
+
+	private let ph:PacketHandler
 	private let wgh:WireguardHandler
+	private let kcpsh:KCPSegment.Handler
+	private let kcpcbh:KCPControlBlock.Handler
+	private let splcrh:SplicerHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
-		self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
-		self.wgh = WireguardHandler(privateKey: staticPrivateKey, initialPeers: initialConfiguration, logLevel:.debug)
+		var mtuStep = mtu
+		var mtuLims = MTULimits(bidirectional:Int(mtuStep))
+		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
+		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.splcrh = SplicerHandler(logLevel:logLevel, spliceByteLength: 50_000)
 	}
+}
 
+extension WGInterface:Service where TransactableDataType == [UInt8] {
 	public func waitForChannelInit() async throws {
 		_ = try await bootstrappedFuture.result()!.get()
+	}
+
+	public enum ChannelInitializationError:Swift.Error, Sendable {
+		case soReceiveBufferRetrievalFailed
+		case soSendBufferSetFailed
+		case soWriteBufferWaterMarkSetFailed
 	}
 	
 	/// Starts the WireGuard interface
@@ -97,19 +117,46 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		switch state {
 			case .initialized:
 				state = .engaging
-				
-				let dhh = DataHandoffHandler<TransactableDataType>(handoff:inboundData, logLevel:logger.logLevel)
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
-					.channelInitializer { [wgh = wgh, dhh = dhh, l = logger] channel in
-						channel.pipeline.addHandlers([
-							PacketHandler(mtu:1500, logLevel:l.logLevel),
-							wgh,
-							KcpHandler(logLevel:l.logLevel),
-							SplicerHandler(logLevel:l.logLevel, spliceByteLength: 300_000),
-							dhh
-						])
+					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value:8<<20)
+					.channelInitializer { [wgh = wgh, dhh = DataHandoffHandler(handoff:inboundData, logLevel:logger.logLevel), l = logger] channel in
+						let initializationFuture = channel.eventLoop.makePromise(of:Void.self)
+						channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenComplete { [l = l] valueResult in
+							guard case .success(let result) = valueResult else {
+								l.error("failed to load read buffer size.")
+								initializationFuture.fail(ChannelInitializationError.soReceiveBufferRetrievalFailed)
+								return
+							}
+							let sndBuf = ceil(Double(result) * 0.75)
+							channel.setOption(ChannelOptions.socketOption(.so_sndbuf), value:ChannelOptions.Types.SocketOption.Value(Int(sndBuf))).whenComplete { setResult in
+								guard case .success(_) = setResult else {
+									l.error("failed to set send buffer size.")
+									initializationFuture.fail(ChannelInitializationError.soSendBufferSetFailed)
+									return
+								}
+								l.trace("loaded send buffer size.", metadata: ["so_sndbuf":"\(Int(sndBuf))"])
+								channel.setOption(ChannelOptions.writeBufferWaterMark, value:ChannelOptions.Types.WriteBufferWaterMark(low:Int(sndBuf*0.3), high:Int(sndBuf*0.75))).whenComplete { wbwmResult in
+									guard case .success(_) = wbwmResult else {
+										l.error("failed to set write buffer water mark.")
+										initializationFuture.fail(ChannelInitializationError.soWriteBufferWaterMarkSetFailed)
+										return
+									}
+									l.notice("channel parameters determined.", metadata: ["so_sndbuf":"\(Int(sndBuf))", "so_rcvbuf":"\(result)", "wbwm_low":"\(Int(sndBuf*0.3))", "wbwm_high":"\(Int(sndBuf*0.75))"])
+									channel.pipeline.addHandlers([
+										self.ph,
+										wgh,
+										self.kcpsh,
+										self.kcpcbh,
+										self.splcrh,
+										dhh
+									]).cascade(to:initializationFuture)
+								}
+							}
+						}
+						return initializationFuture.futureResult
 					}
+					
 				let channel = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort).get()
 				try bootstrappedFuture.setSuccess(())
 				state = .engaged(channel)
@@ -139,37 +186,27 @@ public final actor WGInterface<TransactableDataType>:Sendable, Service where Tra
 		logger.info("server closed successfully.")
 	}
 
-	public func asyncWrite(publicKey: PublicKey, data:[UInt8]) async throws {
+	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
 		switch state {
 			case .engaged(let channel):
 				let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
-				channel.pipeline.writeAndFlush((publicKey, data), promise:myWritePromise)
+				var bytes = channel.allocator.buffer(capacity:data.count)
+				bytes.writeBytes(data)
+				channel.pipeline.writeAndFlush(PeerAssociated(publicKey:publicKey, associatedValue:bytes), promise:myWritePromise)
 				try await myWritePromise.futureResult.get()
-			default:
-				throw InvalidInterfaceStateError()
-		}
-	}
-	
-	public func write(publicKey: PublicKey, data:[UInt8]) throws {
-		switch state {
-			case .engaged(let channel):
-				channel.pipeline.writeAndFlush((publicKey, data), promise:nil)
 			default:
 				throw InvalidInterfaceStateError()
 		}
 	}
 }
 
-
 extension WGInterface:AsyncSequence {
 	public struct AsyncIterator:AsyncIteratorProtocol {
-		private let inboundDataOut:FIFO<(PublicKey, TransactableDataType), Swift.Error>.AsyncConsumerExplicit
-		
-		internal init(inboundData:FIFO<(PublicKey, TransactableDataType), Swift.Error>) {
+		private let inboundDataOut:FIFO<(PublicKey, [UInt8]), Swift.Error>.AsyncConsumerExplicit
+		internal init(inboundData:FIFO<(PublicKey, [UInt8]), Swift.Error>) {
 			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
 		}
-		
-		public func next() async throws -> (PublicKey, TransactableDataType)? {
+		public func next() async throws -> (PublicKey, [UInt8])? {
 			switch await inboundDataOut.next() {
 				case .element(let element):
 					return element

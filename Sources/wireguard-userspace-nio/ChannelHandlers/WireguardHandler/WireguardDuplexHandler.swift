@@ -19,8 +19,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 
 	internal typealias InboundIn = (Endpoint, Message.NIO)
-	internal typealias InboundOut = (PublicKey, ByteBuffer)
-	internal typealias OutboundIn = (PublicKey, ByteBuffer)
+	internal typealias InboundOut = PeerAssociated<ByteBuffer>
+	internal typealias OutboundIn = PeerAssociated<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 	
 	internal static let keepaliveTimeout = TimeAmount.seconds(10)
@@ -28,6 +28,15 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal static let rekeyAttemptTime = TimeAmount.seconds(90)
 	internal static let rekeyAfterTime = TimeAmount.seconds(120)
 	internal static let rejectAfterTime = TimeAmount.seconds(300)
+
+	/// used to specify the wireguard overhead for mtu calculations.
+	internal static let wireguardDataOverhead = MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size
+	
+	internal static let wireguardMaximumPaddingBytesAdded = 15
+	
+	fileprivate static func maxPayloadPrePadded(forMTU mtu:Int) -> Int {
+		return (((mtu - Self.wireguardMaximumPaddingBytesAdded) / 16) * 16)
+	}
 
 	private enum State {
 		case initialized([PeerInfo])
@@ -54,7 +63,10 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		internal var activeSessionIndicies:MPeerIndex
 	}
 
-	/// NOTE: do not touch - the live peer instances will mutate these for you.
+	/// the maximum transmission unit that is configured for this handler.
+	private let mtu:MTULimits
+
+	/// WARNING: do not touch - the live peer instances will mutate these for you.
 	internal var automaticallyUpdatedVariables:AutomaticallyUpdated
 	/// the primary storage for the active peers that the interface will connect to.
 	private var peerDeltaEngine:PeerDeltaEngine!
@@ -63,7 +75,10 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// the current operational state of the handler.
 	private var operatingState:State
 
-	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
+	/// used to indicate that a flush should be performed after channelReadComplete is called. returns back to false after channelReadComplete is called.
+	internal var flushAfterChannelReadComplete:Bool = false
+
+	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
 		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:AutomaticallyUpdated.ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
@@ -77,12 +92,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update([UInt8]("cookie--".utf8))
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
-		
-		log.trace("instance initialized", metadata:["peer_count":"\(initialPeers.count)"])
 		operatingState = .initialized(initialPeers)
+		mtu = MTULimits(mtuInboundIn:mtu.mtuInboundIn, mtuOutboundOut:mtu.mtuOutboundOut, mtuOutboundIn:(Self.maxPayloadPrePadded(forMTU:mtu.mtuOutboundOut) - Self.wireguardDataOverhead), mtuInboundOut:(Self.maxPayloadPrePadded(forMTU:mtu.mtuInboundIn) - Self.wireguardDataOverhead))
+		self.mtu = mtu
 	}
 
-	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) {
+	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) -> Bool {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
@@ -92,8 +107,16 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:mesLen) { outputBuffer in
 			return outputBuffer.baseAddress!.distance(to:message.RAW_encode(dest:outputBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 		}
-		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(destinationEndpoint), data: encodeBuffer)
-		context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+		let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(destinationEndpoint), data:encodeBuffer)
+		#if DEBUG
+		guard (asAddressedEnvelope.data.readableBytes) <= mtu.mtuOutboundIn else {
+			log.error("attempted to write packet that exceeds the configured mtu.", metadata:["attempted_size":"\(asAddressedEnvelope.data.readableBytes + (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size))", "mtu_limit":"\(mtu.mtuOutboundOut)"])
+			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize: asAddressedEnvelope.data.readableBytes + (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size), mtuLimitOutbound: Int(mtu.mtuOutboundOut)))
+			fatalError("attempted to write packet that exceeds the configured mtu. \(#file):\(#line)")
+		}
+		#endif
+		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+		return true
 	}
 }
 
@@ -109,30 +132,29 @@ extension WireguardHandler {
 				peerDeltaEngine = PeerDeltaEngine(context:context, initiallyConfigured:initPeers, handler:self, logLevel:logger.logLevel, additionHandler: { [weak self] _ in
 					// when peer is added
 					guard let _ = self else { return }
-				}, removalHandler: { [weak self, l = log] removedPublicKey, peerInfo in
+				}, removalHandler: { [weak self, l = log] removedPublicKey, _ in
 					// when peer is removed
 					guard let _ = self else { return }
-					l.info("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
-					peerInfo.close()
+					l.debug("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
 				})
 				operatingState = .channelEngaged
 			default:
 				fatalError("this should never happen \(#file):\(#line)")
 		}
-		logger.trace("handler added to NIO pipeline.")
+		logger.debug("handler added to pipeline.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}
 	internal func handlerRemoved(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
 		let logger = log
-		logger.trace("handler removed from NIO pipeline.")
+		logger.debug("handler removed from pipeline.")
 		operatingState = .terminated
 		peerDeltaEngine.setPeers(context:context, [], handler:self)
 	}
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
 		#if DEBUG
-		context.eventLoop.assertInEventLoop() 
+		context.eventLoop.assertInEventLoop()
 		#endif
 		let logger = log
 		logger.trace("user inbound event triggered")
@@ -141,6 +163,19 @@ extension WireguardHandler {
 
 // swift nio read handler function
 extension WireguardHandler {
+	internal func channelReadComplete(context:ChannelHandlerContext) {
+		defer {
+			flushAfterChannelReadComplete = false
+			context.fireChannelReadComplete()
+		}
+		#if DEBUG
+		context.eventLoop.assertInEventLoop() 
+		#endif
+		if flushAfterChannelReadComplete == true {
+			log.trace("flushing after channel read complete.")
+			context.flush()
+		}
+	}
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -162,15 +197,20 @@ extension WireguardHandler {
 					*/
 					if isCongested.load(ordering:.acquiring) == true {
 						do {
-							try payload.validateUnderLoadNoNIO(responderStaticPrivateKey:privateKey, R:secretCookieR, endpoint:endpoint)
+							try payload.validateUnderLoad(responderStaticPrivateKey:privateKey, R:secretCookieR, endpoint:endpoint)
 						} catch Message.Initiation.Payload.Authenticated.Error.mac1Invalid {
 							logger.error("received invalid handshake initiation packet. ignoring.")
 							return
 						} catch {
 							// create and send the cookie
-							let cookie = try Message.Cookie.Payload.forgeNoNIO(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
-							writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil)
-							return
+							let cookie = try Message.Cookie.Payload.forge(receiverPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
+							switch writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil) {
+								case true:
+									flushAfterChannelReadComplete = true
+								default:
+									// held - no need to flush now.
+									break
+							}
 						}
 					}
 					
@@ -187,8 +227,14 @@ extension WireguardHandler {
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
 					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
-					logger.debug("successfully validated handshake initiation", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
-					writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil)
+					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
+					switch writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil) {
+						case true:
+							flushAfterChannelReadComplete = true
+						default:
+							// held - no need to flush now.
+							break
+					}
 					break;
 			
 				case .response(let payload):
@@ -230,17 +276,29 @@ extension WireguardHandler {
 					Im = initiator peer index
 					Im' = responder peer index
 					*/
-//					guard let peerInfo = peerDeltaEngine[
+					guard let peerPub = automaticallyUpdatedVariables.activelyInitiatingIndicies.match(context:context, peerIndex:cookiePayload.receiverIndex) else {
+						logger.critical("received cookie packet for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
+					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:peerPub) else {
+						logger.critical("received cookie packet for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
+					guard let chainingData = livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:cookiePayload.receiverIndex) else {
+						logger.error("received cookie packet for unknown peer index \(cookiePayload.receiverIndex) with no existing ephemeral private key")
+						return
+					}
 					logger.debug("received cookie packet", metadata:["public-key_remote":""])
-					/*withUnsafePointer(to:peerPub) { expectedPeerPublicKey in
+					withUnsafePointer(to:peerPub) { expectedPeerPublicKey in
 						var phantomCookie:Message.Initiation.Payload.Authenticated
 						do {
-							phantomCookie = try chainingData.authenticatedPayload.payload.finalize(responderStaticPublicKey:expectedPeerPublicKey, cookie:cookiePayload)
+							phantomCookie = try chainingData.initiationPacket.payload.finalize(responderStaticPublicKey:expectedPeerPublicKey, cookie:cookiePayload)
 //							selfInitiatedInfo.initiatorPackets[initiationPacket.payload.initiatorPeerIndex] = phantomCookie
 						} catch {
 //							logger.error("failed to validate cookie and create msgMac2")
 //							return
 						}
+						/*
 						let nioNow = NIODeadline.now()
 						selfInitiatedIndexes.rekey(context:context, indexM:cookiePayload.receiverIndex, publicKey:expectedPeerPublicKey.pointee, chainingData:(privateKey:chainingData.privateKey, c:chainingData.c, h:chainingData.h, authenticatedPayload:chainingData.authenticatedPayload)) { [weak self, ap = chainingData.authenticatedPayload, start = nioNow, c = ContextContainer(context:context), endpoint = endpoint] timer in
 							// rekey attempt task.
@@ -254,10 +312,15 @@ extension WireguardHandler {
 								self.writeMessage(.initiation(ap), to:endpoint, context:contextPointer.pointee, promise:nil)
 							}
 						}
-					}*/
+						*/
+					}
 					break;
 				
 				case .data(recipientIndex: let recipientIndex, counter: let counter, payload: let payload):
+					guard payload.count <= mtu.mtuInboundIn else {
+						logger.trace("packet dropped due to exceeding mtu.", metadata:["size":"\(payload.count)", "mtu_limit":"\(mtu.mtuInboundIn)"])
+						return
+					}
 					// verify that a current peer index exists for the public key already.
 					guard let identifiedPublicKey = automaticallyUpdatedVariables.activeSessionIndicies.seek(indexM:recipientIndex) else {
 						logger.warning("could not find matching traffic for inbound data peer index m \(recipientIndex)")
@@ -272,21 +335,13 @@ extension WireguardHandler {
 						logger.warning("could not find matching traffic for inbound data peer index m \(recipientIndex)")
 						return
 					}
-					var varsRecv = livePeerInfo.getRecvVars(geometry:existingGeometryPositioned, now:now)!
+					var varsRecv = livePeerInfo.getRecvVars(context:context, geometry:existingGeometryPositioned, now:now)!
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
 						return
 					}
-					defer {
-						livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
-					}
 
-					guard encodeBuffer.readableBytes != 0 else {
-						// keepalive packet
-						logger.debug("received keepalive packet", metadata:["public-key_remote":"\(identifiedPublicKey)"])
-						return
-					}
-
+					// decrypt the payload into the encode buffer
 					encodeBuffer.clear(minimumCapacity:payload.count - MemoryLayout<Tag>.size)
 					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:payload.count - MemoryLayout<Tag>.size) { decrypted in
 						return try payload.withUnsafeBytes { dataBuffer in
@@ -298,7 +353,8 @@ extension WireguardHandler {
 						}
 					}
 
-					context.fireChannelRead(wrapInboundOut((identifiedPublicKey, encodeBuffer)))
+					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
+					context.fireChannelRead(wrapInboundOut(PeerPayload(publicKey: identifiedPublicKey, buffer: encodeBuffer)))
 			}
 		} catch let error {
 			logger.error("error processing packet: \(error)")
@@ -310,7 +366,7 @@ extension WireguardHandler {
 // swift nio write handler function
 extension WireguardHandler {
 	/// applies an immediate encryption and writing of the given payload to the given public key.
-	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) {
+	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) -> Bool {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -320,26 +376,25 @@ extension WireguardHandler {
 		guard let peerInfoLive = peerDeltaEngine.peerLookup(publicKey:publicKey) else {
 			logger.error("peer is not configured. can not write data.")
 			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
-			return
+			return false
 		}
 		guard let ep = peerInfoLive.endpoint() else {
 			logger.error("trying to write data to a peer with no known endpoint.")
 			promise?.fail(PeerInfo.Live.UnknownPeerEndpoint())
-			return
+			return false
 		}
 		switch peerInfoLive.getSendStrategy(context:context, now:now, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep)) {
 			case .queueForInitiatingHandshake:
 				fallthrough
 			case .queueWhileAwaitingKeyRotation:
 				peerInfoLive.queuePostHandshake(context:context, data:payload, promise:promise)
-				return
+				return false
 			case .sendImmediately(var sendValues):
 				do {
 					var forgedLength = 0
 					forgedLength += MemoryLayout<Message.Data.Header>.size
 					forgedLength += MemoryLayout<Tag>.size
 					forgedLength += Message.Data.Payload.paddedLength(count:payload.readableBytes)
-					logger.trace("forged length computed", metadata:["length":"\(forgedLength)", "padding_length":"\(Message.Data.Payload.paddedLength(count:payload.readableBytes) - payload.readableBytes)"])
 					encodeBuffer.clear(minimumCapacity:forgedLength)
 					try encodeBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:forgedLength) { bufferPtr in
 						return try Message.Data.Payload.forge(receiverIndex:sendValues.session.geometry.mp, nonce:&sendValues.nSend, transportKey:sendValues.tSend, plainText:&payload, output:bufferPtr.baseAddress!)
@@ -348,12 +403,13 @@ extension WireguardHandler {
 					logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
 					context.fireErrorCaught(error)
 					promise?.fail(error)
-					return
+					return false
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
-				context.writeAndFlush(wrapOutboundOut(asAddressedEnvelope), promise:promise)
-				break
+				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes)", "public-key_remote":"\(publicKey)"])
+				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
+				return true
 		}
 	}
 	
@@ -361,7 +417,13 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var (publicKey, payload) = unwrapOutboundIn(data)
-		writeBytes(context:context, publicKey:publicKey, payload:&payload, promise:promise)
+		let peerPayload = unwrapOutboundIn(data)
+		guard peerPayload.associatedValue.readableBytes <= mtu.mtuOutboundIn else {
+			log.warning("outboundIn contains data that exceeds the configured mtu length.", metadata:["size":"\(peerPayload.associatedValue.readableBytes)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
+			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:peerPayload.associatedValue.readableBytes + Self.wireguardDataOverhead, mtuLimitOutbound:Int(mtu.mtuOutboundOut)))
+			return
+		}
+		var payload = peerPayload.associatedValue
+		_ = writeBytes(context:context, publicKey:peerPayload.publicKey, payload:&payload, promise:promise)
 	}
 }

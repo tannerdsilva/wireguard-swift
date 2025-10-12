@@ -8,7 +8,9 @@ import Synchronization
 import bedrock
 
 extension PeerInfo {
+	/// used to represent and store all live information about a peer that is needed for active communication on the socket.
 	internal final class Live:@unchecked Sendable {
+		/// the logger that the live peer info instance uses
 		private let log:Logger
 		private let wireguardHandler:WireguardHandler
 
@@ -16,16 +18,7 @@ extension PeerInfo {
 		/// the public key of the remote peer
 		internal let publicKey:PublicKey
 		/// the endpoint that the peer is known to be reachable at
-		private var ep:Endpoint? {
-			didSet {
-				if ep != nil {
-					ap = SocketAddress(ep!)
-				} else {
-					ap = nil
-				}
-			}
-		}
-		private var ap:SocketAddress?
+		private var ep:Endpoint?
 		internal var persistentKeepalive:TimeAmount?
 
 		// handshake initiation
@@ -38,6 +31,7 @@ extension PeerInfo {
 				oldValue?.1.cancel()
 			}
 		}
+		
 		// packets that need to be sent after a handshake is complete
 		private var postHandshakePackets = PendingPostHandshake()
 
@@ -51,7 +45,7 @@ extension PeerInfo {
 			context.eventLoop.assertInEventLoop()
 			#endif
 
-			var buildLogger = Logger(label:"\(String(describing:Self.self))")
+			var buildLogger = Logger(label:"\(String(describing:PeerInfo.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			buildLogger[metadataKey:"public-key_peer"] = "\(peerInfo.publicKey)"
 			log = buildLogger
@@ -65,128 +59,158 @@ extension PeerInfo {
 			wireguardHandler = um
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
 		}
-		
-		internal func close() {
+				
+		deinit {
 			handshakeInitiationTask = nil
-		}
-
-		internal struct SendValues {
-			internal var nSend:Counter
-			internal let tSend:Result.Bytes32
-			internal let session:Session
-		}
-
-		internal enum SendStrategy {
-			/// returned when there is a current session that has not crossed its timeout threshold
-			case sendImmediately(SendValues)
-			/// returned when there is no current session and a handshake initiation is actively taking place
-			case queueForInitiatingHandshake
-			/// returned when there is no current session but there is a next session awaiting a key rotation into the current one
-			case queueWhileAwaitingKeyRotation
-		}
-
-		internal func getSendStrategy(context:borrowing ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> SendStrategy {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			rekeyAttemptTimeNow = now
-			func guardCaught() -> SendStrategy {
-				switch rotation.next {
-					case .some(let nextSesh):
-						guard nextSesh.establishedDate + WireguardHandler.rejectAfterTime > now else {
-							// the next session has expired, we need to initiate a new handshake
-							try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
-							return .queueForInitiatingHandshake
-						}
-						return .queueWhileAwaitingKeyRotation
-					case .none:
-						// there is no current session or next session, so we need to initiate a handshake
-						try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
-						return .queueForInitiatingHandshake
-				}
-			}
-			guard let currentRotation = rotation.current else {
-				return guardCaught()
-			}
-			guard currentRotation.establishedDate + WireguardHandler.rejectAfterTime > now else {
-				return guardCaught()
-			}
-			return .sendImmediately(SendValues(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
-		}
-
-		internal func updateSendValues(context:borrowing ChannelHandlerContext, now:NIODeadline, _ sendValues:SendValues, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			guard var currentSession = rotation.current else {
-				fatalError("no active handshakes")
-			}
-			guard currentSession.geometry.m == sendValues.session.geometry.m else {
-				fatalError("updating nSend on a session that is not current")
-			}
-			switch currentSession.geometry {
-				case .selfInitiated(m:let m, mp:let mp):
-					// check for the passive rehandshake threshold
-					if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
-						try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
-					}
-				default:
-					break
-			}
-			currentSession.nVar.valueSend = sendValues.nSend
-			rotation.current = currentSession
-		}
-		
-		internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>?) {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			postHandshakePackets.queue(data:data, promise:promise)
-		}
-
-		/// called to retrieve the receive variables for a specific session.
-		internal borrowing func getRecvVars(geometry inputPositionExplicit:Rotating<Session>.Positioned, now:NIODeadline) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
-			let element = inputPositionExplicit.element
-			guard element.establishedDate + WireguardHandler.rejectAfterTime > now else {
-				log.debug("unable to use session because it has expired", metadata:["session_id":"\(element.geometry)"])
-				return nil
-			}
-			return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
-		}
-
-		/// called after bytes have been received. updates various counters and schedules any tasks as needed.
-		internal borrowing func nRecvUpdate(context:borrowing ChannelHandlerContext, now:NIODeadline, _ newValue:SlidingWindow<Counter>, geometry inputPositionExplicit:Rotating<Session>.Positioned, mStaticPrivateKey ourStaticPrivateKey:borrowing MemoryGuarded<PrivateKey>) {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-			switch inputPositionExplicit {
-				case .current(let element):
-					switch element.geometry {
-						case .selfInitiated(m:_, mp:_):
-							// passive rehandshake evaluation
-							if (element.establishedDate + (WireguardHandler.rejectAfterTime - WireguardHandler.keepaliveTimeout - WireguardHandler.rekeyTimeout)) <= now && handshakeInitiationTask == nil {
-								try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:ourStaticPrivateKey)
-							}
-						case .peerInitiated(m:_, mp:_):
-							// passive handshakes cannot be sent in the responder role
-							break;
-					}
-					rotation.current!.nVar.valueRecv = newValue
-				case .previous(_):
-					rotation.previous!.nVar.valueRecv = newValue
-				case .next(let element):
-					guard case .peerInitiated(m:_, mp:_) = element.geometry else {
-						fatalError("using \"next\" session slot with unexpected geometry type (self initiated). this is a critical internal error. \(#file):\(#line)")
-					}
-					rotation.next!.nVar.valueRecv = newValue
-					context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
-					applyRotation(context:context, now:now)
-			}
+			log.trace("instance deinitialized.")
 		}
 	}
 }
 
-// MARK: Send Initiation
+// MARK: Send
+extension PeerInfo.Live {
+	/// used to express the strategy for sending data to a peer. data can be sent to a peer in one of three ways, and this enum expresses which way should be used.
+	internal enum SendStrategy {
+		/// the values that should be used to send the data immediately
+		internal struct Values {
+			/// the n value to use for sending
+			internal var nSend:Counter
+			/// the t value to use for sending
+			internal let tSend:Result.Bytes32
+			/// the session data that should be used for sending
+			internal let session:Session
+		}
+		/// returned when there is a current session that has not crossed its timeout threshold.
+		case sendImmediately(Values)
+		/// returned when there is no current session and a handshake initiation is actively taking place.
+		case queueForInitiatingHandshake
+		/// returned when there is no current session but there is a next session awaiting a key rotation into the current one.
+		case queueWhileAwaitingKeyRotation
+	}
+
+	/// called when it is time to transmit data to the remote peer but the transit keys to use for this transmission are not yet known.
+	internal func getSendStrategy(context:borrowing ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> SendStrategy {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		rekeyAttemptTimeNow = now
+		func guardCaught() -> SendStrategy {
+			switch rotation.next {
+				case .some(let nextSesh):
+					guard nextSesh.establishedDate + WireguardHandler.rejectAfterTime > now else {
+						// the next session has expired, we need to initiate a new handshake
+						try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+						return .queueForInitiatingHandshake
+					}
+					return .queueWhileAwaitingKeyRotation
+				case .none:
+					// there is no current session or next session, so we need to initiate a handshake
+					try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+					return .queueForInitiatingHandshake
+			}
+		}
+		guard let currentRotation = rotation.current else {
+			return guardCaught()
+		}
+		guard currentRotation.establishedDate + WireguardHandler.rejectAfterTime > now else {
+			return guardCaught()
+		}
+		return .sendImmediately(.init(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
+	}
+
+	internal func updateSendValues(context:borrowing ChannelHandlerContext, now:NIODeadline, _ sendValues:SendStrategy.Values, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		guard var currentSession = rotation.current else {
+			fatalError("no active handshakes")
+		}
+		guard currentSession.geometry.m == sendValues.session.geometry.m else {
+			fatalError("updating nSend on a session that is not current")
+		}
+		switch currentSession.geometry {
+			case .selfInitiated(m:let m, mp:let mp):
+				// check for the passive rehandshake threshold
+				if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
+					try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
+				}
+			default:
+				break
+		}
+		currentSession.nVar.valueSend = sendValues.nSend
+		rotation.current = currentSession
+	}
+	
+	internal borrowing func queuePostHandshake(context:ChannelHandlerContext, data:ByteBuffer, promise:EventLoopPromise<Void>?) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		postHandshakePackets.queue(data:data, promise:promise)
+	}
+}
+
+// MARK: Receive
+extension PeerInfo.Live {
+	/// called to retrieve the receive variables for a specific session.
+	internal borrowing func getRecvVars(context:borrowing ChannelHandlerContext, geometry inputPositionExplicit:Rotating<Session>.Positioned, now:NIODeadline) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		let element = inputPositionExplicit.element
+		guard element.establishedDate + WireguardHandler.rejectAfterTime > now else {
+			log.debug("unable to use session because it has expired", metadata:["session_id":"\(element.geometry)"])
+			return nil
+		}
+		return (nRecv:element.nVar.valueRecv, tRecv:element.tVar.valueRecv)
+	}
+
+	/// called after bytes have been read from the inbound pipeline. updates various counters and schedules any tasks as needed.
+	internal borrowing func nRecvUpdate(context:borrowing ChannelHandlerContext, now:NIODeadline, _ newValue:SlidingWindow<Counter>, geometry inputPositionExplicit:Rotating<Session>.Positioned, mStaticPrivateKey ourStaticPrivateKey:borrowing MemoryGuarded<PrivateKey>) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		var logger = log
+		logger.trace("updating nRecv value for session", metadata:["session_id":"\(inputPositionExplicit.element.geometry)"])
+		switch inputPositionExplicit {
+			case .current(let element):
+				// switch to evaluate if the current session has crossed the passive rehandshake threshold
+				switch element.geometry {
+					case .selfInitiated(m:_, mp:_):
+						// passive rehandshake evaluation
+						if (element.establishedDate + (WireguardHandler.rejectAfterTime - WireguardHandler.keepaliveTimeout - WireguardHandler.rekeyTimeout)) <= now && handshakeInitiationTask == nil {
+							try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:ourStaticPrivateKey)
+						}
+					case .peerInitiated(m:_, mp:_):
+						// passive handshakes cannot be sent in the responder role
+						break;
+				}
+				rotation.current!.nVar.valueRecv = newValue
+			case .previous(_):
+				rotation.previous!.nVar.valueRecv = newValue
+			case .next(let element):
+				guard case .peerInitiated(m:_, mp:_) = element.geometry else {
+					fatalError("using \"next\" session slot with unexpected geometry type (self initiated). this is a critical internal error. \(#file):\(#line)")
+				}
+				rotation.next!.nVar.valueRecv = newValue
+				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
+				applyRotation(context:context, now:now)
+				if rotation.previous == nil {
+					var writeResult:Bool = false
+					while var nextPacket = postHandshakePackets.dequeue() {
+						logger.trace("writing post-handshake queued packet after applying key rotation.", metadata:["size":"\(nextPacket.data.readableBytes) bytes"])
+						if wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise) == true && writeResult == false {
+							writeResult = true
+						}
+					}
+					if writeResult != false {
+						wireguardHandler.flushAfterChannelReadComplete = true
+					}
+				}
+		}
+	}
+}
+
+// MARK: Initiation
 extension PeerInfo.Live {
 	/// thrown when a handshake initiation task is already running, not yet timed out, but another is attempted to be launched
 	internal struct HandshakeTaskAlreadyRunning:Swift.Error {}
@@ -225,21 +249,21 @@ extension PeerInfo.Live {
 		// use the value that came from the peer list
 		targetEndpoint = ep!
 		logger[metadataKey:"endpoint_remote"] = "\(targetEndpoint)"
-		logger.trace("using stored endpoint for handshake initiation")
+		logger.trace("using stored endpoint for handshake initiation with remote peer.")
 		guard (rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > now else {
 			// a rekey attempt was made recently, do not send another handshake initiation
-			logger.debug("skipping handshake initiation emission due to recent rekey attempt", metadata:["rekey_attempt_time":"\(String(describing:rekeyAttemptTimeNow))", "current_time":"\(now)"])
+			logger.debug("skipping handshake initiation emission due to recent rekey attempt.", metadata:["rekey_attempt_time":"\(String(describing:rekeyAttemptTimeNow))", "current_time":"\(now)"])
 			throw RekeyAttemptTooSoon()
 		}
 		let useInitialDelay = selfInitiatedKeys.handshakeRekeyDelay(context:context, now:now) ?? .seconds(0)
 		let usePeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
-		logger.trace("launching handshake initiation task to write outbound handshake message", metadata:["initial_delay":"\(useInitialDelay)", "index_initiator":"\(usePeerIndex)"])
+		logger.trace("launching handshake initiation task to write outbound handshake message.", metadata:["initial_delay":"\(useInitialDelay)", "index_initiator":"\(usePeerIndex)"])
 		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:useInitialDelay, delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = logger, upi = usePeerIndex] _ in
 			guard let self = self else { return }
 			let currentTime = NIODeadline.now()
 			guard (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
 				// rekey time has passed, we can no longer attempt to make handshake initiations
-				l.debug("skipping handshake initiation emission due to recent rekey attempt outside of the recurring task.")
+				l.debug("halting handshake initiation emission. rekey attempt time exceeded.", metadata:["rekey_attempt_time":"\(String(describing:self.rekeyAttemptTimeNow))", "current_time":"\(currentTime)"])
 				
 				// cancel the recurring task
 				self.handshakeInitiationTask = nil
@@ -248,6 +272,9 @@ extension PeerInfo.Live {
 			do {
 				try cc.accessContext { contextPtr in
 					try withUnsafePointer(to:pubKey) { pubKeyPtr in
+
+						l.trace("transmitting handshake initiation message to remote peer.", metadata:["public-key_remote":"\(pubKey)"])
+
 						// forge the authenticated message
 						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr, initiatorPeerIndex:upi)
 						let authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
@@ -264,12 +291,20 @@ extension PeerInfo.Live {
 						encBuffer.writeWithUnsafeMutableBytes(minimumWritableBytes:encodedLength) { (ptr:UnsafeMutableRawBufferPointer) -> Int in
 							return ptr.baseAddress!.distance(to:handshakeInitiationMessage.RAW_encode(dest:ptr.baseAddress!.assumingMemoryBound(to:UInt8.self)))
 						}
-						contextPtr.pointee.writeAndFlush(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer)), promise:nil)
+						contextPtr.pointee.writeAndFlush(wireguardHandler.wrapOutboundOut(AddressedEnvelope<ByteBuffer>(remoteAddress:SocketAddress(toEP), data:encBuffer))).whenComplete { [l = l] result in
+							switch result {
+								case .success():
+									l.trace("transmitted handshake initiation message.", metadata:["public-key_remote":"\(pubKey)"])
+								case .failure(let error):
+									l.error("error occurred while transmitting handshake initiation message: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
+							}
+						}
 					}
 				}
 			} catch let error {
 				// fire the error into the channel and cancel the handshake task
 				cc.accessContext { contextPtr in
+					l.error("error occurred during handshake initiation task: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
 					contextPtr.pointee.fireErrorCaught(error)
 				}
 				self.handshakeInitiationTask = nil
@@ -286,11 +321,14 @@ extension PeerInfo.Live {
 // MARK: Accessing Sessions
 extension PeerInfo.Live {
 	/// returns the session (and its rotational position) for the given peer index
-	internal borrowing func session(forPeerM:PeerIndex) -> Rotating<Session>.Positioned? {
+	/// - parameters
+	/// 	- peerM: the peer index m value to search for
+	/// - returns: the positioned session if found, otherwise nil
+	internal borrowing func session(forPeerM peerM:PeerIndex) -> Rotating<Session>.Positioned? {
 		// check the current position
 		switch rotation.current {
 			case .some(let session):
-				guard session.geometry.m != forPeerM else {
+				guard session.geometry.m != peerM else {
 					return .current(session)
 				}
 				fallthrough
@@ -298,7 +336,7 @@ extension PeerInfo.Live {
 				// current position does not match. check the previous position
 				switch rotation.previous {
 					case .some(let session):
-						guard session.geometry.m != forPeerM else {
+						guard session.geometry.m != peerM else {
 							return .previous(session)
 						}
 						fallthrough
@@ -306,7 +344,7 @@ extension PeerInfo.Live {
 						// previous position does not match. check the next position
 						switch rotation.next {
 							case .some(let session):
-								guard session.geometry.m != forPeerM else {
+								guard session.geometry.m != peerM else {
 									return .next(session)
 								}
 								fallthrough
@@ -333,7 +371,7 @@ extension PeerInfo.Live {
 		
 		// generate the transmit keys
 		let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
-		logger.info("transmit keys generated from peer initiated handshake")
+		logger.debug("transmit keys generated from peer initiated handshake")
 
 		// add the new index to the active indicies
 		let wgh = wireguardHandler
@@ -362,20 +400,22 @@ extension PeerInfo.Live {
 
 		// generate the transmit keys
 		let kdfResults = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:[] as [UInt8], count:0)
-		logger.info("transmit keys generated from self initiated handshake")
+		logger.debug("transmit keys generated from self initiated handshake")
 
 		// apply the rotation of the existing sessions with the new session
 		let rotationResults = rotation.rotate(replacingNext:Session(geometry:element, nVar:SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), establishedDate:now))
 		
 		// automatically update the wireguard handler as needed
-		let wgh = wireguardHandler
 		if let outgoingPrevious = rotationResults.previous {
-			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
+			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
 		}
 		if let outgoingNext = rotationResults.next {
-			wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
+			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
 		}
-		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
+		wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
+	
+		// cancel the scheduled handshake initiation task
+		handshakeInitiationTask = nil
 
 		// fire the handshake information to the channel
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))
@@ -383,11 +423,16 @@ extension PeerInfo.Live {
 		// flush any pending data
 		while var (pendingPacket) = postHandshakePackets.dequeue() {
 			logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(publicKey)"])
-			wgh.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise)
+			switch wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise) {
+				case true:
+					if wireguardHandler.flushAfterChannelReadComplete == false {
+						wireguardHandler.flushAfterChannelReadComplete = true
+					}
+					break
+				default:
+					break
+			}
 		}
-		
-		// cancel the scheduled handshake initiation task
-		handshakeInitiationTask = nil
 	}
 }
 

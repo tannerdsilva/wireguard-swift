@@ -61,7 +61,6 @@ internal struct Rotating<Element> {
 		return next
 	}
 	
-	
 	/// rotates the trio of stored instances. previous is assigned the current value. current is assigned the next value. next value is assigned nil.
 	/// - returns: the previous (outgoing) instance that was replaced with the current value.
 	internal mutating func rotate() -> Element? {

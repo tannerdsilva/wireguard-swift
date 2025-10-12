@@ -15,10 +15,11 @@ internal enum PacketTypeOutbound {
 	case handshakeInitiate(PublicKey, Endpoint?)
 }
 
-internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
+internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
+	
 	/// errors that may be fired by the PacketHandler
 	internal enum Error:Swift.Error {
-		/// specifies that the packet length does not match the expected length for the given packet type
+		/// specifies that the packet length does not match the expected length for the giveC, @unchecked Sendabn packet type
 		/// - parameter type: the type of packet that was expected
 		/// - parameter length: the length of the packet that was received
 		case invalidPacketLengthForType(type:UInt8, length:Int)
@@ -31,36 +32,74 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 	
 	/// the type of data that this handler will receive from upstream in the inbound pipeline. this is a datagram packet with an associated remote address.
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
+	private var packetsReadSinceLastReadComplete:Int = 0
+	private var bytesReadSinceLastReadComplete:Int = 0
 
 	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
-	private let log:Logger
-	private let datagramMTU:UInt16
 	
-	internal init(mtu:UInt16, logLevel:Logger.Level) {
+	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
+	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
+	
+	/*
+	private var outboundOutDriver:WriteOrHold<OutboundOut>
+	*/
+
+	/// logger instance for this handler
+	private let log:Logger
+
+	private let mtu:MTULimits
+
+	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
+	internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, logLevel:consuming Logger.Level) {
+		#if DEBUG
+		guard mtu.mtuInboundIn == mtu.mtuInboundOut && mtu.mtuOutboundOut == mtu.mtuOutboundIn else {
+			fatalError("fatal usage error - \(String(describing:Self.self)) - \(#file):\(#line)")
+		}
+		#endif
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
+		buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
 		buildLogger.logLevel = logLevel
 		log = buildLogger
-		datagramMTU = mtu
+		self.mtu = mtu
 	}
 
-	internal func handlerAdded(context:ChannelHandlerContext) {
-		log.debug("handler added to NIO pipeline.", metadata:["mtu":"\(datagramMTU)"])
+	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
+		log.debug("handler added to NIO pipeline.", metadata:["mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}
 	
-	internal func handlerRemoved(context:ChannelHandlerContext) {
+	internal func handlerRemoved(context:borrowing ChannelHandlerContext) {
 		log.debug("handler removed from NIO pipeline.")
 	}
 
-	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+	internal func userInboundEventTriggered(context:borrowing ChannelHandlerContext, event:Any) {
 		log.trace("user inbound event triggered. this handler is not user configurable in this way, so the passed event instance will be passed downstream...", metadata:["event_instance_type":"\(String(describing:type(of:event)))"])
 		context.fireUserInboundEventTriggered(event)
 	}
-	
-	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+
+	internal func channelReadComplete(context:borrowing ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		if packetsReadSinceLastReadComplete > 0 {
+			log.trace("read complete.", metadata:["packets_read":"\(packetsReadSinceLastReadComplete)", "bytes_read":"\(bytesReadSinceLastReadComplete)"])
+			packetsReadSinceLastReadComplete = 0
+			bytesReadSinceLastReadComplete = 0
+			context.fireChannelReadComplete()
+		} else {
+			log.trace("read complete called, but no reads were performed since the last read complete. not passing downstream.")
+		}
+	}
+
+	internal func channelRead(context:borrowing ChannelHandlerContext, data:NIOAny) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
 		var logger = log
 		var envelope = unwrapInboundIn(data)
+		packetsReadSinceLastReadComplete += 1
+		bytesReadSinceLastReadComplete += envelope.bytesOnWire
 		let endpoint:Endpoint
 		do {
 			endpoint = try Endpoint(envelope.remoteAddress)
@@ -70,13 +109,26 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 			return
 		}
 		logger[metadataKey:"remote_address"] = "\(endpoint)"
+		guard envelope.data.readableBytes > 0 else {
+			#if DEBUG
+			logger.trace("received udp packet of zero length. this packet will be ignored.")
+			#endif
+			return
+		}
 		let firstByte = envelope.data.withUnsafeReadableBytes { byteBuffer in
 			return byteBuffer[0]
 		}
 		logger[metadataKey:"packet_type"] = "\(firstByte)"
+		#if DEBUG
+		if envelope.data.readableBytes > mtu.mtuInboundIn {
+			logger.warning("mtu for InboundIn is exceeding the configured limit.", metadata:["latest_inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
+		}
+		#endif
 		// proceed based on the first byte of the buffer
+		let wireBytes:Int
 		switch firstByte {
 			case 0x1:
+				wireBytes = MemoryLayout<Message.Initiation.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					guard byteBuffer.count == MemoryLayout<Message.Initiation.Payload.Authenticated>.size else {
 						logger.error("invalid handshake initiation packet size: \(byteBuffer.count)", metadata:["expected_length":"\(MemoryLayout<Message.Initiation.Payload.Authenticated>.size)"])
@@ -88,6 +140,7 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.initiation(packet))))
 				}
 			case 0x2:
+				wireBytes = MemoryLayout<Message.Response.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					guard byteBuffer.count == MemoryLayout<Message.Response.Payload.Authenticated>.size else {
 						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)"])
@@ -99,14 +152,15 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.response(packet))))
 				}
 			case 0x3:
+				wireBytes = MemoryLayout<Message.Cookie.Payload>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					logger.debug("received cookie response packet. sending downstream in pipeline...")
 					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
 				}
 			case 0x4:
-				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Payload>.size + MemoryLayout<Tag>.size) else {
-					logger.error("datagram mtu exceeded", metadata:["mtu":"\(datagramMTU)", "packet_size":"\(envelope.data.readableBytes)"])
+				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size) else {
+					logger.error("datagram mtu exceeded", metadata:["mtu_user":"\(mtu)", "packet_size":"\(envelope.data.readableBytes)"])
 					context.fireErrorCaught(Error.mtuExceeded)
 					return
 				}
@@ -117,16 +171,36 @@ internal final class PacketHandler:ChannelInboundHandler, @unchecked Sendable {
 				}
 				let peerIndex = PeerIndex(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<PeerIndex>.size)!)
 				let counterValue = Counter(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<Counter>.size)!)
-				guard envelope.data.readableBytes >= MemoryLayout<Tag>.size else {
-					logger.error("datagram mtu exceeded", metadata:["mtu":"\(datagramMTU)", "packet_size":"\(envelope.data.readableBytes)"])
-					context.fireErrorCaught(Error.mtuExceeded)
-					return
-				}
-				logger.debug("received transit data packet of size \(envelope.data.readableBytes - MemoryLayout<Tag>.size), sending downstream in pipeline...")
+				let availableBytes = envelope.data.readableBytes - MemoryLayout<Tag>.size
+				wireBytes = availableBytes
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
+
 			default:
 				logger.error("unrecognized packet type received: \(firstByte)")
 				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
+				return
 		}
+	}
+	
+	private var packetsWrittenSinceLastFlush:Int = 0
+	private var bytesWrittenSinceLastFlush:Int = 0
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		let unwrappedData = unwrapOutboundIn(data)
+		packetsWrittenSinceLastFlush += 1
+		bytesWrittenSinceLastFlush += unwrappedData.bytesOnWire
+		context.write(wrapOutboundOut(unwrappedData), promise:promise)
+	}
+
+	internal func flush(context:ChannelHandlerContext) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		log.trace("flushing...", metadata:["packets_flushed":"\(packetsWrittenSinceLastFlush)", "bytes_flushed":"\(bytesWrittenSinceLastFlush)"])
+		packetsWrittenSinceLastFlush = 0
+		bytesWrittenSinceLastFlush = 0
+		context.flush()
 	}
 }
