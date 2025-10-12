@@ -46,6 +46,7 @@ internal final class DataHandoffHandler:Sendable, ChannelInboundHandler {
 		handoff.finish(throwing:error)
 		context.channel.close(promise:nil)
 	}
+	
 	/// the function that is called when data is read from the channel. this will hand off the data to the FIFO.
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
