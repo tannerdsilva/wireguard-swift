@@ -47,21 +47,20 @@ extension KCPSegment {
 		/// the logger that is used for logging within this struct
 		private let log:Logger
 
-		/// the maximum transmission unit that is configured for this handler
-		private let transmitMTU:UInt16
+		private let mtu:MTULimits
 
 		/// stores the pending promises that were encoded into the byte buffer for each public key
 		private var promiseStack:[PublicKey:[EventLoopPromise<Void>]] = [:]
 		/// stores the byte buffers that are being built for each public key
 		private var segmentStack:[PublicKey:ByteBuffer] = [:]
 
-		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, logLevel:consuming Logger.Level) {
-			self.transmitMTU = mtu
+		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:MTULimits, logLevel:consuming Logger.Level) {
+			self.mtu = mtu
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
 			log = buildLogger
-			buildLogger.trace("instance initialized.", metadata:["mtu_wire":"\(transmitMTU)", "mtu_user":"\(transmitMTU)"])
+			buildLogger.trace("instance initialized.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)"])
 		}
 
 		/// adds a segment to the stack for the given public key. if the segment would cause the mtu to be exceeded, the existing buffer is flushed first.
@@ -71,13 +70,19 @@ extension KCPSegment {
 			var didWrite = false
 			if var hasExistingBuffer = segmentStack[publicKey] {
 				// we have an existing buffer, see if we can append to it...
-				if hasExistingBuffer.readableBytes + Int(expectedEncodedLength) > transmitMTU {
+				if hasExistingBuffer.readableBytes + Int(expectedEncodedLength) > mtu.mtuOutboundOut {
 					// initialize a new promise that will be used to track the completion of the write
+					#if DEBUG
+					// validate mtu outboundout
+					guard hasExistingBuffer.readableBytes <= mtu.mtuOutboundOut else {
+						log.warning("outboundOut contains data that exceeds the configured mtu.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "size":"\(hasExistingBuffer.readableBytes)"])
+						return didWrite
+					}
+					#endif
 					let writePromise = context.channel.eventLoop.makePromise(of:Void.self)
 					for curElement in promiseStack[publicKey]! {
 						writePromise.futureResult.cascade(to:curElement)
 					}
-					// driver.holdOrWrite(context:context, handler:handler, PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:hasExistingBuffer), writePromise:writePromise)
 					context.write(handler.wrapOutboundOut(PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:hasExistingBuffer)), promise:writePromise)
 					hasExistingBuffer.clear(minimumCapacity:Int(expectedEncodedLength))
 					didWrite = true
@@ -106,7 +111,14 @@ extension KCPSegment {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
-			for (publicKey, buffer) in segmentStack {
+			processLoop: for (publicKey, buffer) in segmentStack {
+				#if DEBUG
+				// validate mtu outboundout
+				guard buffer.readableBytes <= mtu.mtuOutboundOut else {
+					log.warning("outboundOut contains data that exceeds the configured mtu.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "size":"\(buffer.readableBytes)"])
+					continue processLoop
+				}
+				#endif
 				context.write(handler.wrapOutboundOut(PeerAssociated<ByteBuffer>(publicKey:publicKey, associatedValue:buffer))).whenComplete({ [promises = promiseStack[publicKey]!] result in
 					switch result {
 						case .failure(let error):
@@ -144,7 +156,7 @@ extension KCPSegment {
 		/// the logger that is used for logging within this handler
 		private let log:Logger
 		/// the mtu for the data payload within a kcp segment
-		private let dataMTU:UInt16
+		private let mtu:MTULimits
 
 		/// a buffer that is used for encoding segments to avoid reallocating on every write
 		private var encodeBuffer:ByteBuffer! = nil
@@ -154,17 +166,14 @@ extension KCPSegment {
 		private var writtenStack:MTUStacking
 		private var outboundOutCount:Int = 0
 
-		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout UInt16, logLevel:Logger.Level) {
+		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:KCPSegment.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
 			log = buildLogger
-			dataMTU = mtu
-			writtenStack = MTUStacking(privateKey:privateKey, mtu: mtu, logLevel: logLevel)
-		}
-
-		deinit {
-			log.trace("instance deinitialized.")
+			mtu = MTULimits(bidirectional:mtu.mtuOutboundIn)
+			self.mtu = mtu
+			writtenStack = MTUStacking(privateKey:privateKey, mtu:mtu, logLevel: logLevel)
 		}
 	}
 }
@@ -172,13 +181,13 @@ extension KCPSegment {
 // MARK: Basic Events
 extension KCPSegment.Handler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
-		encodeBuffer = context.channel.allocator.buffer(capacity:Int(dataMTU))
-		log.debug("handler added to NIO pipeline.", metadata:["mtu_user":"\(dataMTU)", "mtu_wire":"\(dataMTU)"])
+		encodeBuffer = context.channel.allocator.buffer(capacity:Int(mtu.mtuOutboundOut))
+		log.debug("handler added to pipeline.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)", "mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)"])
 	}
 
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		encodeBuffer = nil
-		log.debug("handler removed from NIO pipeline.")
+		log.debug("handler removed from pipeline.")
 	}
 
 	internal func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
@@ -194,7 +203,6 @@ extension KCPSegment.Handler {
 	/// the standard swiftnio channel read function that is called when data is read from the previous handler in the pipeline.
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
-		logger.trace("channel read called.")
 		var encodedInbound = unwrapInboundIn(data)
 		var i = 0
 		while encodedInbound.associatedValue.readableBytes >= IKCP_OVERHEAD, let segment = KCPSegment(decode:&encodedInbound.buffer) {

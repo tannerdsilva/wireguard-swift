@@ -31,6 +31,7 @@ extension PeerInfo {
 				oldValue?.1.cancel()
 			}
 		}
+		
 		// packets that need to be sent after a handshake is complete
 		private var postHandshakePackets = PendingPostHandshake()
 

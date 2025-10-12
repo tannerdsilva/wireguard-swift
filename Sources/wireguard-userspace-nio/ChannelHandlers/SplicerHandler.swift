@@ -42,7 +42,6 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	internal func handlerAdded(context: ChannelHandlerContext) {
-		logger[metadataKey:"listening_socket"] = "\(context.channel.localAddress!)"
 		logger.trace("handler added to pipeline.")
 	}
 
@@ -71,7 +70,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 				return
 			}
 			
-			// Add to stored segments cause there are more coming!
+			// add to stored segments cause there are more coming!
 			storedLengths[key] = Int(value) - 1
 			storedPayload[key] = buf
 			return
@@ -97,14 +96,15 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 		context.fireChannelReadComplete()
 	}
 	
-	// Receiving data which needs to be spliced and sent
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var associatedData = unwrapOutboundIn(data)
 		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
-		// Data doesn't need to be spliced, add a header signifying 0 length
+		// determine if the data needs to be spliced into smaller segments
 		if (associatedData.associatedValue.readableBytes <= spliceByteLength) {
-			let footerBytes = [UInt8](repeating: 0, count: 4)
-			associatedData.associatedValue.writeBytes(footerBytes)
+			// there is no need to create multiple segments so we can add a zero at the end of the data.
+			_ = EncodedUInt32(RAW_native:0).RAW_access { footerBytesPtr in
+				associatedData.associatedValue.writeBytes(footerBytesPtr)
+			}
 			context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
 		} else {
 			let splices = [UInt8](associatedData.associatedValue.readableBytesView).split(intoChunksOf: spliceByteLength)

@@ -49,7 +49,16 @@ let package = Package(
 		),
 		.target(
 			name:"kcp-nio",
-			dependencies: []
+			dependencies: [
+				.product(name:"RAW", package:"rawdog"),
+				"encoded-essentials"
+			]
+		),
+		.target(
+			name:"encoded-essentials",
+			dependencies: [
+				.product(name:"RAW", package:"rawdog")
+			]
 		),
 		.target(
 			name: "wireguard-userspace-nio",

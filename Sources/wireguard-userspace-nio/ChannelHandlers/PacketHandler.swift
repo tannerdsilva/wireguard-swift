@@ -49,21 +49,24 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// logger instance for this handler
 	private let log:Logger
 
-	/// the mtu for datagram packets that will be sent to the network. this is used to ensure that packets sent by the user do not exceed the mtu of the underlying transport.
-	private let mtu:UInt16
+	private let mtu:MTULimits
 
 	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
-	internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout UInt16, logLevel:consuming Logger.Level) {
+	internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, logLevel:consuming Logger.Level) {
+		#if DEBUG
+		guard mtu.mtuInboundIn == mtu.mtuInboundOut && mtu.mtuOutboundOut == mtu.mtuOutboundIn else {
+			fatalError("fatal usage error - \(String(describing:Self.self)) - \(#file):\(#line)")
+		}
+		#endif
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:privateKey))"
 		buildLogger.logLevel = logLevel
 		log = buildLogger
 		self.mtu = mtu
-		// outboundOutDriver = WriteOrHold(logLevel:logLevel, limit:256)
 	}
 
 	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
-		log.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu)", "mtu_user":"\(mtu)"])
+		log.debug("handler added to NIO pipeline.", metadata:["mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}
 	
 	internal func handlerRemoved(context:borrowing ChannelHandlerContext) {
@@ -106,11 +109,21 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 			return
 		}
 		logger[metadataKey:"remote_address"] = "\(endpoint)"
+		guard envelope.data.readableBytes > 0 else {
+			#if DEBUG
+			logger.trace("received udp packet of zero length. this packet will be ignored.")
+			#endif
+			return
+		}
 		let firstByte = envelope.data.withUnsafeReadableBytes { byteBuffer in
 			return byteBuffer[0]
 		}
 		logger[metadataKey:"packet_type"] = "\(firstByte)"
-		
+		#if DEBUG
+		if envelope.data.readableBytes > mtu.mtuInboundIn {
+			logger.warning("mtu for InboundIn is exceeding the configured limit.", metadata:["latest_inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
+		}
+		#endif
 		// proceed based on the first byte of the buffer
 		let wireBytes:Int
 		switch firstByte {

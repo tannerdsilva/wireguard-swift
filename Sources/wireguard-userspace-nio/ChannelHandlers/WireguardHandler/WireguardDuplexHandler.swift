@@ -31,6 +31,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 
 	/// used to specify the wireguard overhead for mtu calculations.
 	internal static let wireguardDataOverhead = MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size
+	
+	internal static let wireguardMaximumPaddingBytesAdded = 15
+	
+	fileprivate static func maxPayloadPrePadded(forMTU mtu:Int) -> Int {
+		return (((mtu - Self.wireguardMaximumPaddingBytesAdded) / 16) * 16)
+	}
 
 	private enum State {
 		case initialized([PeerInfo])
@@ -72,7 +78,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// used to indicate that a flush should be performed after channelReadComplete is called. returns back to false after channelReadComplete is called.
 	internal var flushAfterChannelReadComplete:Bool = false
 
-	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout UInt16, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
+	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
 		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:AutomaticallyUpdated.ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
@@ -87,8 +93,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
 		operatingState = .initialized(initialPeers)
-		self.mtu = MTULimits(mtuInboundIn:Int(mtu), mtuOutboundOut:Int(mtu), mtuOutboundIn:Int(mtu) - Self.wireguardDataOverhead, mtuInboundOut:Int(mtu) - Self.wireguardDataOverhead)
-		mtu -= UInt16(Self.wireguardDataOverhead)
+		mtu = MTULimits(mtuInboundIn:mtu.mtuInboundIn, mtuOutboundOut:mtu.mtuOutboundOut, mtuOutboundIn:(Self.maxPayloadPrePadded(forMTU:mtu.mtuOutboundOut) - Self.wireguardDataOverhead), mtuInboundOut:(Self.maxPayloadPrePadded(forMTU:mtu.mtuInboundIn) - Self.wireguardDataOverhead))
+		self.mtu = mtu
 	}
 
 	internal func writeMessage(_ message:Message, to destinationEndpoint:Endpoint, context:ChannelHandlerContext, promise:EventLoopPromise<Void>?) -> Bool {
@@ -135,20 +141,20 @@ extension WireguardHandler {
 			default:
 				fatalError("this should never happen \(#file):\(#line)")
 		}
-		logger.debug("handler added to NIO pipeline.", metadata:["mtu_wire":"\(mtu.mtuOutboundOut)", "mtu_user":"\(mtu.mtuOutboundIn)"])
+		logger.debug("handler added to pipeline.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}
 	internal func handlerRemoved(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
 		#endif
 		let logger = log
-		logger.debug("handler removed from NIO pipeline.")
+		logger.debug("handler removed from pipeline.")
 		operatingState = .terminated
 		peerDeltaEngine.setPeers(context:context, [], handler:self)
 	}
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
 		#if DEBUG
-		context.eventLoop.assertInEventLoop() 
+		context.eventLoop.assertInEventLoop()
 		#endif
 		let logger = log
 		logger.trace("user inbound event triggered")
@@ -413,7 +419,7 @@ extension WireguardHandler {
 		#endif
 		let peerPayload = unwrapOutboundIn(data)
 		guard peerPayload.associatedValue.readableBytes <= mtu.mtuOutboundIn else {
-			log.error("attempted to write packet that exceeds the configured mtu of \(mtu) bytes", metadata:["size":"\(peerPayload.associatedValue.readableBytes)"])
+			log.warning("outboundIn contains data that exceeds the configured mtu length.", metadata:["size":"\(peerPayload.associatedValue.readableBytes)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:peerPayload.associatedValue.readableBytes + Self.wireguardDataOverhead, mtuLimitOutbound:Int(mtu.mtuOutboundOut)))
 			return
 		}

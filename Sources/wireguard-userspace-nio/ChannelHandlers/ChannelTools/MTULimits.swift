@@ -11,7 +11,9 @@ internal struct MTULimits:Sendable {
 	
 	/// creates a new MTULimits struct with the same MTU for all directions.
 	/// - parameter mtu: the MTU value to use for all directions.
-	internal init(bidirectional mtu:Int) {
+	internal init(
+		bidirectional mtu:Int
+	) {
 		self.mtuInboundIn = mtu
 		self.mtuOutboundOut = mtu
 		self.mtuOutboundIn = mtu
@@ -19,7 +21,12 @@ internal struct MTULimits:Sendable {
 	}
 
 	/// creates a new MTULimits struct with the specified MTU values.
-	internal init(mtuInboundIn:Int, mtuOutboundOut:Int, mtuOutboundIn:Int, mtuInboundOut:Int) {
+	internal init(
+		mtuInboundIn:Int,
+		mtuOutboundOut:Int,
+		mtuOutboundIn:Int,
+		mtuInboundOut:Int
+	) {
 		self.mtuInboundIn = mtuInboundIn
 		self.mtuOutboundOut = mtuOutboundOut
 		self.mtuOutboundIn = mtuOutboundIn
