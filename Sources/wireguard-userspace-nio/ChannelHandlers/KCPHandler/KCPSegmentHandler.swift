@@ -65,7 +65,7 @@ extension KCPSegment {
 
 		/// adds a segment to the stack for the given public key. if the segment would cause the mtu to be exceeded, the existing buffer is flushed first.
 		/// - returns: true if outbound data was written to the context, false otherwise.
-		@discardableResult fileprivate mutating func stack(context:ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler) -> Bool {
+		@discardableResult fileprivate mutating func stack(context:borrowing ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler) -> Bool {
 			let expectedEncodedLength = segment.header.dataLength + UInt16(IKCP_OVERHEAD)
 			var didWrite = false
 			if var hasExistingBuffer = segmentStack[publicKey] {
@@ -196,7 +196,7 @@ extension KCPSegment.Handler {
 	}
 }
 
-// MARK: Channel Read
+// MARK: Read
 extension KCPSegment.Handler {
 	/// the error that is thrown when a kcp segment fails to parse from an inbound byte buffer
 	internal struct ParseFailure:Sendable, Swift.Error {}
@@ -221,7 +221,7 @@ extension KCPSegment.Handler {
 	}
 }
 
-// MARK: Channel Write
+// MARK: Write
 extension KCPSegment.Handler {
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {

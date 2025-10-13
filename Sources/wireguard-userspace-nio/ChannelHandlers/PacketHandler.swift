@@ -5,16 +5,6 @@ import RAW_dh25519
 import RAW_chachapoly
 import wireguard_crypto_core
 
-internal enum PacketTypeInbound {
-	case encryptedTransit(PublicKey, PeerIndex, HandshakeGeometry<PeerIndex>, Message.Data.Payload)
-	case keyExchange(PublicKey, PeerIndex, Result.Bytes32, Bool, HandshakeGeometry<PeerIndex>)
-}
-
-internal enum PacketTypeOutbound {
-	case encryptedTransit(PublicKey, Message.Data.Payload)
-	case handshakeInitiate(PublicKey, Endpoint?)
-}
-
 internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	/// errors that may be fired by the PacketHandler
@@ -26,15 +16,12 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		/// thrown when a packet type is received on the listening socket but that packet type is not recognized.
 		/// - parameter type: the type of packet that was not recognized
 		case packetTypeUnrecognized(type:UInt8)
-		/// thrown when the packet mtu is too small to encompass the specified message
-		case mtuExceeded
 	}
 	
 	/// the type of data that this handler will receive from upstream in the inbound pipeline. this is a datagram packet with an associated remote address.
 	internal typealias InboundIn = AddressedEnvelope<ByteBuffer>
 	private var packetsReadSinceLastReadComplete:Int = 0
 	private var bytesReadSinceLastReadComplete:Int = 0
-
 	/// the type of object that this handler will pass to the next handler in the pipeline. this is a tuple containing the endpoint of the sender and the parsed message.
 	internal typealias InboundOut = (Endpoint, Message.NIO)
 
@@ -44,15 +31,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	private var packetsWrittenSinceLastFlush:Int = 0
 	private var bytesWrittenSinceLastFlush:Int = 0
 
-	/*
-	private var outboundOutDriver:WriteOrHold<OutboundOut>
-	*/
-
 	/// logger instance for this handler
 	private let log:Logger
-
+	/// the mtu limits for this handler
 	private let mtu:MTULimits
-
 	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
 	internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, logLevel:consuming Logger.Level) {
 		#if DEBUG
@@ -66,7 +48,10 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		log = buildLogger
 		self.mtu = mtu
 	}
+}
 
+// MARK: Events
+extension PacketHandler {
 	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
 		log.debug("handler added to pipeline.", metadata:["mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}
@@ -79,13 +64,16 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		log.trace("user inbound event triggered. this handler is not user configurable in this way, so the passed event instance will be passed downstream...", metadata:["event_instance_type":"\(String(describing:type(of:event)))"])
 		context.fireUserInboundEventTriggered(event)
 	}
+}
 
+// MARK: Read
+extension PacketHandler {
 	internal func channelReadComplete(context:borrowing ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		guard packetsReadSinceLastReadComplete > 0 else {
-			log.trace("read complete called, but no reads were performed since the last read complete signal.")
+			log.trace("read complete, but no reads were performed since the last read complete signal.")
 			return
 		}
 		log.trace("read complete.", metadata:["packets_read":"\(packetsReadSinceLastReadComplete)", "bytes_read":"\(bytesReadSinceLastReadComplete)"])
@@ -106,8 +94,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		do {
 			endpoint = try Endpoint(envelope.remoteAddress)
 		} catch let error {
-			logger.error("failed to parse remote address: '\(envelope.remoteAddress.description)'", metadata:["error":"\(error)"])
-			context.fireErrorCaught(error)
+			#if DEBUG
+			logger.error("failed to parse remote address.", metadata:["error":"\(error)"])
+			#endif
 			return
 		}
 		logger[metadataKey:"remote_address"] = "\(endpoint)"
@@ -120,10 +109,13 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		let firstByte = envelope.data.withUnsafeReadableBytes { byteBuffer in
 			return byteBuffer[0]
 		}
-		logger[metadataKey:"packet_type"] = "\(firstByte)"
+		logger[metadataKey:"wg_packet_type"] = "\(firstByte)"
 		#if DEBUG
-		if envelope.data.readableBytes > mtu.mtuInboundIn {
-			logger.warning("mtu for InboundIn is exceeding the configured limit.", metadata:["inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
+		guard envelope.data.readableBytes <= mtu.mtuInboundIn else {
+			#if DEBUG
+			logger.error("mtu for InboundIn is exceeding the configured limit.", metadata:["inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
+			#endif
+			return
 		}
 		#endif
 		// proceed based on the first byte of the buffer
@@ -133,11 +125,14 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				wireBytes = MemoryLayout<Message.Initiation.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					guard byteBuffer.count == MemoryLayout<Message.Initiation.Payload.Authenticated>.size else {
-						logger.error("invalid handshake initiation packet size: \(byteBuffer.count)", metadata:["expected_length":"\(MemoryLayout<Message.Initiation.Payload.Authenticated>.size)"])
-						context.fireErrorCaught(Error.invalidPacketLengthForType(type:0x1, length:byteBuffer.count))
+						#if DEBUG
+						logger.error("invalid handshake initiation packet.", metadata:["expected_length":"\(MemoryLayout<Message.Initiation.Payload.Authenticated>.size)", "actual_length":"\(byteBuffer.count)"])
+						#endif
 						return
 					}
-					logger.debug("received handshake initiation packet. sending downstream in pipeline...")
+					#if DEBUG
+					logger.trace("received handshake initiation packet.")
+					#endif
 					let packet = Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.initiation(packet))))
 				}
@@ -146,11 +141,14 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				wireBytes = MemoryLayout<Message.Response.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
 					guard byteBuffer.count == MemoryLayout<Message.Response.Payload.Authenticated>.size else {
-						logger.error("invalid handshake response packet size: \(byteBuffer.count)", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)"])
-						context.fireErrorCaught(Error.invalidPacketLengthForType(type:0x2, length:byteBuffer.count))
+						#if DEBUG
+						logger.error("invalid handshake response packet.", metadata:["expected_length": "\(MemoryLayout<Message.Response.Payload.Authenticated>.size)", "actual_length":"\(byteBuffer.count)"])
+						#endif
 						return
 					}
-					logger.debug("received handshake response packet. sending downstream in pipeline...")
+					#if DEBUG
+					logger.trace("received handshake response packet.")
+					#endif
 					let packet = Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Response.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.response(packet))))
 				}
@@ -158,20 +156,25 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 			case 0x3:
 				wireBytes = MemoryLayout<Message.Cookie.Payload>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
-					logger.debug("received cookie response packet. sending downstream in pipeline...")
+					#if DEBUG
+					logger.trace("received cookie response packet.")
+					#endif
 					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
 				}
 				break
 			case 0x4:
 				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size) else {
-					logger.error("datagram mtu exceeded", metadata:["mtu_user":"\(mtu)", "packet_size":"\(envelope.data.readableBytes)"])
-					context.fireErrorCaught(Error.mtuExceeded)
+					#if DEBUG
+					logger.error("datagram is too small.", metadata:["readable_bytes":"\(envelope.data.readableBytes)", "minimum_bytes":"\(MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size)"])
+					#endif
 					return
 				}
 				_ = envelope.data.readInteger(as:UInt8.self)!
 				guard envelope.data.readInteger(as:UInt8.self)! == 0, envelope.data.readInteger(as:UInt8.self)! == 0, envelope.data.readInteger(as:UInt8.self)! == 0 else {
+					#if DEBUG
 					logger.error("invalid packet format: reserved bytes not zeroed", metadata:["byte1":"\(envelope.data.readInteger(as:UInt8.self)!)", "byte2":"\(envelope.data.readInteger(as:UInt8.self)!)", "byte3":"\(envelope.data.readInteger(as:UInt8.self)!)"])
+					#endif
 					return
 				}
 				let peerIndex = PeerIndex(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<PeerIndex>.size)!)
@@ -180,19 +183,30 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
 				break
 			default:
+				#if DEBUG
 				logger.error("unrecognized packet type received: \(firstByte)")
-				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
+				#endif
 				return
 		}
 		packetsReadSinceLastReadComplete += 1
 		bytesReadSinceLastReadComplete += wireBytes
 	}
-	
+}
+
+// MARK: Write
+extension PacketHandler {
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		let unwrappedData = unwrapOutboundIn(data)
+		guard unwrappedData.data.readableBytes <= mtu.mtuOutboundOut else {
+			#if DEBUG
+			log.error("mtu for OutboundOut is exceeding the configured limit.", metadata:["outbound_size":"\(unwrappedData.data.readableBytes)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)"])
+			#endif
+			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:unwrappedData.data.readableBytes, mtuLimitOutbound:mtu.mtuOutboundOut))
+			return
+		}
 		packetsWrittenSinceLastFlush += 1
 		bytesWrittenSinceLastFlush += unwrappedData.bytesOnWire
 		context.write(wrapOutboundOut(unwrappedData), promise:promise)
@@ -207,7 +221,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 			bytesWrittenSinceLastFlush = 0
 		}
 		guard packetsWrittenSinceLastFlush > 0 else {
+			#if DEBUG
 			log.trace("flush called, but no writes were performed since the last flush. not flushing.")
+			#endif
 			return
 		}
 		log.trace("flushing...", metadata:["packets_flushed":"\(packetsWrittenSinceLastFlush)", "bytes_flushed":"\(bytesWrittenSinceLastFlush)"])
