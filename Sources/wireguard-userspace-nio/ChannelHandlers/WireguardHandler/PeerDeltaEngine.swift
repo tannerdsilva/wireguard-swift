@@ -8,11 +8,11 @@ import bedrock
 
 extension WireguardHandler {
 	/// used to store and index peers against their corresponding public keys. also enables easy handler functions to react to peer additions and removals.
-	internal struct PeerDeltaEngine {
+	internal struct PeerDeltaEngine:Sendable {
 		/// the type of handler that is used for peer additions
-		internal typealias PeerAdditionHandler = (PublicKey) -> Void
+		internal typealias PeerAdditionHandler = @Sendable (PublicKey) -> Void
 		/// the type of handler that is used for peer removals
-		internal typealias PeerRemovalHandler = (PublicKey, PeerInfo.Live) -> Void
+		internal typealias PeerRemovalHandler = @Sendable (PublicKey, PeerInfo.Live) -> Void
 
 		/// the logger that will be used to produce output for the work completed by this engine
 		private let log:Logger
@@ -52,7 +52,7 @@ extension WireguardHandler {
 			removalHandler = rhIn
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:.debug)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:logLevel)
 			}
 			peers = buildPeers
 		}
@@ -64,7 +64,7 @@ extension WireguardHandler {
 			#endif
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:.debug)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:log.logLevel)
 			}
 			peers = buildPeers
 		}

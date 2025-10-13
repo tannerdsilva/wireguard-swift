@@ -38,8 +38,11 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// counts the number of read operations that have been passed through this handler. used to ensure readComplete operations are only passed downstream when there have been reads.
 	internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, logLevel:consuming Logger.Level) {
 		#if DEBUG
-		guard mtu.mtuInboundIn == mtu.mtuInboundOut && mtu.mtuOutboundOut == mtu.mtuOutboundIn else {
-			fatalError("fatal usage error - \(String(describing:Self.self)) - \(#file):\(#line)")
+		guard mtu.mtuInboundIn == mtu.mtuInboundOut else {
+			fatalError("fatal usage error - the inbound in/out values must be equal - \(String(describing:Self.self)) - \(#file):\(#line)")
+		}
+		guard mtu.mtuOutboundOut == mtu.mtuOutboundIn else {
+			fatalError("fatal usage error - the outbound in/out values must be equal - \(String(describing:Self.self)) - \(#file):\(#line)")
 		}
 		#endif
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -212,7 +215,7 @@ extension PacketHandler {
 		context.write(wrapOutboundOut(unwrappedData), promise:promise)
 	}
 
-	internal func flush(context:ChannelHandlerContext) {
+	internal borrowing func flush(context:borrowing ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
