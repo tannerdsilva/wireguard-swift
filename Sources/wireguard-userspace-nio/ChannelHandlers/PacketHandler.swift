@@ -41,7 +41,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	
 	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
-	
+	private var packetsWrittenSinceLastFlush:Int = 0
+	private var bytesWrittenSinceLastFlush:Int = 0
+
 	/*
 	private var outboundOutDriver:WriteOrHold<OutboundOut>
 	*/
@@ -66,11 +68,11 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 	}
 
 	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
-		log.debug("handler added to NIO pipeline.", metadata:["mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
+		log.debug("handler added to pipeline.", metadata:["mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}
 	
 	internal func handlerRemoved(context:borrowing ChannelHandlerContext) {
-		log.debug("handler removed from NIO pipeline.")
+		log.debug("handler removed from pipeline.")
 	}
 
 	internal func userInboundEventTriggered(context:borrowing ChannelHandlerContext, event:Any) {
@@ -82,14 +84,14 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		if packetsReadSinceLastReadComplete > 0 {
-			log.trace("read complete.", metadata:["packets_read":"\(packetsReadSinceLastReadComplete)", "bytes_read":"\(bytesReadSinceLastReadComplete)"])
-			packetsReadSinceLastReadComplete = 0
-			bytesReadSinceLastReadComplete = 0
-			context.fireChannelReadComplete()
-		} else {
-			log.trace("read complete called, but no reads were performed since the last read complete. not passing downstream.")
+		guard packetsReadSinceLastReadComplete > 0 else {
+			log.trace("read complete called, but no reads were performed since the last read complete signal.")
+			return
 		}
+		log.trace("read complete.", metadata:["packets_read":"\(packetsReadSinceLastReadComplete)", "bytes_read":"\(bytesReadSinceLastReadComplete)"])
+		packetsReadSinceLastReadComplete = 0
+		bytesReadSinceLastReadComplete = 0
+		context.fireChannelReadComplete()
 	}
 
 	internal func channelRead(context:borrowing ChannelHandlerContext, data:NIOAny) {
@@ -121,7 +123,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		logger[metadataKey:"packet_type"] = "\(firstByte)"
 		#if DEBUG
 		if envelope.data.readableBytes > mtu.mtuInboundIn {
-			logger.warning("mtu for InboundIn is exceeding the configured limit.", metadata:["latest_inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
+			logger.warning("mtu for InboundIn is exceeding the configured limit.", metadata:["inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
 		}
 		#endif
 		// proceed based on the first byte of the buffer
@@ -139,6 +141,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					let packet = Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.initiation(packet))))
 				}
+				break
 			case 0x2:
 				wireBytes = MemoryLayout<Message.Response.Payload.Authenticated>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
@@ -151,6 +154,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					let packet = Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Response.Payload.Authenticated>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.response(packet))))
 				}
+				break
 			case 0x3:
 				wireBytes = MemoryLayout<Message.Cookie.Payload>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
@@ -158,6 +162,7 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
 				}
+				break
 			case 0x4:
 				guard envelope.data.readableBytes >= (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size) else {
 					logger.error("datagram mtu exceeded", metadata:["mtu_user":"\(mtu)", "packet_size":"\(envelope.data.readableBytes)"])
@@ -171,19 +176,18 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 				}
 				let peerIndex = PeerIndex(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<PeerIndex>.size)!)
 				let counterValue = Counter(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<Counter>.size)!)
-				let availableBytes = envelope.data.readableBytes - MemoryLayout<Tag>.size
-				wireBytes = availableBytes
+				wireBytes = envelope.data.readableBytes
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
-
+				break
 			default:
 				logger.error("unrecognized packet type received: \(firstByte)")
 				context.fireErrorCaught(Error.packetTypeUnrecognized(type:firstByte))
 				return
 		}
+		packetsReadSinceLastReadComplete += 1
+		bytesReadSinceLastReadComplete += wireBytes
 	}
 	
-	private var packetsWrittenSinceLastFlush:Int = 0
-	private var bytesWrittenSinceLastFlush:Int = 0
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -198,9 +202,15 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
+		defer {
+			packetsWrittenSinceLastFlush = 0
+			bytesWrittenSinceLastFlush = 0
+		}
+		guard packetsWrittenSinceLastFlush > 0 else {
+			log.trace("flush called, but no writes were performed since the last flush. not flushing.")
+			return
+		}
 		log.trace("flushing...", metadata:["packets_flushed":"\(packetsWrittenSinceLastFlush)", "bytes_flushed":"\(bytesWrittenSinceLastFlush)"])
-		packetsWrittenSinceLastFlush = 0
-		bytesWrittenSinceLastFlush = 0
 		context.flush()
 	}
 }

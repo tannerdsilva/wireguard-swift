@@ -108,6 +108,7 @@ internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
 			context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
 		} else {
 			let splices = [UInt8](associatedData.associatedValue.readableBytesView).split(intoChunksOf: spliceByteLength)
+			// let spliceCount = 
 			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
 			for i in 0..<splices.count {
 				var segment = Array(splices[i])
