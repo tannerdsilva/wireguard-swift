@@ -14,12 +14,11 @@ extension PeerInfo {
 		private let log:Logger
 		private let wireguardHandler:WireguardHandler
 
-		// standard configuration stuff
 		/// the public key of the remote peer
 		internal let publicKey:PublicKey
+		
 		/// the endpoint that the peer is known to be reachable at
 		private var ep:Endpoint?
-		internal var persistentKeepalive:TimeAmount?
 
 		// handshake initiation
 		private var selfInitiatedKeys:CurrentSelfInitiatedInfo
@@ -52,7 +51,6 @@ extension PeerInfo {
 
 			publicKey = peerInfo.publicKey
 			ep = peerInfo.endpoint
-			persistentKeepalive = peerInfo.internalKeepAlive
 			rotation = Rotating<Session>()
 
 			let um = handler
@@ -70,9 +68,9 @@ extension PeerInfo {
 // MARK: Send
 extension PeerInfo.Live {
 	/// used to express the strategy for sending data to a peer. data can be sent to a peer in one of three ways, and this enum expresses which way should be used.
-	internal enum SendStrategy {
+	internal enum SendStrategy:Sendable {
 		/// the values that should be used to send the data immediately
-		internal struct Values {
+		internal struct Values:Sendable {
 			/// the n value to use for sending
 			internal var nSend:Counter
 			/// the t value to use for sending
@@ -89,7 +87,7 @@ extension PeerInfo.Live {
 	}
 
 	/// called when it is time to transmit data to the remote peer but the transit keys to use for this transmission are not yet known.
-	internal func getSendStrategy(context:borrowing ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> SendStrategy {
+	internal borrowing func getSendStrategy(context:borrowing ChannelHandlerContext, now:NIODeadline, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) -> SendStrategy {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -118,7 +116,7 @@ extension PeerInfo.Live {
 		return .sendImmediately(.init(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
 	}
 
-	internal func updateSendValues(context:borrowing ChannelHandlerContext, now:NIODeadline, _ sendValues:SendStrategy.Values, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
+	internal borrowing func updateSendValues(context:borrowing ChannelHandlerContext, now:NIODeadline, _ sendValues:SendStrategy.Values, initiationValues:(mStaticPrivateKey:MemoryGuarded<PrivateKey>, endpointOverride:Endpoint?)) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -151,8 +149,7 @@ extension PeerInfo.Live {
 
 // MARK: Receive
 extension PeerInfo.Live {
-	/// called to retrieve the receive variables for a specific session.
-	internal borrowing func getRecvVars(context:borrowing ChannelHandlerContext, geometry inputPositionExplicit:Rotating<Session>.Positioned, now:NIODeadline) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
+	internal borrowing func getRecvVars(context:borrowing ChannelHandlerContext, geometry inputPositionExplicit:consuming Rotating<Session>.Positioned, now:NIODeadline) -> (nRecv:SlidingWindow<Counter>, tRecv:Result.Bytes32)? {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -165,12 +162,11 @@ extension PeerInfo.Live {
 	}
 
 	/// called after bytes have been read from the inbound pipeline. updates various counters and schedules any tasks as needed.
-	internal borrowing func nRecvUpdate(context:borrowing ChannelHandlerContext, now:NIODeadline, _ newValue:SlidingWindow<Counter>, geometry inputPositionExplicit:Rotating<Session>.Positioned, mStaticPrivateKey ourStaticPrivateKey:borrowing MemoryGuarded<PrivateKey>) {
+	internal borrowing func nRecvUpdate(context:borrowing ChannelHandlerContext, now:NIODeadline, _ newValue:SlidingWindow<Counter>, geometry inputPositionExplicit:consuming Rotating<Session>.Positioned, mStaticPrivateKey ourStaticPrivateKey:borrowing MemoryGuarded<PrivateKey>) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var logger = log
-		logger.trace("updating nRecv value for session", metadata:["session_id":"\(inputPositionExplicit.element.geometry)"])
 		switch inputPositionExplicit {
 			case .current(let element):
 				// switch to evaluate if the current session has crossed the passive rehandshake threshold
@@ -324,7 +320,7 @@ extension PeerInfo.Live {
 	/// - parameters
 	/// 	- peerM: the peer index m value to search for
 	/// - returns: the positioned session if found, otherwise nil
-	internal borrowing func session(forPeerM peerM:PeerIndex) -> Rotating<Session>.Positioned? {
+	internal borrowing func session(forPeerM peerM:borrowing PeerIndex) -> Rotating<Session>.Positioned? {
 		// check the current position
 		switch rotation.current {
 			case .some(let session):
@@ -360,7 +356,7 @@ extension PeerInfo.Live {
 // MARK: Handshake Apply
 extension PeerInfo.Live {
 	/// called when a peer initiated handshake is received and a response is going to be sent out. the provided c value pointer is used to derive the handshake keys.
-	internal func applyPeerInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
+	internal borrowing func applyPeerInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
 		var logger = log
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -389,7 +385,7 @@ extension PeerInfo.Live {
 	}
 
 	/// called when a handshake response is received for a self initiated handshake.
-	internal func applySelfInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
+	internal borrowing func applySelfInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
 		var logger = log
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()

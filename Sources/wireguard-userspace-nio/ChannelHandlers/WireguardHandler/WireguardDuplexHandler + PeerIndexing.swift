@@ -10,7 +10,7 @@ import bedrock
 extension WireguardHandler.AutomaticallyUpdated {
 
 	/// used to track the association of Im (peer index m) and the public keys they associate with
-	internal struct MPeerIndex {
+	internal struct MPeerIndex:Sendable {
 		/// the logger that will be used to produce output for the work completed by this structure
 		private let log:Logger
 		/// the dictionary that maps a given m peer index with the corresponding public key of the remote peer
@@ -19,8 +19,8 @@ extension WireguardHandler.AutomaticallyUpdated {
 		private var publicKeyPeerM:[PublicKey:Set<PeerIndex>] = [:]
 
 		/// initialize a new mpeer index structure.
-		internal init(logLevel:Logger.Level) {
-			var logger = Logger(label: "\(String(describing:Self.self))")
+		internal init(logLevel:consuming Logger.Level) {
+			var logger = Logger(label:"\(String(describing:Self.self))")
 			logger.logLevel = logLevel
 			log = logger
 		}
@@ -40,7 +40,9 @@ extension WireguardHandler.AutomaticallyUpdated {
 			} else {
 				publicKeyPeerM[publicKey] = [index]
 			}
+			#if DEBUG
 			log.trace("added peer index m association.", metadata:["public-key_remote":"\(publicKey)", "peer-index-m":"\(index)"])
+			#endif
 		}
 
 		/// remove the association of a peer index m with a public key, if it exists. if the peer index m does not exist, this is a no-op.
@@ -60,11 +62,13 @@ extension WireguardHandler.AutomaticallyUpdated {
 				fatalError("internal data consistency error. this is a critical internal error that should never occur in real code. \(#file):\(#line)")
 			}
 			_ = publicKeyPeerM.updateValue(hasExistingPISet, forKey:hasExistingPublicKey)
+			#if DEBUG
 			log.trace("removed peer index m association.", metadata:["public-key_remote":"\(hasExistingPublicKey)", "peer-index-m":"\(index)"])
+			#endif
 		}
 
 		/// seek for the public key that is associated with a given peer index m, if it exists.
-		internal borrowing func seek(indexM index:PeerIndex) -> PublicKey? {
+		internal borrowing func seek(indexM index:borrowing PeerIndex) -> PublicKey? {
 			return peerMPublicKey[index]
 		}
 	}

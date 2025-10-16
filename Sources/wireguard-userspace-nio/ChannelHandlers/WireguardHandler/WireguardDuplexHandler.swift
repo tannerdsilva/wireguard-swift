@@ -112,7 +112,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		guard (asAddressedEnvelope.data.readableBytes) <= mtu.mtuOutboundIn else {
 			log.error("attempted to write packet that exceeds the configured mtu.", metadata:["attempted_size":"\(asAddressedEnvelope.data.readableBytes + (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size))", "mtu_limit":"\(mtu.mtuOutboundOut)"])
 			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize: asAddressedEnvelope.data.readableBytes + (MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size), mtuLimitOutbound: Int(mtu.mtuOutboundOut)))
-			fatalError("attempted to write packet that exceeds the configured mtu. \(#file):\(#line)")
+
+			return false
 		}
 		#endif
 		context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)
@@ -161,7 +162,7 @@ extension WireguardHandler {
 	}
 }
 
-// swift nio read handler function
+// MARK: Read
 extension WireguardHandler {
 	internal func channelReadComplete(context:ChannelHandlerContext) {
 		defer {
@@ -174,6 +175,8 @@ extension WireguardHandler {
 		if flushAfterChannelReadComplete == true {
 			log.trace("flushing after channel read complete.")
 			context.flush()
+		} else {
+			log.trace("read complete.")
 		}
 	}
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
@@ -185,7 +188,9 @@ extension WireguardHandler {
 		// handles handshake packets, else passes them down
 		do {
 			let (endpoint, payload) = unwrapInboundIn(data)
+			#if DEBUG
 			logger[metadataKey:"endpoint_remote"] = "\(endpoint)"
+			#endif
 			switch payload {
 				case .initiation(let payload):
 					/*
@@ -199,7 +204,9 @@ extension WireguardHandler {
 						do {
 							try payload.validateUnderLoad(responderStaticPrivateKey:privateKey, R:secretCookieR, endpoint:endpoint)
 						} catch Message.Initiation.Payload.Authenticated.Error.mac1Invalid {
+							#if DEBUG
 							logger.error("received invalid handshake initiation packet. ignoring.")
+							#endif
 							return
 						} catch {
 							// create and send the cookie
@@ -217,7 +224,9 @@ extension WireguardHandler {
 					let responderPeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
 					var (c, h, initiatorStaticPublicKey, _) = try payload.validate(responderStaticPrivateKey: privateKey)
 					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:initiatorStaticPublicKey) else {
-						logger.notice("interface not configured to operate with remote peer", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
+						#if DEBUG
+						logger.notice("interface not configured to operate with remote peer.", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
+						#endif
 						return
 					}
 					
@@ -225,7 +234,7 @@ extension WireguardHandler {
 					livePeerInfo.updateEndpoint(endpoint)
 					try livePeerInfo.applyPeerInitiated(context:context, now:now, geometry, cPtr:&c, count:MemoryLayout<Result.Bytes32>.size)
 					let sharedKey = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
-					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey: &initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
+					let response = try Message.Response.Payload.forge(c:c, h:h, initiatorPeerIndex:payload.payload.initiatorPeerIndex, initiatorStaticPublicKey:&initiatorStaticPublicKey, initiatorEphemeralPublicKey:payload.payload.ephemeral, preSharedKey:sharedKey, responderPeerIndex:responderPeerIndex)
 					let authResponse = try response.payload.finalize(initiatorStaticPublicKey:&initiatorStaticPublicKey)
 					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					switch writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil) {
@@ -354,7 +363,7 @@ extension WireguardHandler {
 					}
 
 					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
-					context.fireChannelRead(wrapInboundOut(PeerPayload(publicKey: identifiedPublicKey, buffer: encodeBuffer)))
+					context.fireChannelRead(wrapInboundOut(PeerAssociated<ByteBuffer>(publicKey:identifiedPublicKey, buffer:encodeBuffer)))
 			}
 		} catch let error {
 			logger.error("error processing packet: \(error)")
@@ -363,10 +372,10 @@ extension WireguardHandler {
 	}
 }
 
-// swift nio write handler function
+// MARK: Write
 extension WireguardHandler {
 	/// applies an immediate encryption and writing of the given payload to the given public key.
-	internal func writeBytes(context:ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) -> Bool {
+	internal func writeBytes(context:borrowing ChannelHandlerContext, publicKey:PublicKey, payload:inout ByteBuffer, promise:EventLoopPromise<Void>?) -> Bool {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif

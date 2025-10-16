@@ -6,6 +6,8 @@ internal typealias ChannelErrors = ChannelError
 internal enum ChannelError:Sendable {
 	/// thrown when attempting to send a message that exceeds the configured mtu for that step in the pipeline
 	case outboundMessageMTUExceeded(OutboundMessageMTUExceeded)
+	/// thrown when receiving a message that exceeds the configured mtu for that step in the pipeline
+	case inboundMessageMTUExceeded(InboundMessageMTUExceeded)
 }
 
 

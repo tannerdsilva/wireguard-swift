@@ -110,7 +110,7 @@ internal final class KCPLivePeer {
 				controlBlocks[i-1].isActiveReceiver = true
 				controlBlocks[i-1].writeAllInboundOut(handler: handler, context: context)
 				logger.debug("Rotating control block", metadata: ["newActiveConvID": "\(controlBlocks[i-1].conv)"])
-				// kill the 
+				// kill the
 				controlBlocks.remove(at: i)
 				return
 			}

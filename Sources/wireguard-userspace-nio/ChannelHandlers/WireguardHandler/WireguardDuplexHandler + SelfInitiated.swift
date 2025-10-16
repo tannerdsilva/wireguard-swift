@@ -9,9 +9,10 @@ import bedrock
 
 extension WireguardHandler.AutomaticallyUpdated {
 	/// used to help match inbound handshake initiation responses with their corresponding peers. 
-	internal struct ActivelyInitiatingIndex {
+	internal struct ActivelyInitiatingIndex:Sendable {
 		private var publicKeyInitiationIndex:[PublicKey:PeerIndex] = [:]
 		private var initiationIndexPublicKey:[PeerIndex:PublicKey] = [:]
+		/// called when a new handshake initiation is sent to a peer.
 		fileprivate mutating func setActivelyInitiating(context:borrowing ChannelHandlerContext, publicKey:PublicKey, initiatorPeerIndex peerIndex:PeerIndex) -> PeerIndex? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -29,13 +30,15 @@ extension WireguardHandler.AutomaticallyUpdated {
 			return outgoingPeerIndex
 		}
 
-		internal borrowing func match(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
+		/// used to match an inbound handshake initiation response with the public key of the peer that sent it, if one exists.
+		internal borrowing func match(context:borrowing ChannelHandlerContext, peerIndex:borrowing PeerIndex) -> PublicKey? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
 			return initiationIndexPublicKey[peerIndex]
 		}
 
+		/// remove the association of a peer index m with a public key, if it exists. if the peer index m does not exist, this is a no-op.
 		fileprivate mutating func removeIfExists(context:borrowing ChannelHandlerContext, peerIndex:PeerIndex) -> PublicKey? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -51,6 +54,7 @@ extension WireguardHandler.AutomaticallyUpdated {
 			return publicKey
 		}
 
+		/// remove the association of a public key with a peer index m, if it exists. if the public key does not exist, this is a no-op.
 		fileprivate mutating func removeIfExists(context:borrowing ChannelHandlerContext, publicKey:PublicKey) -> PeerIndex? {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -70,7 +74,7 @@ extension WireguardHandler.AutomaticallyUpdated {
 
 extension PeerInfo.Live {
 	/// used to store the data that should be written to the peer after the completion of a handshake.
-	internal struct PendingPostHandshake {
+	internal struct PendingPostHandshake:Sendable {
 		private var pendingWriteData:[(data:ByteBuffer, promise:EventLoopPromise<Void>?)] = []
 		/// insert data into the write queue with a corresponding write promise.
 		/// - parameters:
@@ -93,7 +97,7 @@ extension PeerInfo.Live {
 	}
 
 	/// primary mechanism for storing chaining data for initiations sent outbound.
-	internal struct CurrentSelfInitiatedInfo {
+	internal struct CurrentSelfInitiatedInfo:Sendable {
 		private let responderStaticPublicKey:PublicKey
 
 		/// the wireguard channel handler that is handling the interaction with the channel.

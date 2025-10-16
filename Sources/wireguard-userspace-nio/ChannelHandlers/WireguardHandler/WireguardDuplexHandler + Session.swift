@@ -9,7 +9,7 @@ import bedrock
 
 extension PeerInfo.Live {
 	/// represents a wireguard tunnel connection with a unique set of transit keys.
-	internal struct Session {
+	internal struct Session:Sendable {
 		/// the handshake geometry that was used to initiate the session
 		internal let geometry:HandshakeGeometry<PeerIndex>
 		/// the n variable that is used for the session's send/receive counters and sliding windows.

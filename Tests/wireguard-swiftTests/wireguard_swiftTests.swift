@@ -142,7 +142,7 @@ extension WireguardSwiftTests {
 			(alicePublicKey, alicePrivateKey) = (PublicKey(privateKey:Self.aliceStaticPrivateKey), Self.aliceStaticPrivateKey)
 			(bobPublicKey, bobPrivateKey) = (PublicKey(privateKey:Self.bobStaticPrivateKey), Self.bobStaticPrivateKey)
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = .debug
+			buildLogger.logLevel = .info
 			cliLogger = buildLogger
 		}
 		
@@ -409,7 +409,7 @@ extension WireguardSwiftTests {
 		}
 				
 		@Test func sendMultipleLargeMessages() async throws {
-			let payloadSize: Int = 20_000_000
+			let payloadSize: Int = 200000000
 			
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			for i in 0..<payloadSize {
@@ -422,10 +422,10 @@ extension WireguardSwiftTests {
 			
 			_ = try await withThrowingTaskGroup(of:Void.self, returning:Void.self) { foo in
 				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30))]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1470, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30))]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1470, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -445,7 +445,7 @@ extension WireguardSwiftTests {
 				
 				cliLogger.info("alice writing second large payload...")
 				try await aliceInterface.write(publicKey: bobPublicKey, data: payload2)
-				
+				200000000
 				cliLogger.info("Channel initialized. Reading data...")
 				var count = 0
 				for try await (key, incomingData) in bobInterface {
