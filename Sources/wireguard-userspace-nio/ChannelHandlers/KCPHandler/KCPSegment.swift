@@ -121,6 +121,8 @@ extension KCPSegment {
 		case probeRequest = 83
 		/// kcp command to signify a window size response
 		case probeResponse = 84
+		/// kcp command to terminate itself
+		case probeKill = 85
 	}
 }
 
@@ -173,6 +175,8 @@ extension KCPSegment.Command:CustomDebugStringConvertible {
 					return "WASK"
 				case .probeResponse:
 					return "WINS"
+				case .probeKill:
+					return "KILL"
 			}
 		}
 	}

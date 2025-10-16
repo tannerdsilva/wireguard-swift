@@ -40,10 +40,13 @@ let IKCP_RTO_NDL:UInt32 = 30
 let IKCP_RTO_MIN:UInt64 = 100
 let IKCP_RTO_DEF:UInt64 = 200
 let IKCP_RTO_MAX:UInt64 = 60000
+
 let IKCP_CMD_PUSH:UInt8 = 81
 let IKCP_CMD_ACK:UInt8 = 82
 let IKCP_CMD_WASK:UInt8 = 83
 let IKCP_CMD_WINS:UInt8 = 84
+let IKCP_CMD_KILL:UInt8 = 85
+
 let IKCP_ASK_SEND:UInt32 = 1
 let IKCP_ASK_TELL:UInt32 = 2
 let IKCP_WND_SND:UInt32 = 256
@@ -267,7 +270,9 @@ internal struct KCPControlBlock {
 		}
 		logger.trace("handling inbound kcp segment.", metadata:["segment_sn":"\(associatedSegment.associatedValue.header.sequenceNumber)", "data_length":"\(associatedSegment.associatedValue.data.count)"])
 		parseInbound(una:associatedSegment.associatedValue.header.una)
-		maxCongestionWindow = min(maxCongestionWindow, Int(associatedSegment.associatedValue.header.receiveWindowSize) * Int(mtu))
+		if(associatedSegment.associatedValue.header.receiveWindowSize != 0) {
+			maxCongestionWindow = min(maxCongestionWindow, Int(associatedSegment.associatedValue.header.receiveWindowSize) * Int(mtu))
+		}
 
 		switch associatedSegment.associatedValue.header.command {
 			case KCPSegment.Command.ack:
@@ -297,7 +302,9 @@ internal struct KCPControlBlock {
 				}
 			case KCPSegment.Command.probeResponse:
 				// Nothing to do
-			break;
+				break;
+			case KCPSegment.Command.probeKill:
+				isInactive = true
 		}
 	}
 }
