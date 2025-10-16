@@ -81,6 +81,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let wgh:WireguardHandler
 	private let kcpsh:KCPSegment.Handler
 	private let kcpcbh:KCPControlBlock.Handler
+	private let splcrh:SplicerHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
@@ -91,10 +92,12 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 		var mtuStep = mtu
-		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuStep, logLevel:logger.logLevel)
-		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuStep, initialPeers: initialConfiguration, logLevel:logger.logLevel)
-		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuStep, logLevel:logger.logLevel)
-		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuStep, logLevel:logger.logLevel)
+		var mtuLims = MTULimits(bidirectional:Int(mtuStep))
+		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
+		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.splcrh = SplicerHandler(logLevel:logLevel, spliceByteLength: 50_000)
 	}
 }
 
@@ -145,7 +148,7 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 										wgh,
 										self.kcpsh,
 										self.kcpcbh,
-										 SplicerHandler(logLevel:l.logLevel, spliceByteLength: 50_000),
+										self.splcrh,
 										dhh
 									]).cascade(to:initializationFuture)
 								}

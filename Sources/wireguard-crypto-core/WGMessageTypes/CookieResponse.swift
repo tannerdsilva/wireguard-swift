@@ -33,7 +33,7 @@ extension Message {
 				self.cookieTag = cookieTag
 			}
 
-			public static func forgeNoNIO(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result.Bytes8, endpoint:Endpoint, m:Result.Bytes16) throws -> Self {
+			public static func forge(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result.Bytes8, endpoint:Endpoint, m:Result.Bytes16) throws -> Self {
 				let T:Result.Bytes16
 				switch endpoint {
 					case .v4(let v4ep):

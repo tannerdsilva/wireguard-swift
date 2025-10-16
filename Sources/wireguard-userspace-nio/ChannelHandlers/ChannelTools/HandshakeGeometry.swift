@@ -1,5 +1,5 @@
 /// used to express the layout of cryptography that enables a tunnel with any given peer.
-internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where AugmentedType:Hashable, AugmentedType:Equatable {
+internal enum HandshakeGeometry<AugmentedType>:Sendable, Hashable, Equatable where AugmentedType:Hashable, AugmentedType:Equatable, AugmentedType:Sendable {
 	/// describes a scenario where the encrypted tunnel handshake is initiated by "self"
 	/// - in this scenario:
 	///		- m = initiator peer index
@@ -16,9 +16,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	internal var m:AugmentedType {
 		switch self {
 			case .selfInitiated(m:let m, mp:_):
-			return m
+				return m
 			case .peerInitiated(m:let m, mp:_):
-			return m
+				return m
 		}
 	}
 	
@@ -26,9 +26,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	internal var mp:AugmentedType {
 		switch self {
 			case .selfInitiated(m:_, mp:let mp):
-			return mp
+				return mp
 			case .peerInitiated(m:_, mp:let mp):
-			return mp
+				return mp
 		}
 	}
 
@@ -36,9 +36,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	internal var initiator:AugmentedType {
 		switch self {
 			case .selfInitiated(m:let m, mp:_):
-			return m
+				return m
 			case .peerInitiated(m:_, mp:let mp):
-			return mp
+				return mp
 		}
 	}
 
@@ -46,9 +46,9 @@ internal enum HandshakeGeometry<AugmentedType>:Hashable, Equatable where Augment
 	internal var responder:AugmentedType {
 		switch self {
 			case .selfInitiated(m:_, mp:let mp):
-			return mp
+				return mp
 			case .peerInitiated(m:let m, mp:_):
-			return m
+				return m
 		}
 	}
 }
@@ -58,9 +58,9 @@ extension HandshakeGeometry:CustomDebugStringConvertible where AugmentedType:Cus
 	internal var debugDescription:String {
 		switch self {
 			case .selfInitiated(m:let m, mp:let mp):
-			return ".selfInitiated(m:\(m.debugDescription), mp:\(mp.debugDescription))"
+				return ".selfInitiated(m:\(m.debugDescription), mp:\(mp.debugDescription))"
 			case .peerInitiated(m:let m, mp:let mp):
-			return ".peerInitiated(m:\(m.debugDescription), mp:\(mp.debugDescription))"
+				return ".peerInitiated(m:\(m.debugDescription), mp:\(mp.debugDescription))"
 		}
 	}
 }

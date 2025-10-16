@@ -1,6 +1,6 @@
 import RAW
 
-internal struct SlidingWindow<T:RAW_encoded_fixedwidthinteger> {
+internal struct SlidingWindow<T:RAW_encoded_fixedwidthinteger>:Sendable where T.RAW_native_type:Sendable {
 	internal let windowSize:T.RAW_native_type
 	private var bitmap:T.RAW_native_type = 0
 	private var lastSequence:T.RAW_native_type = 0

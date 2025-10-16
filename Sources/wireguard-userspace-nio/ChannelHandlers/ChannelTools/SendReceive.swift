@@ -1,5 +1,5 @@
 /// a general and "loosely defined" struct that combines two values that correspond with the send/receive pattern.
-internal struct SendReceive<SendType, ReceiveType> {
+internal struct SendReceive<SendType:Sendable, ReceiveType:Sendable>:Sendable {
 	/// the value that corresponds with sending
 	internal var valueSend:SendType
 	/// the value that corresponds with receiving

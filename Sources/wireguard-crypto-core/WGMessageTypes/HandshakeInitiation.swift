@@ -157,7 +157,7 @@ extension Message.Initiation.Payload {
 			self.msgMac2 = msgMac2
 		}
 
-		public borrowing func validateUnderLoadNoNIO(responderStaticPrivateKey:MemoryGuarded<PrivateKey>, R:Result.Bytes8, endpoint:Endpoint) throws {
+		public borrowing func validateUnderLoad(responderStaticPrivateKey:MemoryGuarded<PrivateKey>, R:Result.Bytes8, endpoint:Endpoint) throws {
 			try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key
 				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)

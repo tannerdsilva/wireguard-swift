@@ -31,6 +31,7 @@ extension PeerInfo {
 				oldValue?.1.cancel()
 			}
 		}
+		
 		// packets that need to be sent after a handshake is complete
 		private var postHandshakePackets = PendingPostHandshake()
 
@@ -194,12 +195,14 @@ extension PeerInfo.Live {
 				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
 				applyRotation(context:context, now:now)
 				if rotation.previous == nil {
-					var writeResult:WriteOrHold<WireguardHandler.OutboundOut>.Result? = nil
+					var writeResult:Bool = false
 					while var nextPacket = postHandshakePackets.dequeue() {
 						logger.trace("writing post-handshake queued packet after applying key rotation.", metadata:["size":"\(nextPacket.data.readableBytes) bytes"])
-						writeResult = wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise)
+						if wireguardHandler.writeBytes(context: context, publicKey: publicKey, payload: &nextPacket.data, promise: nextPacket.promise) == true && writeResult == false {
+							writeResult = true
+						}
 					}
-					if case .held = writeResult {
+					if writeResult != false {
 						wireguardHandler.flushAfterChannelReadComplete = true
 					}
 				}
@@ -421,7 +424,7 @@ extension PeerInfo.Live {
 		while var (pendingPacket) = postHandshakePackets.dequeue() {
 			logger.trace("flushing queued post-handshake packet", metadata:["public-key_remote":"\(publicKey)"])
 			switch wireguardHandler.writeBytes(context:context, publicKey:publicKey, payload:&pendingPacket.data, promise:pendingPacket.promise) {
-				case .written:
+				case true:
 					if wireguardHandler.flushAfterChannelReadComplete == false {
 						wireguardHandler.flushAfterChannelReadComplete = true
 					}

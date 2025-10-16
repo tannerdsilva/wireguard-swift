@@ -134,19 +134,23 @@ extension KCPControlBlock {
 internal struct KCPControlBlock {
 	/// the public key of the peer this control block is associated with
 	internal let peerPublicKey:PublicKey
+	
 	/// the context of the channel this control block is associated with
 	internal let log:Logger
 
 	/// conversation id.
 	internal let conv:UInt16
+	
 	/// maximum transmission unit: the largest udp packet accepted
-	internal let mtu:UInt32
-	/// maximum segment size: largest amount of data per segment
-	internal var mss:UInt32 {
+	internal var mtu:UInt32 {
 		get {
-			return mtu - IKCP_OVERHEAD
+			return mss + IKCP_OVERHEAD
 		}
 	}
+	
+	/// maximum segment size: largest amount of data per segment
+	internal let mss:UInt32
+	
 	/// - *purpose*: oldest unacknowledged sequence number
 	/// - *read/written when*: written when an ack is received, read when sending data
 	/// - *how it affects ack processing*: any segments with a sequence number less than snd_una can be removed from the send buffer
@@ -221,7 +225,7 @@ internal struct KCPControlBlock {
 	internal var remoteWindow:UInt32
 	internal var flightBytes:UInt32 = 0
 
-	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt16, mtu:UInt32, writeWindow:UInt32, readWindow:UInt32, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
+	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt16, mss:Int, writeWindow:UInt32, readWindow:UInt32, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -231,9 +235,9 @@ internal struct KCPControlBlock {
 		buildLogger[metadataKey: "conversation_id"] = "\(conv)"
 		self.log = buildLogger
 		self.peerPublicKey = peerPublicKey
-		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:Int(mtu * UInt32(UInt8.max) /* UInt8.max represents the maximum number of fragments possible */)))
+		self.inboundOutInfo = InboundOutInfo(inboundOutByteBuffer:context.channel.allocator.buffer(capacity:mss))
 		self.conv = conv
-		self.mtu = mtu
+		self.mss = UInt32(mss)
 		self.writeWindow = writeWindow
 		self.readWindow = readWindow
 		self.remoteWindow = rmt_wnd
@@ -431,14 +435,11 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
-	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, mssMeter:inout MSSMeter, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?) {
+	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?) {
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
-
 		for offset in stride(from: 0, to: message.readableBytes, by: Int(mss)) {
 			let fragSize = min(Int(mss), message.readableBytes - offset)
-			
 			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
-
 			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt16(fragSize))
 			snd_nxt &+= 1
 			let seg = KCPSegment(header: header, data: view!.readableBytesView)
@@ -448,8 +449,6 @@ extension KCPControlBlock {
 			} else {
 				outboundInBuffer.addTail((seg, nil, nil))
 			}
-			mssMeter.record(mss:UInt32(fragSize))
-			
 		}
 		isInactive = false
 	}
