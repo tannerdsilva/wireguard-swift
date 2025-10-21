@@ -58,6 +58,27 @@ public struct PeerInfo:Sendable {
 	}
 }
 
+public final actor PeerLogistics:Sendable {
+	private let channelFifoQueue:FIFO<(PublicKey, [UInt8]), Swift.Error>
+	var info: [PublicKey: FIFO<[UInt8], Swift.Error>] = [:]
+	
+	init(_ peers:[(PeerInfo, FIFO<[UInt8], Swift.Error>)], channelFifoQueue: FIFO<(PublicKey, [UInt8]), Swift.Error>) {
+		for (peer, fifo) in peers {
+			self.info[peer.publicKey] = fifo
+		}
+		self.channelFifoQueue = channelFifoQueue
+	}
+	
+	func run() async throws {
+		let iterator = channelFifoQueue.makeAsyncConsumer()
+		while(true) {
+			if let (key, incomingData) = try await iterator.next() {
+				info[key]!.yield(incomingData)
+			}
+		}
+	}
+}
+
 /// primary wireguard interface. this is how connections will be made.
 public final actor WGInterface<TransactableDataType>:Sendable where TransactableDataType:RAW_decodable, TransactableDataType:RAW_encodable, TransactableDataType:Sendable {
 	public enum State {
@@ -74,7 +95,8 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	public let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
+	private let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
+	public let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 
 	private let ph:PacketHandler
@@ -84,20 +106,20 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let splcrh:SplicerHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[(PeerInfo, FIFO<[UInt8], Swift.Error>)] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
-		var mtuStep = mtu
-		var mtuLims = MTULimits(bidirectional:Int(mtuStep))
+		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
-		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
+		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration.map{ $0.0 }, logLevel:logger.logLevel)
 		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.splcrh = SplicerHandler(logLevel:logLevel, spliceByteLength: 50_000)
+		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
 	}
 }
 
@@ -161,6 +183,9 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 				try bootstrappedFuture.setSuccess(())
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
+				Task {
+					try await peerLogistics.run()
+				}
 				do {
 					try await withTaskCancellationHandler {
 						try await withGracefulShutdownHandler {
