@@ -59,10 +59,10 @@ public struct PeerInfo:Sendable {
 }
 
 public final actor PeerLogistics:Sendable {
-	private let channelFifoQueue:FIFO<(PublicKey, [UInt8]), Swift.Error>
-	var info: [PublicKey: FIFO<[UInt8], Swift.Error>] = [:]
+	private let channelFifoQueue:FIFO<(PublicKey, ByteBuffer), Swift.Error>
+	var info: [PublicKey: FIFO<ByteBuffer, Swift.Error>] = [:]
 	
-	init(_ peers:[(PeerInfo, FIFO<[UInt8], Swift.Error>)], channelFifoQueue: FIFO<(PublicKey, [UInt8]), Swift.Error>) {
+	init(_ peers:[(PeerInfo, FIFO<ByteBuffer, Swift.Error>)], channelFifoQueue: FIFO<(PublicKey, ByteBuffer), Swift.Error>) {
 		for (peer, fifo) in peers {
 			self.info[peer.publicKey] = fifo
 		}
@@ -95,7 +95,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	private let inboundData = FIFO<(PublicKey, [UInt8]), Swift.Error>()
+	private let inboundData = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
 	public let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 
@@ -106,7 +106,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let splcrh:SplicerHandler
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[(PeerInfo, FIFO<[UInt8], Swift.Error>)] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[(PeerInfo, FIFO<ByteBuffer, Swift.Error>)] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -123,7 +123,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	}
 }
 
-extension WGInterface:Service where TransactableDataType == [UInt8] {
+extension WGInterface:Service {
 	public func waitForChannelInit() async throws {
 		_ = try await bootstrappedFuture.result()!.get()
 	}
@@ -223,15 +223,20 @@ extension WGInterface:Service where TransactableDataType == [UInt8] {
 				throw InvalidInterfaceStateError()
 		}
 	}
+	static public func write(channel:Channel, publicKey: PublicKey, data:ByteBuffer) throws {
+		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
+		channel.pipeline.writeAndFlush(PeerAssociated(publicKey:publicKey, associatedValue:data), promise:myWritePromise)
+		try myWritePromise.futureResult.wait()
+	}
 }
 
 extension WGInterface:AsyncSequence {
 	public struct AsyncIterator:AsyncIteratorProtocol {
-		private let inboundDataOut:FIFO<(PublicKey, [UInt8]), Swift.Error>.AsyncConsumerExplicit
-		internal init(inboundData:FIFO<(PublicKey, [UInt8]), Swift.Error>) {
+		private let inboundDataOut:FIFO<(PublicKey, ByteBuffer), Swift.Error>.AsyncConsumerExplicit
+		internal init(inboundData:FIFO<(PublicKey, ByteBuffer), Swift.Error>) {
 			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
 		}
-		public func next() async throws -> (PublicKey, [UInt8])? {
+		public func next() async throws -> (PublicKey, ByteBuffer)? {
 			switch await inboundDataOut.next() {
 				case .element(let element):
 					return element

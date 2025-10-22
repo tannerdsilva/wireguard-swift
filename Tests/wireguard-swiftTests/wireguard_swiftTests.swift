@@ -156,10 +156,10 @@ extension WireguardSwiftTests {
 			let stringToSend = "Hello, world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let aliceFifo = FIFO<[UInt8], Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
@@ -182,7 +182,8 @@ extension WireguardSwiftTests {
 				
 				let iterator = aliceFifo.makeAsyncConsumer()
 				while(true) {
-					if let incomingData = try await iterator.next() {
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
 						#expect(incomingData == messageBytes)
 						cliLogger.info("bob received data that is \(incomingData.count) bytes long")
@@ -197,10 +198,10 @@ extension WireguardSwiftTests {
 		@Test func attemptMTUOverflow() async throws {
 			let stringToSend = [UInt8](repeating: 65, count: 2000)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let aliceFifo = FIFO<[UInt8], Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
@@ -240,10 +241,10 @@ extension WireguardSwiftTests {
 			let stringToSend = "Hello world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let aliceFifo = FIFO<[UInt8], Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
@@ -269,7 +270,8 @@ extension WireguardSwiftTests {
 				var found = 0
 				let iterator = aliceFifo.makeAsyncConsumer()
 				while(true) {
-					if let incomingData = try await iterator.next() {
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						#expect(incomingData == messageBytes)
 						found += 1
 						cliLogger.info("bob received message from alice.", metadata:["message_count":"\(found)"])
@@ -294,10 +296,10 @@ extension WireguardSwiftTests {
 			let payload2 = tempPayload
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let aliceFifo = FIFO<[UInt8], Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
@@ -324,7 +326,8 @@ extension WireguardSwiftTests {
 				var count = 0
 				let iterator = aliceFifo.makeAsyncConsumer()
 				while(true) {
-					if let incomingData = try await iterator.next() {
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						if (count == 0) {
 							cliLogger.debug("Received data that is \(incomingData.count) bytes long")
 							#expect(incomingData == payload1)
@@ -355,10 +358,10 @@ extension WireguardSwiftTests {
 			}
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let aliceFifo = FIFO<[UInt8], Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
@@ -384,7 +387,8 @@ extension WireguardSwiftTests {
 				var count = 0
 				let iterator = aliceFifo.makeAsyncConsumer()
 				while(true) {
-					if let incomingData = try await iterator.next() {
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
 						#expect(incomingData == payloads[count])
 						count += 1
@@ -404,10 +408,10 @@ extension WireguardSwiftTests {
 			var payload = [UInt8](repeating: 0, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 
-				let aliceFifo = FIFO<[UInt8], Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 
@@ -430,7 +434,8 @@ extension WireguardSwiftTests {
 				cliLogger.info("Channel initialized. Reading data...")
 				let iterator = aliceFifo.makeAsyncConsumer()
 				while(true) {
-					if let incomingData = try await iterator.next() {
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
 						#expect(incomingData == payload)
 						foo.cancelAll()
@@ -449,15 +454,15 @@ extension WireguardSwiftTests {
 			let carolPayload = [UInt8](repeating: 1, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<[UInt8], Swift.Error>())]
+				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36001)
 				
-				let alicePeerFifo = FIFO<[UInt8], Swift.Error>()
-				let carolPeerFifo = FIFO<[UInt8], Swift.Error>()
+				let alicePeerFifo = FIFO<ByteBuffer, Swift.Error>()
+				let carolPeerFifo = FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30)), alicePeerFifo), (PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36002, internalKeepAlive: .seconds(30)), carolPeerFifo)]
 				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36000)
 				
-				let carolPeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<[UInt8], Swift.Error>())]
+				let carolPeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<ByteBuffer, Swift.Error>())]
 				let carolInterface = try WGInterface<[UInt8]>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, listeningPort: 36002)
 
 				foo.addTask {
@@ -489,7 +494,8 @@ extension WireguardSwiftTests {
 				
 				let aliceIterator = alicePeerFifo.makeAsyncConsumer()
 				aliceRcvLoop: while(true) {
-					if let incomingData = try await aliceIterator.next() {
+					if let incomingDataBytes = try await aliceIterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
 						#expect(incomingData == alicePayload)
 						break aliceRcvLoop
@@ -498,7 +504,8 @@ extension WireguardSwiftTests {
 				
 				let carolIterator = carolPeerFifo.makeAsyncConsumer()
 				carolRcvLoop: while(true) {
-					if let incomingData = try await carolIterator.next() {
+					if let incomingDataBytes = try await carolIterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
 						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
 						#expect(incomingData == carolPayload)
 						break carolRcvLoop

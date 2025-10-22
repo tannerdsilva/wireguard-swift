@@ -13,13 +13,13 @@ internal final class DataHandoffHandler:Sendable, ChannelInboundHandler {
 	internal typealias InboundOut = Never
 
 	/// the FIFO that will be used to hand off data to the end-user
-	private let handoff:FIFO<(PublicKey, [UInt8]), Swift.Error>
+	private let handoff:FIFO<(PublicKey, ByteBuffer), Swift.Error>
 
 	/// the logger that will be used to log events in this handler.
 	private let log:Logger
 
 	/// initializes a data handoff handler with the given FIFO instance and log level.
-	internal init(handoff hoFIFO:FIFO<(PublicKey, [UInt8]), Swift.Error>, logLevel:Logger.Level) {
+	internal init(handoff hoFIFO:FIFO<(PublicKey, ByteBuffer), Swift.Error>, logLevel:Logger.Level) {
 		handoff = hoFIFO
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
@@ -51,7 +51,7 @@ internal final class DataHandoffHandler:Sendable, ChannelInboundHandler {
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
 		var unwrapInboundIn = self.unwrapInboundIn(data)
-		handoff.yield((unwrapInboundIn.publicKey, unwrapInboundIn.associatedValue.readBytes(length:unwrapInboundIn.associatedValue.readableBytes) ?? []))
+		handoff.yield((unwrapInboundIn.publicKey, unwrapInboundIn.associatedValue))
 		logger.trace("handing off data to FIFO")
 	}
 }
