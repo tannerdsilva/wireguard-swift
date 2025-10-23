@@ -38,6 +38,7 @@ let package = Package(
 				.product(name:"RAW", package:"rawdog"),
 				.product(name:"RAW_dh25519", package:"rawdog"),
 				.product(name:"RAW_chachapoly", package:"rawdog"),
+				.product(name:"RAW_base64", package:"rawdog"),
 				.product(name:"bedrock", package:"bedrock"),
 				.product(name:"bedrock_fifo", package:"bedrock"),
 				.product(name:"bedrock_future", package:"bedrock"),

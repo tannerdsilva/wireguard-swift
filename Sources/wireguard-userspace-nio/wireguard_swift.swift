@@ -210,6 +210,15 @@ extension WGInterface:Service {
 
 		logger.info("server closed successfully.")
 	}
+	
+	public func getChannel() throws -> Channel  {
+		switch state {
+			case .engaged(let channel):
+				return channel
+			default:
+				throw InvalidInterfaceStateError()
+		}
+	}
 
 	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
 		switch state {
