@@ -112,7 +112,7 @@ extension Message {
 				}
 			}
 
-			public borrowing func finalize(responderStaticPublicKey:UnsafePointer<PublicKey>, cookie:Message.Cookie.Payload? = nil) throws -> Authenticated {
+			public borrowing func finalize(responderStaticPublicKey:UnsafePointer<PublicKey>, cookie:Message.Cookie.Payload? = nil, savedMac1:Result.Bytes16? = nil) throws -> Authenticated {
 				try withUnsafePointer(to:self) { selfPtr in
 					// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
 					var hasher = try WGHasher<Result.Bytes32>()
@@ -128,7 +128,7 @@ extension Message {
 						try hasher.update([UInt8]("cookie--".utf8))
 						try hasher.update(responderStaticPublicKey)
 						let key = try hasher.finish()
-						let cookieMsg = try xaeadDecrypt(key:key, nonce: cookie!.nonce, cipherText: cookie!.cookieMsg, aad: mac1, tag: cookie!.cookieTag)
+						let cookieMsg = try xaeadDecrypt(key:key, nonce: cookie!.nonce, cipherText: cookie!.cookieMsg, aad: savedMac1!, tag: cookie!.cookieTag)
 						mac2 = try wgMAC(key:cookieMsg, data:MSGb(payload:selfPtr.pointee, msgMac1: mac1))
 					} else {
 						mac2 = Result.Bytes16(RAW_staticbuff:Result.Bytes16.RAW_staticbuff_zeroed())

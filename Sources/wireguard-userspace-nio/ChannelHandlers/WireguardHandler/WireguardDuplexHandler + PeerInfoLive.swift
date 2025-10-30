@@ -38,6 +38,10 @@ extension PeerInfo {
 		private var rotation:Rotating<Session>
 
 		private var rekeyAttemptTimeNow:NIODeadline? = nil
+		
+		private var canHandshakeAgainAt:NIODeadline = NIODeadline.now()
+		private var savedMac1:Result.Bytes16? = nil
+		private var savedCookiePayload:(cookie:Message.Cookie.Payload, deadline:NIODeadline)? = nil
 
 		internal init(_ peerInfo:PeerInfo, handler:WireguardHandler, context:borrowing ChannelHandlerContext, logLevel:Logger.Level) {
 			#if DEBUG
@@ -214,6 +218,8 @@ extension PeerInfo.Live {
 	internal struct UnknownPeerEndpoint:Swift.Error {}
 	/// thrown when a rekey attempt is made too soon after the previous attempt
 	internal struct RekeyAttemptTooSoon:Swift.Error {}
+	/// thrown when we are waiting the random amount of time to start handshaking again
+	internal struct WaitingForHandshakeTaskCooldown:Swift.Error {}
 
 	/// begins the repeated task that sends handshake initiations to the remote peer. the endpoint for the remote peer can be optionally overridden for the initiations that are sent.
 	/// - parameters:
@@ -230,6 +236,10 @@ extension PeerInfo.Live {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var logger = log
+		
+		guard NIODeadline.now() >= canHandshakeAgainAt else {
+			throw WaitingForHandshakeTaskCooldown()
+		}
 		// verify that an initiation task does not already exist.
 		guard handshakeInitiationTask == nil else {
 			logger.trace("handshake initiation task could not be created because an existing task is already running.")
@@ -263,6 +273,7 @@ extension PeerInfo.Live {
 				
 				// cancel the recurring task
 				self.handshakeInitiationTask = nil
+				self.canHandshakeAgainAt = NIODeadline.now() + .milliseconds(Int64.random(in: 500...4000))
 				throw RekeyAttemptTimeExceeded()
 			}
 			do {
@@ -273,7 +284,22 @@ extension PeerInfo.Live {
 
 						// forge the authenticated message
 						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr, initiatorPeerIndex:upi)
-						let authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
+						let authenticatedPayload:Message.Initiation.Payload.Authenticated
+						if let savedCookiePayload = savedCookiePayload {
+							if(NIODeadline.now() - savedCookiePayload.deadline > WireguardHandler.activeCookieTime) {
+								self.savedCookiePayload = nil
+								authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
+							} else {
+								do {
+									authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr, cookie: savedCookiePayload.cookie, savedMac1: savedMac1)
+								} catch {
+									authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
+								}
+							}
+						} else {
+							authenticatedPayload = try payload.finalize(responderStaticPublicKey:pubKeyPtr)
+						}
+						self.savedMac1 = authenticatedPayload.msgMac1
 						
 						// install the resulting crypto keys in the self initiated key storage
 						self.selfInitiatedKeys.installInitiation(context:contextPtr.pointee, now:currentTime, initiatorEphemeralPrivateKey:ephiPrivateKey, c:c, h:h, authenticatedPayload:authenticatedPayload)
@@ -463,5 +489,13 @@ extension PeerInfo.Live {
 		}
 		ep = inputEndpoint
 		log.info("peer roamed to new endpoint", metadata:["endpoint_remote":"\(inputEndpoint)"])
+	}
+}
+
+// MARK: Cookie
+extension PeerInfo.Live {
+	internal func updateCookie(cookie:Message.Cookie.Payload, deadline:NIODeadline) {
+		savedCookiePayload = (cookie:cookie, deadline:deadline)
+		log.trace("Updated cookie information", metadata:["public-key_remote":"\(publicKey)"])
 	}
 }

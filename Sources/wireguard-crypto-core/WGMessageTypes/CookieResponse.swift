@@ -16,7 +16,7 @@ extension Message {
 			/// message type (type and reserved)
 			public let typeHeader:TypeHeading
 			/// responder's peer index (I_r)
-			public let receiverIndex:PeerIndex
+			public let initiatorIndex:PeerIndex
 			/// random nonce
 			public let nonce:Nonce
 			/// cookie message
@@ -25,15 +25,15 @@ extension Message {
 			public let cookieTag:Tag
 
 			/// initializes a new HandshakeResponseMessage
-			fileprivate init(receiverIndex:PeerIndex, nonce:Nonce, cookieMsg:Result.Bytes16, cookieTag:Tag) {
+			fileprivate init(initiatorIndex:PeerIndex, nonce:Nonce, cookieMsg:Result.Bytes16, cookieTag:Tag) {
 				self.typeHeader = 0x3
-				self.receiverIndex = receiverIndex
+				self.initiatorIndex = initiatorIndex
 				self.nonce = nonce
 				self.cookieMsg = cookieMsg
 				self.cookieTag = cookieTag
 			}
 
-			public static func forge(receiverPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result.Bytes8, endpoint:Endpoint, m:Result.Bytes16) throws -> Self {
+			public static func forge(initiatorsPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result.Bytes8, endpoint:Endpoint, m:Result.Bytes16) throws -> Self {
 				let T:Result.Bytes16
 				switch endpoint {
 					case .v4(let v4ep):
@@ -43,7 +43,7 @@ extension Message {
 				}
 				let nonce = try generateSecureRandomBytes(as:Nonce.self)
 				let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad:m)
-				return Self(receiverIndex: receiverPeerIndex, nonce: nonce, cookieMsg:Result.Bytes16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
+				return Self(initiatorIndex: initiatorsPeerIndex, nonce: nonce, cookieMsg:Result.Bytes16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
 			}
 		}
 	}

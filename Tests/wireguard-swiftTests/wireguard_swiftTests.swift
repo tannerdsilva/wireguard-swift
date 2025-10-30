@@ -113,7 +113,7 @@ extension WireguardSwiftTests {
 			var authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey)
 			let endpoint = try SocketAddress(ipAddress: "192.0.2.1", port: 51820)
 			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
-			let cookie = try Message.Cookie.Payload.forge(receiverPeerIndex: authenticatedPacketToSend.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, endpoint:Endpoint(endpoint), m: authenticatedPacketToSend.msgMac1)
+			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex: authenticatedPacketToSend.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, endpoint:Endpoint(endpoint), m: authenticatedPacketToSend.msgMac1)
 
 			authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey, cookie: cookie)
 
@@ -148,7 +148,7 @@ extension WireguardSwiftTests {
 			(bobPublicKey, bobPrivateKey) = (PublicKey(privateKey:Self.bobStaticPrivateKey), Self.bobStaticPrivateKey)
 			(carolPublicKey, carolPrivateKey) = (PublicKey(privateKey:Self.carolStaticPrivateKey), Self.carolStaticPrivateKey)
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
-			buildLogger.logLevel = .info
+			buildLogger.logLevel = .trace
 			cliLogger = buildLogger
 		}
 		
