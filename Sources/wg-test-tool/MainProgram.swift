@@ -89,11 +89,11 @@ struct CLI:AsyncParsableCommand {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let myPeers = [(PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<ByteBuffer, Swift.Error>())]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.critical, listeningPort: 36001)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.critical, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
 				
 				let fifo = FIFO<ByteBuffer, Swift.Error>()
 				let peerPeers = [(PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30)), fifo)]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.critical, listeningPort: 36000)
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.critical, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -145,7 +145,7 @@ struct CLI:AsyncParsableCommand {
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let fifo = FIFO<ByteBuffer, Swift.Error>()
 				let myPeers = [(PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30)), fifo)]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, encryptedPacketHandler: DefaultEPH(), listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()
@@ -203,7 +203,7 @@ struct CLI:AsyncParsableCommand {
 					let fifo = FIFO<ByteBuffer, Swift.Error>()
 					myPeers.append(((PeerInfo(publicKey:peers[i].publicKey, ipAddress:ipAddress, port: peers[i].port, internalKeepAlive: .seconds(30))), fifo))
 				}
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, listeningPort: myPort)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, encryptedPacketHandler: DefaultEPH(), listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()

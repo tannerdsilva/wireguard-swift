@@ -10,6 +10,17 @@ import ServiceLifecycle
 import bedrock_ip
 import wireguard_crypto_core
 
+public protocol EncryptedPacketHandler:Sendable {
+	mutating func willWriteOutbound(_ encryptedWireguardContent:inout ByteBuffer)
+	mutating func willReadInbound(_ encryptedWireguardContent:inout Message.NIO)
+}
+
+public struct DefaultEPH:EncryptedPacketHandler {
+	public init() {}
+	mutating public func willWriteOutbound(_ encryptedWireguardContent: inout ByteBuffer) {}
+	mutating public func willReadInbound(_ encryptedWireguardContent: inout Message.NIO) {}
+}
+
 extension Endpoint {
 	public init(_ socketAddress:SocketAddress) throws {
 		switch socketAddress {
@@ -100,13 +111,15 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let listeningPort:Int
 
 	private let ph:PacketHandler
+	private let eh:EncryptedHandler
 	private let wgh:WireguardHandler
 	private let kcpsh:KCPSegment.Handler
 	private let kcpcbh:KCPControlBlock.Handler
 	private let splcrh:SplicerHandler
 
+
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[(PeerInfo, FIFO<ByteBuffer, Swift.Error>)] = [], logLevel:Logger.Level, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[(PeerInfo, FIFO<ByteBuffer, Swift.Error>)] = [], logLevel:Logger.Level, encryptedPacketHandler: some EncryptedPacketHandler, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -115,6 +128,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.eh = EncryptedHandler(eph: encryptedPacketHandler, logLevel: logLevel)
 		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration.map{ $0.0 }, logLevel:logger.logLevel)
 		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
@@ -167,6 +181,7 @@ extension WGInterface:Service {
 									l.notice("channel parameters determined.", metadata: ["so_sndbuf":"\(Int(sndBuf))", "so_rcvbuf":"\(result)", "wbwm_low":"\(Int(sndBuf*0.3))", "wbwm_high":"\(Int(sndBuf*0.75))"])
 									channel.pipeline.addHandlers([
 										self.ph,
+										self.eh,
 										wgh,
 										self.kcpsh,
 										self.kcpcbh,

@@ -498,6 +498,7 @@ extension KCPControlBlock {
 				
 				// Dead link occured. Wipe send queue
 				if node.value!.data.runtimeMetadata.xmit >= 20 {
+					log.info("Deadling occured", metadata:["public-key_remote":"\(peerPublicKey)"])
 					for (node, _) in outboundInBuffer.makeIterator() {
 						node.value!.ackPromise?.fail(DeadlinkError())
 					}

@@ -38,7 +38,7 @@ extension Message:RAW_encodable {
 
 extension Message {
 	/// a variant of the Message enum that is suitable for use in NIO pipelines. this symbol exists to minimize the number of copies of data that need to be made when processing packets in the NIO pipeline.
-	internal enum NIO {
+	public enum NIO {
 		/// identical to `Message.Initiation.Payload.Authenticated`
 		case initiation(Message.Initiation.Payload.Authenticated)
 		/// identical to `Message.Response.Payload.Authenticated`

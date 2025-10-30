@@ -95,7 +95,6 @@ extension PeerInfo.Live {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		rekeyAttemptTimeNow = now
 		func guardCaught() -> SendStrategy {
 			switch rotation.next {
 				case .some(let nextSesh):
@@ -245,6 +244,7 @@ extension PeerInfo.Live {
 			logger.trace("handshake initiation task could not be created because an existing task is already running.")
 			throw HandshakeTaskAlreadyRunning()
 		}
+		rekeyAttemptTimeNow = NIODeadline.now()
 		// determine which endpoint to use for initiating a connection with the peer
 		let targetEndpoint:Endpoint
 		guard ep != nil else {
@@ -263,17 +263,17 @@ extension PeerInfo.Live {
 		}
 		let useInitialDelay = selfInitiatedKeys.handshakeRekeyDelay(context:context, now:now) ?? .seconds(0)
 		let usePeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
-		logger.trace("launching handshake initiation task to write outbound handshake message.", metadata:["initial_delay":"\(useInitialDelay)", "index_initiator":"\(usePeerIndex)"])
+		logger.info("launching handshake initiation task to write outbound handshake message.", metadata:["initial_delay":"\(useInitialDelay)", "index_initiator":"\(usePeerIndex)"])
 		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:useInitialDelay, delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = logger, upi = usePeerIndex] _ in
 			guard let self = self else { return }
 			let currentTime = NIODeadline.now()
 			guard (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
 				// rekey time has passed, we can no longer attempt to make handshake initiations
-				l.debug("halting handshake initiation emission. rekey attempt time exceeded.", metadata:["rekey_attempt_time":"\(String(describing:self.rekeyAttemptTimeNow))", "current_time":"\(currentTime)"])
+				l.info("halting handshake initiation emission. rekey attempt time exceeded.", metadata:["rekey_attempt_time":"\(String(describing:self.rekeyAttemptTimeNow))", "current_time":"\(currentTime)"])
 				
 				// cancel the recurring task
 				self.handshakeInitiationTask = nil
-				self.canHandshakeAgainAt = NIODeadline.now() + .milliseconds(Int64.random(in: 500...4000))
+				self.canHandshakeAgainAt = currentTime + .milliseconds(Int64.random(in: 3000...7000))
 				throw RekeyAttemptTimeExceeded()
 			}
 			do {
