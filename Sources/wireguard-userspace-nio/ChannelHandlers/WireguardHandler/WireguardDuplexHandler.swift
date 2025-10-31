@@ -348,7 +348,6 @@ extension WireguardHandler {
 			}
 		} catch let error {
 			logger.error("error processing packet: \(error)")
-			//context.fireErrorCaught(error)
 		}
 	}
 }

@@ -10,17 +10,6 @@ import ServiceLifecycle
 import bedrock_ip
 import wireguard_crypto_core
 
-public protocol EncryptedPacketHandler:Sendable {
-	mutating func willWriteOutbound(_ encryptedWireguardContent:inout ByteBuffer)
-	mutating func willReadInbound(_ encryptedWireguardContent:inout Message.NIO)
-}
-
-public struct DefaultEPH:EncryptedPacketHandler {
-	public init() {}
-	mutating public func willWriteOutbound(_ encryptedWireguardContent: inout ByteBuffer) {}
-	mutating public func willReadInbound(_ encryptedWireguardContent: inout Message.NIO) {}
-}
-
 extension Endpoint {
 	public init(_ socketAddress:SocketAddress) throws {
 		switch socketAddress {
@@ -52,10 +41,14 @@ public struct PeerInfo:Sendable {
 	public let publicKey:PublicKey
 	public let endpoint:Endpoint?
 	public let internalKeepAlive:TimeAmount?
+	public let inboundData:FIFO<ByteBuffer, Swift.Error>
+	public let inboundHandshakeSignal:FIFO<NIODeadline, Swift.Error>
 	
-	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
+	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>, inboundHandshakeSignal:FIFO<NIODeadline, Swift.Error>) {
 		self.publicKey = publicKey
 		self.internalKeepAlive = internalKeepAlive
+		self.inboundData = inboundData
+		self.inboundHandshakeSignal = inboundHandshakeSignal
 		
 		if (ipAddress != nil && port != nil) {
 			do {
@@ -73,9 +66,9 @@ public final actor PeerLogistics:Sendable {
 	private let channelFifoQueue:FIFO<(PublicKey, ByteBuffer), Swift.Error>
 	var info: [PublicKey: FIFO<ByteBuffer, Swift.Error>] = [:]
 	
-	init(_ peers:[(PeerInfo, FIFO<ByteBuffer, Swift.Error>)], channelFifoQueue: FIFO<(PublicKey, ByteBuffer), Swift.Error>) {
-		for (peer, fifo) in peers {
-			self.info[peer.publicKey] = fifo
+	init(_ peers:[PeerInfo], channelFifoQueue: FIFO<(PublicKey, ByteBuffer), Swift.Error>) {
+		for peer in peers {
+			self.info[peer.publicKey] = peer.inboundData
 		}
 		self.channelFifoQueue = channelFifoQueue
 	}
@@ -107,11 +100,12 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
 	private let inboundData = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
+	private let inboundHandshakeSignal = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
 	public let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 
 	private let ph:PacketHandler
-	private let eh:EncryptedHandler
+	private let eph:EncryptedPacketHandler
 	private let wgh:WireguardHandler
 	private let kcpsh:KCPSegment.Handler
 	private let kcpcbh:KCPControlBlock.Handler
@@ -119,7 +113,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 
 
 	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[(PeerInfo, FIFO<ByteBuffer, Swift.Error>)] = [], logLevel:Logger.Level, encryptedPacketHandler: some EncryptedPacketHandler, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, encryptedPacketProcessor: some EncryptedPacketProcessor, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -128,8 +122,8 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
 		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
-		self.eh = EncryptedHandler(eph: encryptedPacketHandler, logLevel: logLevel)
-		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration.map{ $0.0 }, logLevel:logger.logLevel)
+		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
+		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.splcrh = SplicerHandler(logLevel:logLevel, spliceByteLength: 50_000)
@@ -181,7 +175,7 @@ extension WGInterface:Service {
 									l.notice("channel parameters determined.", metadata: ["so_sndbuf":"\(Int(sndBuf))", "so_rcvbuf":"\(result)", "wbwm_low":"\(Int(sndBuf*0.3))", "wbwm_high":"\(Int(sndBuf*0.75))"])
 									channel.pipeline.addHandlers([
 										self.ph,
-										self.eh,
+										self.eph,
 										wgh,
 										self.kcpsh,
 										self.kcpcbh,

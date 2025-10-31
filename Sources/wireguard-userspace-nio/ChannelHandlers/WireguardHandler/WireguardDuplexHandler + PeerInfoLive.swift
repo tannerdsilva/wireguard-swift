@@ -6,6 +6,7 @@ import RAW
 import wireguard_crypto_core
 import Synchronization
 import bedrock
+import bedrock_fifo
 
 extension PeerInfo {
 	/// used to represent and store all live information about a peer that is needed for active communication on the socket.
@@ -39,6 +40,8 @@ extension PeerInfo {
 
 		private var rekeyAttemptTimeNow:NIODeadline? = nil
 		
+		private var handshakeCompletionSignals:FIFO<NIODeadline, Swift.Error>
+		
 		private var canHandshakeAgainAt:NIODeadline = NIODeadline.now()
 		private var savedMac1:Result.Bytes16? = nil
 		private var savedCookiePayload:(cookie:Message.Cookie.Payload, deadline:NIODeadline)? = nil
@@ -60,6 +63,7 @@ extension PeerInfo {
 			let um = handler
 			wireguardHandler = um
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
+			handshakeCompletionSignals = peerInfo.inboundHandshakeSignal
 		}
 				
 		deinit {
@@ -192,6 +196,7 @@ extension PeerInfo.Live {
 				}
 				rotation.next!.nVar.valueRecv = newValue
 				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
+				handshakeCompletionSignals.yield(now)
 				applyRotation(context:context, now:now)
 				if rotation.previous == nil {
 					var writeResult:Bool = false
@@ -438,6 +443,7 @@ extension PeerInfo.Live {
 	
 		// cancel the scheduled handshake initiation task
 		handshakeInitiationTask = nil
+		handshakeCompletionSignals.yield(now)
 
 		// fire the handshake information to the channel
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))

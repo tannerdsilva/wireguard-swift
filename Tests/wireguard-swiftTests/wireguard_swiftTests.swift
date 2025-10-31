@@ -10,6 +10,7 @@ import Logging
 import ServiceLifecycle
 import wireguard_crypto_core
 import bedrock_fifo
+import bedrock_ip
 @testable import wireguard_userspace_nio
 
 @Suite("WG Swift Tests", .serialized)
@@ -121,9 +122,9 @@ extension WireguardSwiftTests {
 	}
 }
 
-struct DropXPercentWrites:EncryptedPacketHandler {
+struct DropXPercentOutbound:EncryptedPacketProcessor {
 	var percent:Int
-	mutating func willWriteOutbound(_ encryptedWireguardContent: inout ByteBuffer) {
+	mutating func willWriteOutbound(_ encryptedWireguardContent: inout ByteBuffer, ep:inout Endpoint) {
 		if Int.random(in: 0..<100) < percent {
 			encryptedWireguardContent.clear()
 		}
@@ -131,15 +132,51 @@ struct DropXPercentWrites:EncryptedPacketHandler {
 	mutating func willReadInbound(_ encryptedWireguardContent: inout Message.NIO) {}
 }
 
-struct DropInitiationHandshakes:EncryptedPacketHandler {
-	let endTime = NIODeadline.now() + .seconds(120)
-	mutating func willWriteOutbound(_ encryptedWireguardContent: inout ByteBuffer) {}
+struct DropInbound:EncryptedPacketProcessor {
+	enum CaseType {
+		case initiation
+		case response
+		case cookie
+		case data
+	}
+	let endTime:NIODeadline
+	let type:CaseType
+	init(packetType:CaseType, lengthOfTime:TimeAmount) {
+		type = packetType
+		endTime = NIODeadline.now() + lengthOfTime
+	}
+	mutating func willWriteOutbound(_ encryptedWireguardContent: inout ByteBuffer, ep:inout Endpoint) {}
 	mutating func willReadInbound(_ encryptedWireguardContent: inout Message.NIO) {
 		switch encryptedWireguardContent {
 			case .initiation(_):
-				if(NIODeadline.now() < endTime) {
-					let packet = Message.Initiation.Payload.Authenticated(RAW_staticbuff: Message.Initiation.Payload.Authenticated.RAW_staticbuff_zeroed())
-					encryptedWireguardContent = .initiation(packet)
+				if(type == .initiation) {
+					if(NIODeadline.now() < endTime) {
+						let packet = Message.Initiation.Payload.Authenticated(RAW_staticbuff: Message.Initiation.Payload.Authenticated.RAW_staticbuff_zeroed())
+						encryptedWireguardContent = .initiation(packet)
+					}
+				}
+			case .response(_):
+				if(type == .response) {
+					if(NIODeadline.now() < endTime) {
+						let packet = Message.Response.Payload.Authenticated(RAW_staticbuff: Message.Response.Payload.Authenticated.RAW_staticbuff_zeroed())
+						encryptedWireguardContent = .response(packet)
+					}
+				}
+			case .cookie(_):
+				if(type == .cookie) {
+					if(NIODeadline.now() < endTime) {
+						let packet = Message.Cookie.Payload(RAW_staticbuff: Message.Cookie.Payload.RAW_staticbuff_zeroed())
+						encryptedWireguardContent = .cookie(packet)
+					}
+				}
+			case .data(_, _, _):
+				if(type == .data) {
+					if(NIODeadline.now() < endTime) {
+						let recipeintIndex = PeerIndex(RAW_staticbuff: PeerIndex.RAW_staticbuff_zeroed())
+						let counter = Counter(RAW_staticbuff: Counter.RAW_staticbuff_zeroed())
+						let buffer = ByteBuffer().readableBytesView
+						encryptedWireguardContent = .data(recipientIndex: recipeintIndex, counter: counter, payload: buffer)
+					}
 				}
 			default:
 				break
@@ -147,8 +184,8 @@ struct DropInitiationHandshakes:EncryptedPacketHandler {
 	}
 }
 
-struct CorruptByteBuffer:EncryptedPacketHandler {
-	mutating func willWriteOutbound(_ encryptedWireguardContent: inout NIOCore.ByteBuffer) {
+struct CorruptOutbound:EncryptedPacketProcessor {
+	mutating func willWriteOutbound(_ encryptedWireguardContent: inout NIOCore.ByteBuffer, ep:inout Endpoint) {
 		if Int.random(in: 0..<100) < 50 {
 			let readable = encryptedWireguardContent.readableBytes
 			guard readable > 0 else { return }
@@ -164,6 +201,25 @@ struct CorruptByteBuffer:EncryptedPacketHandler {
 					bytes[startIndex + i] ^= UInt8.random(in: 0...255)
 				}
 			}
+		}
+	}
+	mutating func willReadInbound(_ encryptedWireguardContent: inout wireguard_crypto_core.Message.NIO) {}
+}
+
+struct DuplicateOutbound:EncryptedPacketProcessor {
+	mutating func willWriteOutbound(_ encryptedWireguardContent: inout NIOCore.ByteBuffer, ep:inout Endpoint) {
+		for _ in 0..<10 {
+			var copy = encryptedWireguardContent
+			encryptedWireguardContent.writeBuffer(&copy)
+		}
+	}
+	mutating func willReadInbound(_ encryptedWireguardContent: inout wireguard_crypto_core.Message.NIO) {}
+}
+
+struct ChangeEndpoint:EncryptedPacketProcessor {
+	mutating func willWriteOutbound(_ encryptedWireguardContent: inout NIOCore.ByteBuffer, ep:inout Endpoint) {
+		if Int.random(in: 0..<100) < 25 {
+			ep = Endpoint(Address("127.127.127.127")!, port: Endpoint.Port(RAW_native: 8008))
 		}
 	}
 	mutating func willReadInbound(_ encryptedWireguardContent: inout wireguard_crypto_core.Message.NIO) {}
@@ -203,12 +259,14 @@ extension WireguardSwiftTests {
 			let stringToSend = "Hello, world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -226,7 +284,6 @@ extension WireguardSwiftTests {
 				cliLogger.info("alice is writing...")
 				try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
 				
-				
 				let iterator = aliceFifo.makeAsyncConsumer()
 				while(true) {
 					if let incomingDataBytes = try await iterator.next() {
@@ -241,16 +298,69 @@ extension WireguardSwiftTests {
 				}
 			})
 		}
+		
+		@Test func confirmhandshakeSignals() async throws {
+			let payloadSize: Int = 10
+			let payload = [UInt8](repeating: 0, count: payloadSize)
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
+
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+				
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
+				
+				let firstWrite = NIODeadline.now()
+				cliLogger.info("alice is writing...")
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+				
+				try await Task.sleep(for: .seconds(2))
+				let secondWrite = NIODeadline.now()
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+				
+				let aliceSignalIterator = alicesHandshakeSignals.makeAsyncConsumer()
+				let bobSignalIterator = bobsHandshakeSignals.makeAsyncConsumer()
+				if let incomingSignal = try await aliceSignalIterator.next() {
+					#expect(incomingSignal > firstWrite)
+					#expect(incomingSignal < secondWrite)
+				}
+				if let incomingSignal = try await bobSignalIterator.next() {
+					#expect(incomingSignal > firstWrite)
+					#expect(incomingSignal < secondWrite)
+				}
+				
+				foo.cancelAll()
+				try await foo.waitForAll()
+				return
+			})
+		}
 
 		@Test func attemptMTUOverflow() async throws {
 //			let stringToSend = [UInt8](repeating: 65, count: 2000)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -288,12 +398,14 @@ extension WireguardSwiftTests {
 			let stringToSend = "Hello world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -343,12 +455,14 @@ extension WireguardSwiftTests {
 			let payload2 = tempPayload
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -405,12 +519,14 @@ extension WireguardSwiftTests {
 			}
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -450,7 +566,7 @@ extension WireguardSwiftTests {
 		}
 
 		@Test func sendSingleLargeMessage() async throws {
-			try await sendSinglePayload(payloadSize: 20_000_000, encryptedPacketHandler: DefaultEPH())
+			try await sendSinglePayload(payloadSize: 20_000_000, encryptedPacketProcessor: DefaultEPP())
 		}
 				
 		
@@ -461,16 +577,20 @@ extension WireguardSwiftTests {
 			let carolPayload = [UInt8](repeating: 1, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 				
+				let bobsHandshakeSignals4Alice = FIFO<NIODeadline, Swift.Error>()
+				let bobsHandshakeSignals4Carol = FIFO<NIODeadline, Swift.Error>()
 				let alicePeerFifo = FIFO<ByteBuffer, Swift.Error>()
 				let carolPeerFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30)), alicePeerFifo), (PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36002, internalKeepAlive: .seconds(30)), carolPeerFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30), inboundData: alicePeerFifo, inboundHandshakeSignal: bobsHandshakeSignals4Alice), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36002, internalKeepAlive: .seconds(30), inboundData: carolPeerFifo, inboundHandshakeSignal: bobsHandshakeSignals4Carol)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 				
-				let carolPeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<ByteBuffer, Swift.Error>())]
-				let carolInterface = try WGInterface<[UInt8]>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: DefaultEPH(), listeningPort: 36002)
+				let carolsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: carolsHandshakeSignals)]
+				let carolInterface = try WGInterface<[UInt8]>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36002)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -523,18 +643,20 @@ extension WireguardSwiftTests {
 			})
 		}
 		
-		fileprivate func sendSinglePayload(payloadSize:Int, encryptedPacketHandler: some EncryptedPacketHandler) async throws {
-			let payloadSize: Int = 10
+		fileprivate func sendSinglePayload(payloadSize:Int, encryptedPacketProcessor: some EncryptedPacketProcessor) async throws {
+			let payloadSize: Int = payloadSize
 			
 			let payload = [UInt8](repeating: 0, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [(PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20)), FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: encryptedPacketHandler, listeningPort: 36001)
+				let alicesHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<[UInt8]>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: encryptedPacketProcessor, listeningPort: 36001)
 
+				let bobsHandshakeSignals = FIFO<NIODeadline, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [(PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20)), aliceFifo)]
-				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketHandler: encryptedPacketHandler, listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<[UInt8]>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: encryptedPacketProcessor, listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()
@@ -567,16 +689,28 @@ extension WireguardSwiftTests {
 			})
 		}
 		
-		@Test(arguments: [1,2,3,4,5,10,15,20,25]) func testDropXPercent(percent:Int) async throws {
-			try await sendSinglePayload(payloadSize: 10_000_000, encryptedPacketHandler: DropXPercentWrites(percent: percent))
+		@Test(.serialized, arguments: [1,2,3,4,5,10,15,20,25]) func testDropXPercentOutbound(percent:Int) async throws {
+			try await sendSinglePayload(payloadSize: 10_000_000, encryptedPacketProcessor: DropXPercentOutbound(percent: percent))
 		}
 		
-		@Test func testDropInitiationPackets() async throws {
-			try await sendSinglePayload(payloadSize: 10, encryptedPacketHandler: DropInitiationHandshakes())
+		@Test func testDropInboundInitiationPackets() async throws {
+			try await sendSinglePayload(payloadSize: 10, encryptedPacketProcessor: DropInbound(packetType: .initiation, lengthOfTime: .seconds(120)))
 		}
 		
-		@Test func testCorruptBuffer() async throws {
-			try await sendSinglePayload(payloadSize: 10000, encryptedPacketHandler: CorruptByteBuffer())
+		@Test func testDropInboundResponsePackets() async throws {
+			try await sendSinglePayload(payloadSize: 10, encryptedPacketProcessor: DropInbound(packetType: .response, lengthOfTime: .seconds(120)))
+		}
+		
+		@Test func testDropInboundDataPackets() async throws {
+			try await sendSinglePayload(payloadSize: 10000, encryptedPacketProcessor: DropInbound(packetType: .data, lengthOfTime: .seconds(30)))
+		}
+		
+		@Test func testCorruptOutbound() async throws {
+			try await sendSinglePayload(payloadSize: 10000, encryptedPacketProcessor: CorruptOutbound())
+		}
+		
+		@Test func testEndpointChange() async throws {
+			try await sendSinglePayload(payloadSize: 10000, encryptedPacketProcessor: ChangeEndpoint())
 		}
 	}
 }

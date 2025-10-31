@@ -1,41 +1,29 @@
 import NIO
 import Logging
 import RAW
-import RAW_dh25519
-import RAW_chachapoly
 import wireguard_crypto_core
 
-internal final class EncryptedHandler:ChannelDuplexHandler, @unchecked Sendable {
-	/// errors that may be fired by the PacketHandler
-	internal enum Error:Swift.Error {
-		/// specifies that the packet length does not match the expected length for the giveC, @unchecked Sendabn packet type
-		/// - parameter type: the type of packet that was expected
-		/// - parameter length: the length of the packet that was received
-		case invalidPacketLengthForType(type:UInt8, length:Int)
-		/// thrown when a packet type is received on the listening socket but that packet type is not recognized.
-		/// - parameter type: the type of packet that was not recognized
-		case packetTypeUnrecognized(type:UInt8)
-	}
-	typealias InboundIn = (Endpoint, Message.NIO)
-	typealias InboundOut = (Endpoint, Message.NIO)
+internal final class EncryptedPacketHandler:ChannelDuplexHandler, @unchecked Sendable {
+	internal typealias InboundIn = (Endpoint, Message.NIO)
+	internal typealias InboundOut = (Endpoint, Message.NIO)
 	
 	internal typealias OutboundIn = AddressedEnvelope<ByteBuffer>
 	internal typealias OutboundOut = AddressedEnvelope<ByteBuffer>
 
-	private var eph:EncryptedPacketHandler
+	private var epp:EncryptedPacketProcessor
 	/// logger instance for this handler
 	private let log:Logger
 
-	internal init(eph: some EncryptedPacketHandler, logLevel:consuming Logger.Level) {
+	internal init(epp: some EncryptedPacketProcessor, logLevel:consuming Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
 		buildLogger.logLevel = logLevel
 		log = buildLogger
-		self.eph = eph
+		self.epp = epp
 	}
 }
 
 // MARK: Events
-extension EncryptedHandler {
+extension EncryptedPacketHandler {
 	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
 		log.debug("handler added to pipeline.")
 	}
@@ -51,25 +39,27 @@ extension EncryptedHandler {
 }
 
 // MARK: Read
-extension EncryptedHandler {
+extension EncryptedPacketHandler {
 	internal func channelRead(context:borrowing ChannelHandlerContext, data:NIOAny) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var unwrappedData = unwrapInboundIn(data)
-		eph.willReadInbound(&unwrappedData.1)
+		epp.willReadInbound(&unwrappedData.1)
 		context.fireChannelRead(wrapInboundOut(unwrappedData))
 	}
 }
 
 // MARK: Write
-extension EncryptedHandler {
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+extension EncryptedPacketHandler {
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) throws {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var unwrappedData = unwrapOutboundIn(data)
-		eph.willWriteOutbound(&unwrappedData.data)
+		var endpoint = try Endpoint(unwrappedData.remoteAddress)
+		epp.willWriteOutbound(&unwrappedData.data, ep:&endpoint)
+		unwrappedData.remoteAddress = SocketAddress(endpoint)
 		context.write(wrapOutboundOut(unwrappedData), promise:promise)
 	}
 
@@ -77,7 +67,6 @@ extension EncryptedHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		log.trace("flushing...")
 		context.flush()
 	}
 }

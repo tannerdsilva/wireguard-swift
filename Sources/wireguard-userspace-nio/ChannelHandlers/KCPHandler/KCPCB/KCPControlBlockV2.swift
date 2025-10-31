@@ -495,16 +495,6 @@ extension KCPControlBlock {
 				log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(node.value!.data.header.sequenceNumber)", "segment_command":"\(node.value!.data.header.command)", "segment_data_length":"\(node.value!.data.header.dataLength)", "segment_fragment_id":"\(node.value!.data.header.fragmentID)", "segment_timestamp":"\(node.value!.data.header.timestamp)", "segment_una":"\(node.value!.data.header.una)"])
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)
 				writerCount &+= 1
-				
-				// Dead link occured. Wipe send queue
-				if node.value!.data.runtimeMetadata.xmit >= 20 {
-					log.info("Deadling occured", metadata:["public-key_remote":"\(peerPublicKey)"])
-					for (node, _) in outboundInBuffer.makeIterator() {
-						node.value!.ackPromise?.fail(DeadlinkError())
-					}
-					outboundInBuffer.clear()
-					break
-				}
 			}
 		}
 		// If resent at all, need to shorten congestion window

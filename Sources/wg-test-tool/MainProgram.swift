@@ -33,7 +33,7 @@ struct CLI:AsyncParsableCommand {
 		var privateKey:MemoryGuarded<RAW_dh25519.PrivateKey>
 		
 		func run() throws {
-			var publicKey = PublicKey(privateKey: privateKey)
+			let publicKey = PublicKey(privateKey: privateKey)
 			let publicKeyBase64 = String(RAW_base64.encode(publicKey))
 			print("Public Key: \(publicKeyBase64)")
 		}
@@ -88,12 +88,12 @@ struct CLI:AsyncParsableCommand {
 			// }
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [(PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30)), FIFO<ByteBuffer, Swift.Error>())]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.critical, encryptedPacketHandler: DefaultEPH(), listeningPort: 36001)
+				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: FIFO<NIODeadline, Swift.Error>())]
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.critical, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36001)
 				
 				let fifo = FIFO<ByteBuffer, Swift.Error>()
-				let peerPeers = [(PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30)), fifo)]
-				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.critical, encryptedPacketHandler: DefaultEPH(), listeningPort: 36000)
+				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30), inboundData: fifo, inboundHandshakeSignal: FIFO<NIODeadline, Swift.Error>())]
+				let peerInterface = try WGInterface<[UInt8]>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.critical, encryptedPacketProcessor: DefaultEPP(), listeningPort: 36000)
 
 				foo.addTask {
 					try await myInterface.run()
@@ -144,8 +144,8 @@ struct CLI:AsyncParsableCommand {
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
 				let fifo = FIFO<ByteBuffer, Swift.Error>()
-				let myPeers = [(PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30)), fifo)]
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, encryptedPacketHandler: DefaultEPH(), listeningPort: myPort)
+				let myPeers = [PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30), inboundData: fifo, inboundHandshakeSignal: FIFO<NIODeadline, Swift.Error>())]
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, encryptedPacketProcessor: DefaultEPP(), listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()
@@ -198,12 +198,12 @@ struct CLI:AsyncParsableCommand {
 			let cliLogger = Logger(label: "wg-test-tool.initiator")
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				var myPeers:[(peerInfo:PeerInfo, fifo:FIFO<ByteBuffer, Swift.Error>)] = []
+				var myPeers:[PeerInfo] = []
 				for i in 0..<peers.count {
 					let fifo = FIFO<ByteBuffer, Swift.Error>()
-					myPeers.append(((PeerInfo(publicKey:peers[i].publicKey, ipAddress:ipAddress, port: peers[i].port, internalKeepAlive: .seconds(30))), fifo))
+					myPeers.append(PeerInfo(publicKey: peers[i].publicKey, ipAddress: ipAddress, port: peers[i].port, internalKeepAlive: .seconds(30), inboundData: fifo, inboundHandshakeSignal: FIFO<NIODeadline, Swift.Error>()))
 				}
-				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, encryptedPacketHandler: DefaultEPH(), listeningPort: myPort)
+				let myInterface = try WGInterface<[UInt8]>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, encryptedPacketProcessor: DefaultEPP(), listeningPort: myPort)
 				
 				foo.addTask {
 					try await myInterface.run()
@@ -228,14 +228,14 @@ struct CLI:AsyncParsableCommand {
 				cliLogger.info("Reading data...")
 				for peer in myPeers {
 					foo.addTask {
-						let iterator = peer.fifo.makeAsyncConsumer()
+						let iterator = peer.inboundData.makeAsyncConsumer()
 						while(true) {
 							if let incomingData = try await iterator.next() {
 								// ANSI escape codes
 								let green = "\u{001B}[0;32m"
 								let reset = "\u{001B}[0;0m"
 								// Print green text, then reset back to normal
-								print("\(green)From peer \(peer.peerInfo.publicKey): \(incomingData.readableBytes))\(reset)")
+								print("\(green)From peer \(peer.publicKey): \(incomingData.readableBytes))\(reset)")
 							}
 						}
 					}

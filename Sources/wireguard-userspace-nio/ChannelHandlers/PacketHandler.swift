@@ -207,8 +207,7 @@ extension PacketHandler {
 			#if DEBUG
 			log.error("mtu for OutboundOut is exceeding the configured limit.", metadata:["outbound_size":"\(unwrappedData.data.readableBytes)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)"])
 			#endif
-			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:unwrappedData.data.readableBytes, mtuLimitOutbound:mtu.mtuOutboundOut))
-			return
+			fatalError()
 		}
 		packetsWrittenSinceLastFlush += 1
 		bytesWrittenSinceLastFlush += unwrappedData.bytesOnWire
