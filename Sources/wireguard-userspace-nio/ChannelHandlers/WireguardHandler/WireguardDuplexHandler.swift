@@ -243,6 +243,7 @@ extension WireguardHandler {
 					logger.debug("successfully validated handshake initiation. writing and flushing handshake response...", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)", "index_responder":"\(responderPeerIndex)", "public-key_remote":"\(initiatorStaticPublicKey)"])
 					switch writeMessage(.response(authResponse), to:endpoint, context:context, promise:nil) {
 						case true:
+							livePeerInfo.recentHandshakeTime = NIODeadline.now()
 							flushAfterChannelReadComplete = true
 						default:
 							// held - no need to flush now.

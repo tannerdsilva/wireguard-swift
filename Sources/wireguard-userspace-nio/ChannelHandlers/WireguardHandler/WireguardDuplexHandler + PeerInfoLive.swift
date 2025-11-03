@@ -137,7 +137,7 @@ extension PeerInfo.Live {
 			fatalError("updating nSend on a session that is not current")
 		}
 		switch currentSession.geometry {
-			case .selfInitiated(m:let m, mp:let mp):
+			case .selfInitiated(m:_, mp:_):
 				// check for the passive rehandshake threshold
 				if currentSession.establishedDate + WireguardHandler.rekeyAfterTime <= now {
 					try? launchHandshakeInitiationTask(context:context, now:now, initiatorStaticPrivateKey:initiationValues.mStaticPrivateKey)
@@ -176,7 +176,7 @@ extension PeerInfo.Live {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var logger = log
+		let logger = log
 		switch inputPositionExplicit {
 			case .current(let element):
 				// switch to evaluate if the current session has crossed the passive rehandshake threshold
@@ -290,7 +290,7 @@ extension PeerInfo.Live {
 
 						l.trace("transmitting handshake initiation message to remote peer.", metadata:["public-key_remote":"\(pubKey)"])
 
-						recentHandshakeTime = now
+						recentHandshakeTime = currentTime
 						// forge the authenticated message
 						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr, initiatorPeerIndex:upi)
 						let authenticatedPayload:Message.Initiation.Payload.Authenticated
@@ -392,7 +392,7 @@ extension PeerInfo.Live {
 extension PeerInfo.Live {
 	/// called when a peer initiated handshake is received and a response is going to be sent out. the provided c value pointer is used to derive the handshake keys.
 	internal borrowing func applyPeerInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
-		var logger = log
+		let logger = log
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		guard case .peerInitiated(m:_, mp:_) = element else {
@@ -416,13 +416,12 @@ extension PeerInfo.Live {
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingIndexValue.geometry.m)
 
 		// cancel the scheduled handshake initiation task
-		recentHandshakeTime = now
 		handshakeInitiationTask = nil
 	}
 
 	/// called when a handshake response is received for a self initiated handshake.
 	internal borrowing func applySelfInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
-		var logger = log
+		let logger = log
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		guard case .selfInitiated(m:_, mp:_) = element else {
