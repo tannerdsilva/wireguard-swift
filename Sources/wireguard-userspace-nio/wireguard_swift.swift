@@ -37,14 +37,19 @@ extension SocketAddress {
 @available(*, deprecated, renamed:"PeerInfo")
 public typealias Peer = PeerInfo
 
+public struct HandshakeInfo:Sendable {
+	public let recordedTime:NIODeadline
+	public let rtt:NIODeadline
+}
+
 public struct PeerInfo:Sendable {
 	public let publicKey:PublicKey
 	public let endpoint:Endpoint?
 	public let internalKeepAlive:TimeAmount?
 	public let inboundData:FIFO<ByteBuffer, Swift.Error>
-	public let inboundHandshakeSignal:FIFO<NIODeadline, Swift.Error>
+	public let inboundHandshakeSignal:FIFO<HandshakeInfo, Swift.Error>
 	
-	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>, inboundHandshakeSignal:FIFO<NIODeadline, Swift.Error>) {
+	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>, inboundHandshakeSignal:FIFO<HandshakeInfo, Swift.Error>) {
 		self.publicKey = publicKey
 		self.internalKeepAlive = internalKeepAlive
 		self.inboundData = inboundData

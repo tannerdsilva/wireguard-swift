@@ -40,9 +40,12 @@ extension PeerInfo {
 
 		private var rekeyAttemptTimeNow:NIODeadline? = nil
 		
-		private var handshakeCompletionSignals:FIFO<NIODeadline, Swift.Error>
+		private var handshakeCompletionSignals:FIFO<HandshakeInfo, Swift.Error>
 		
 		private var canHandshakeAgainAt:NIODeadline = NIODeadline.now()
+		internal var recentHandshakeTime:NIODeadline = NIODeadline.now()
+		
+		// save mac1 for receiving a cookie
 		private var savedMac1:Result.Bytes16? = nil
 		private var savedCookiePayload:(cookie:Message.Cookie.Payload, deadline:NIODeadline)? = nil
 
@@ -196,7 +199,7 @@ extension PeerInfo.Live {
 				}
 				rotation.next!.nVar.valueRecv = newValue
 				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
-				handshakeCompletionSignals.yield(now)
+				handshakeCompletionSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(recentHandshakeTime.uptimeNanoseconds))))
 				applyRotation(context:context, now:now)
 				if rotation.previous == nil {
 					var writeResult:Bool = false
@@ -287,6 +290,7 @@ extension PeerInfo.Live {
 
 						l.trace("transmitting handshake initiation message to remote peer.", metadata:["public-key_remote":"\(pubKey)"])
 
+						recentHandshakeTime = now
 						// forge the authenticated message
 						let (c, h, ephiPrivateKey, payload) = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:ipk, responderStaticPublicKey:pubKeyPtr, initiatorPeerIndex:upi)
 						let authenticatedPayload:Message.Initiation.Payload.Authenticated
@@ -412,6 +416,7 @@ extension PeerInfo.Live {
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingIndexValue.geometry.m)
 
 		// cancel the scheduled handshake initiation task
+		recentHandshakeTime = now
 		handshakeInitiationTask = nil
 	}
 
@@ -443,7 +448,7 @@ extension PeerInfo.Live {
 	
 		// cancel the scheduled handshake initiation task
 		handshakeInitiationTask = nil
-		handshakeCompletionSignals.yield(now)
+		handshakeCompletionSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(recentHandshakeTime.uptimeNanoseconds))))
 
 		// fire the handshake information to the channel
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))
