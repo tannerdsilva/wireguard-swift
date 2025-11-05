@@ -336,7 +336,6 @@ extension PeerInfo.Live {
 				// fire the error into the channel and cancel the handshake task
 				cc.accessContext { contextPtr in
 					l.error("error occurred during handshake initiation task: '\(String(describing:error))'", metadata:["public-key_remote":"\(pubKey)"])
-					contextPtr.pointee.fireErrorCaught(error)
 				}
 				self.handshakeInitiationTask = nil
 			}

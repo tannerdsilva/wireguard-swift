@@ -391,7 +391,6 @@ extension WireguardHandler {
 					}
 				} catch let error {
 					logger.error("error thrown while trying to write outbound data", metadata:["error":"\(error)"])
-					context.fireErrorCaught(error)
 					promise?.fail(error)
 					return false
 				}
