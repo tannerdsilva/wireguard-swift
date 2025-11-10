@@ -19,12 +19,12 @@ extension Array {
 }
 
 // SIVA Splicers (0_0)
-internal final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
-	internal typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
+public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
+	public typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
 	public typealias InboundOut = PeerAssociated<ByteBuffer> // Send to the Handoff handler
 	
-	internal typealias OutboundIn = PeerAssociated<ByteBuffer> // From writes from user
-	internal typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
+	public typealias OutboundIn = PeerAssociated<ByteBuffer> // From writes from user
+	public typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
 	// private var outboundOutDriver:WriteOrHold<OutboundOut>
 	
 	private var logger:Logger
@@ -41,12 +41,12 @@ internal final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendab
 		self.spliceByteLength = spliceByteLength
 	}
 
-	internal func handlerAdded(context: ChannelHandlerContext) {
+	public func handlerAdded(context: ChannelHandlerContext) {
 		logger.trace("handler added to pipeline.")
 	}
 
 	// Received kcp segment. Need to stitch together and send to handoff handler
-	internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+	public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		let inboundIn = unwrapInboundIn(data)
 		let key = inboundIn.publicKey
 		let byteBuffer = inboundIn.associatedValue
@@ -88,7 +88,7 @@ internal final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendab
 		}
 	}
 
-	internal func channelReadComplete(context: ChannelHandlerContext) {
+	public func channelReadComplete(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -96,7 +96,7 @@ internal final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendab
 		context.fireChannelReadComplete()
 	}
 	
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var associatedData = unwrapOutboundIn(data)
 		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
 		// determine if the data needs to be spliced into smaller segments

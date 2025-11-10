@@ -3,26 +3,25 @@ import Logging
 import RAW
 import RAW_dh25519
 
-struct KCPChannels: CustomChannels {
+public struct KCPChannels: CustomChannels {
 	
-	var head: KCPSegment.Handler
+	public var head: HeadChannel
 	
-	var tail: SplicerHandler
+	public var tail: TailChannel
 	
-	var body: [any ChannelDuplexHandler]
+	public var body: BodyChannels
 	
-	typealias HeadChannel = KCPSegment.Handler
+	public typealias HeadChannel = KCPSegment.Handler
 	
-	typealias TailChannel = SplicerHandler
+	public typealias TailChannel = SplicerHandler
 	
-	typealias BodyChannels = [any ChannelDuplexHandler]
+	public typealias BodyChannels = [any ChannelDuplexHandler & Sendable]
 	
-	typealias ArgumentType = (privateKey:MemoryGuarded<PrivateKey>, mtuLims:MTULimits, loglevel:Logger.Level)
+	public typealias ArgumentType = (privateKey:MemoryGuarded<PrivateKey>, loglevel:Logger.Level)
 	
-	init(_ env: ArgumentType) {
-		var mtuLimsCpy = env.mtuLims
-		head = KCPSegment.Handler(privateKey:env.privateKey, mtu:&mtuLimsCpy, logLevel:env.loglevel)
-		body = [KCPControlBlock.Handler(key:env.privateKey, mtu:&mtuLimsCpy, logLevel:env.loglevel)]
+	public init(_ env: ArgumentType, mtuLimits:inout MTULimits) {
+		head = KCPSegment.Handler(privateKey:env.privateKey, mtu:&mtuLimits, logLevel:env.loglevel)
+		body = [KCPControlBlock.Handler(key:env.privateKey, mtu:&mtuLimits, logLevel:env.loglevel)]
 		tail = SplicerHandler(logLevel:env.loglevel, spliceByteLength: 50_000)
 	}
 }

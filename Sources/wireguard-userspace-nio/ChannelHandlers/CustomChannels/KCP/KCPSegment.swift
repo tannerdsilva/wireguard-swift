@@ -2,7 +2,7 @@ import struct NIO.ByteBuffer
 import struct NIO.ByteBufferView
 
 /// a kcp segment packet that will be encoded and decoded to/from the wire.
-internal struct KCPSegment:Sendable, Hashable {
+public struct KCPSegment:Sendable, Hashable {
 	/// the header of the kcp segment
 	internal var header:Header
 	/// the data payload of the kcp segment (can be zero length)

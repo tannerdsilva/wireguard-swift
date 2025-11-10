@@ -1,9 +1,9 @@
 import NIO
 
 /// The protocol for the head custom channel communicating with the WireguardDuplexHandler. Ensures the Inbound and Outbound types match.
-protocol PeerAssociatedHeadHandler:ChannelDuplexHandler where OutboundOut == PeerAssociated<ByteBuffer>, InboundIn == PeerAssociated<ByteBuffer> {}
+public protocol PeerAssociatedHeadHandler:Sendable, ChannelDuplexHandler where OutboundOut == PeerAssociated<ByteBuffer>, InboundIn == PeerAssociated<ByteBuffer> {}
 /// The protocol for the tail custom channel communicating with the DataHandoffHandler. Ensures the Inbound and Outbound types match.
-protocol PeerAssociatedTailHandler:ChannelDuplexHandler where OutboundIn == PeerAssociated<ByteBuffer>, InboundOut == PeerAssociated<ByteBuffer> {}
+public protocol PeerAssociatedTailHandler:Sendable, ChannelDuplexHandler where OutboundIn == PeerAssociated<ByteBuffer>, InboundOut == PeerAssociated<ByteBuffer> {}
 
 /// Defines the set of custom channels inbetween data encryption and data handoff.
 ///
@@ -14,14 +14,14 @@ protocol PeerAssociatedTailHandler:ChannelDuplexHandler where OutboundIn == Peer
 /// The channels connect in the following order: HeadChannel - > BodyChannels[0] - > ... - > BodyChannels[n-1] - > TailChannel
 ///
 /// It is the responsibility of the user to ensure that the Inbound and Outbound variables align within these custom channels.
-protocol CustomChannels {
+public protocol CustomChannels:Sendable {
 	associatedtype HeadChannel:PeerAssociatedHeadHandler
 	associatedtype TailChannel:PeerAssociatedTailHandler
-	associatedtype BodyChannels: Sequence where BodyChannels.Element == any ChannelDuplexHandler
+	associatedtype BodyChannels:Sequence where BodyChannels.Element == any ChannelDuplexHandler & Sendable
 	associatedtype ArgumentType
 	
 	var head:HeadChannel { get }
 	var tail:TailChannel { get }
 	var body:BodyChannels { get }
-	init(_ env:ArgumentType)
+	init(_ env:ArgumentType, mtuLimits:inout MTULimits)
 }

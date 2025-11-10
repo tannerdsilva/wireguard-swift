@@ -141,17 +141,17 @@ extension KCPSegment {
 
 extension KCPSegment {
 
-	internal final class Handler:PeerAssociatedHeadHandler, @unchecked Sendable {
+	public final class Handler:PeerAssociatedHeadHandler, @unchecked Sendable {
 
 		/// the type that comes into the channel from the previous handler
-		internal typealias InboundIn = PeerAssociated<ByteBuffer>
+		public typealias InboundIn = PeerAssociated<ByteBuffer>
 		/// the type that goes out of the channel to the next handler
-		internal typealias InboundOut = PeerAssociated<KCPSegment>
+		public typealias InboundOut = PeerAssociated<KCPSegment>
 
 		/// the type that comes into the channel from the previous writer
-		internal typealias OutboundIn = PeerAssociated<KCPSegment>
+		public typealias OutboundIn = PeerAssociated<KCPSegment>
 		/// the type that goes out of the channel to the next writer
-		internal typealias OutboundOut = PeerAssociated<ByteBuffer>
+		public typealias OutboundOut = PeerAssociated<ByteBuffer>
 
 		/// the logger that is used for logging within this handler
 		private let log:Logger
@@ -180,17 +180,17 @@ extension KCPSegment {
 
 // MARK: Basic Events
 extension KCPSegment.Handler {
-	internal func handlerAdded(context:ChannelHandlerContext) {
+	public func handlerAdded(context:ChannelHandlerContext) {
 		encodeBuffer = context.channel.allocator.buffer(capacity:Int(mtu.mtuOutboundOut))
 		log.debug("handler added to pipeline.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)", "mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)"])
 	}
 
-	internal func handlerRemoved(context:ChannelHandlerContext) {
+	public func handlerRemoved(context:ChannelHandlerContext) {
 		encodeBuffer = nil
 		log.debug("handler removed from pipeline.")
 	}
 
-	internal func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
+	public func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
 		log.trace("user inbound event triggered. this handler is not user configurable in this way, so the passed event instance will be passed downstream...", metadata:["event_instance_type":"\(String(describing:type(of:event)))"])
 		context.fireUserInboundEventTriggered(event)
 	}
@@ -202,7 +202,7 @@ extension KCPSegment.Handler {
 	/// the error that is thrown when a kcp segment fails to parse from an inbound byte buffer
 	internal struct ParseFailure:Sendable, Swift.Error {}
 	/// the standard swiftnio channel read function that is called when data is read from the previous handler in the pipeline.
-	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
+	public func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
 		var encodedInbound = unwrapInboundIn(data)
 		var i = 0
@@ -213,7 +213,7 @@ extension KCPSegment.Handler {
 		}
 	}
 
-	internal func channelReadComplete(context:ChannelHandlerContext) {
+	public func channelReadComplete(context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -226,7 +226,7 @@ extension KCPSegment.Handler {
 // MARK: Write
 extension KCPSegment.Handler {
 	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)
 		if writtenStack.stack(context:context, segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, handler:self) == true {
 			outboundOutCount += 1
@@ -235,7 +235,7 @@ extension KCPSegment.Handler {
 		log.trace("stacked kcp segment for outbound write.", metadata:["public_key":"\(decodedOutbound.publicKey)", "stacked_segments":"\(stackedSegmentCount)", "outbound_writes_since_flush":"\(outboundOutCount)"])
 	}
 
-	internal func flush(context:ChannelHandlerContext) {
+	public func flush(context:ChannelHandlerContext) {
 		outboundOutCount = 0
 		stackedSegmentCount = 0
 		log.trace("flushing...")
