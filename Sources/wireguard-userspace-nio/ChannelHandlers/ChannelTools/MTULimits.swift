@@ -1,17 +1,17 @@
 /// used to clearly define the MTU limits for a pipeline member of a nio pipeline.
-internal struct MTULimits:Sendable {
+public struct MTULimits:Sendable {
 	/// the maximum transmission unit for inbound packets coming from the kernel to the wireguard nio interface. this is typically 1420 bytes for a standard wireguard interface.
-	internal let mtuInboundIn:Int
+	public let mtuInboundIn:Int
 	/// the maximum transmission unit for outbound packets going from the wireguard nio interface to the kernel. this is typically 1420 bytes for a standard wireguard interface.
-	internal let mtuOutboundOut:Int
+	public let mtuOutboundOut:Int
 	/// the maximum transmission unit for outbound packets that are being written to the wireguard nio interface. this is typically the normal MTU sub the wireguard overhead.
-	internal let mtuOutboundIn:Int
+	public let mtuOutboundIn:Int
 	/// the maximum transmission unit for inbound packets coming from the kernel to the wireguard nio interface after any processing has been done. this is typically the normal MTU sub the wireguard overhead.
-	internal let mtuInboundOut:Int
+	public let mtuInboundOut:Int
 	
 	/// creates a new MTULimits struct with the same MTU for all directions.
 	/// - parameter mtu: the MTU value to use for all directions.
-	internal init(
+	public init(
 		bidirectional mtu:Int
 	) {
 		self.mtuInboundIn = mtu
@@ -21,7 +21,7 @@ internal struct MTULimits:Sendable {
 	}
 
 	/// creates a new MTULimits struct with the specified MTU values.
-	internal init(
+	public init(
 		mtuInboundIn:Int,
 		mtuOutboundOut:Int,
 		mtuOutboundIn:Int,

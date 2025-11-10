@@ -123,6 +123,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 }
 
 extension WireguardHandler {
+	internal func setConfiguration<S>(_ newPeers:consuming S) where S:Sequence, S.Element == PeerInfo {
+		peerDeltaEngine.setPeers(newPeers, handler: self)
+	}
+}
+
+extension WireguardHandler {
 	internal func handlerAdded(context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop() 
@@ -140,6 +146,9 @@ extension WireguardHandler {
 					l.debug("removing peer from interface", metadata:["public-key_removed":"\(removedPublicKey)"])
 				})
 				operatingState = .channelEngaged
+			case .terminated:
+				log.debug("Channel re-engaging")
+				encodeBuffer = context.channel.allocator.buffer(capacity:1800)
 			default:
 				fatalError("this should never happen \(#file):\(#line)")
 		}
@@ -152,7 +161,7 @@ extension WireguardHandler {
 		let logger = log
 		logger.debug("handler removed from pipeline.")
 		operatingState = .terminated
-		peerDeltaEngine.setPeers(context:context, [], handler:self)
+		peerDeltaEngine.setPeers([], handler:self)
 	}
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
 		#if DEBUG

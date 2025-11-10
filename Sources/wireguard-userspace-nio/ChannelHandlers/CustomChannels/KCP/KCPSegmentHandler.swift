@@ -141,7 +141,7 @@ extension KCPSegment {
 
 extension KCPSegment {
 
-	internal final class Handler:ChannelDuplexHandler, @unchecked Sendable {
+	internal final class Handler:PeerAssociatedHeadHandler, @unchecked Sendable {
 
 		/// the type that comes into the channel from the previous handler
 		internal typealias InboundIn = PeerAssociated<ByteBuffer>

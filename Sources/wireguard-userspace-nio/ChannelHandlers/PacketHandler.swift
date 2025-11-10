@@ -55,6 +55,9 @@ internal final class PacketHandler:ChannelDuplexHandler, @unchecked Sendable {
 
 // MARK: Events
 extension PacketHandler {
+	internal func channelInactive(context: ChannelHandlerContext) {
+		log.debug("Channel is inactive")
+	}
 	internal func handlerAdded(context:borrowing ChannelHandlerContext) {
 		log.debug("handler added to pipeline.", metadata:["mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)"])
 	}

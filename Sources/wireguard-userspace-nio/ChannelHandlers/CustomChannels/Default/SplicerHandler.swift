@@ -19,7 +19,7 @@ extension Array {
 }
 
 // SIVA Splicers (0_0)
-internal final class SplicerHandler:ChannelDuplexHandler, @unchecked Sendable {
+internal final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
 	internal typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
 	public typealias InboundOut = PeerAssociated<ByteBuffer> // Send to the Handoff handler
 	

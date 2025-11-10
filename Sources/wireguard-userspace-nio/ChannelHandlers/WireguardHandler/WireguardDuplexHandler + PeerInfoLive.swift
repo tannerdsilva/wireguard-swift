@@ -49,11 +49,7 @@ extension PeerInfo {
 		private var savedMac1:Result.Bytes16? = nil
 		private var savedCookiePayload:(cookie:Message.Cookie.Payload, deadline:NIODeadline)? = nil
 
-		internal init(_ peerInfo:PeerInfo, handler:WireguardHandler, context:borrowing ChannelHandlerContext, logLevel:Logger.Level) {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
-
+		internal init(_ peerInfo:PeerInfo, handler:WireguardHandler, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:PeerInfo.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
 			buildLogger[metadataKey:"public-key_peer"] = "\(peerInfo.publicKey)"

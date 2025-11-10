@@ -207,6 +207,8 @@ extension KCPControlBlock.Handler {
 	}
 	
 	internal func handlerRemoved(context:ChannelHandlerContext) {
+		updateTask?.cancel()
+		updateTask = nil
 		logger.trace("handler removed from NIO pipeline.")
 	}	
 }

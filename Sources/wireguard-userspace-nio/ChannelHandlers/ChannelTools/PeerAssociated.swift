@@ -1,7 +1,7 @@
 import RAW_dh25519
 
 /// used to associate a type instance with a peer public key.
-internal struct PeerAssociated<AssociatedType:Sendable & Hashable>:Sendable {
+public struct PeerAssociated<AssociatedType:Sendable & Hashable>:Sendable {
 	/// the public key of the peer that this instance is associated with.
 	internal let publicKey:PublicKey
 	/// the value that is associated with the peer public key.

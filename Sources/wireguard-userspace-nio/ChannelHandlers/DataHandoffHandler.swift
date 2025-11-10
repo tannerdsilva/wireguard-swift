@@ -36,14 +36,12 @@ internal final class DataHandoffHandler:Sendable, ChannelInboundHandler {
 	internal func handlerRemoved(context:ChannelHandlerContext) {
 		let logger = log
 		logger.trace("handler removed from NIO pipeline.")
-		handoff.finish()
 	}
 
 	/// the function that is called when an error is caught in the pipeline. this will close the channel and finish the FIFO with the error.
 	internal func errorCaught(context: ChannelHandlerContext, error:any Error) {
 		let logger = log
 		logger.error("error caught in NIO pipeline. this error will be used to close the channel.", metadata:["error":"\(String(describing:error))"])
-		handoff.finish(throwing:error)
 		context.channel.close(promise:nil)
 	}
 	

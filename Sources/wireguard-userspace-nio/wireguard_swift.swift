@@ -34,9 +34,6 @@ extension SocketAddress {
 	}
 }
 
-@available(*, deprecated, renamed:"PeerInfo")
-public typealias Peer = PeerInfo
-
 public struct HandshakeInfo:Sendable {
 	public let recordedTime:NIODeadline
 	public let rtt:NIODeadline
@@ -94,6 +91,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 		case initialized
 		case engaging
 		case engaged(Channel)
+		case disconnected
 		case terminated
 	}
 	public struct InvalidInterfaceStateError:Swift.Error {}
@@ -108,6 +106,7 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let inboundHandshakeSignal = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
 	public let peerLogistics:PeerLogistics
 	private let listeningPort:Int
+	private var recentSavedConfig:[PeerInfo]
 
 	private let ph:PacketHandler
 	private let eph:EncryptedPacketHandler
@@ -116,23 +115,25 @@ public final actor WGInterface<TransactableDataType>:Sendable where Transactable
 	private let kcpcbh:KCPControlBlock.Handler
 	private let splcrh:SplicerHandler
 
-
-	/// Initialize with owners `PrivateKey` and the configuration `[Peer]`
+	/// Initialize with owners `PrivateKey` and the configuration `[PeerInfo]`
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, encryptedPacketProcessor: some EncryptedPacketProcessor, listeningPort:Int? = nil) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
 		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
-		self.listeningPort = (listeningPort == nil) ? 36361 : listeningPort!
+		self.listeningPort = listeningPort ?? 36361
 		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
 		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
+		
 		self.kcpsh = KCPSegment.Handler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.kcpcbh = KCPControlBlock.Handler(key:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.splcrh = SplicerHandler(logLevel:logLevel, spliceByteLength: 50_000)
+		
 		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
+		self.recentSavedConfig = initialConfiguration
 	}
 }
 
@@ -147,10 +148,9 @@ extension WGInterface:Service {
 		case soWriteBufferWaterMarkSetFailed
 	}
 	
-	/// Starts the WireGuard interface
-	public func run() async throws {
+	public func _run() async throws {
 		switch state {
-			case .initialized:
+			case .initialized, .disconnected:
 				state = .engaging
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
@@ -194,16 +194,14 @@ extension WGInterface:Service {
 					}
 					
 				let channel = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort).get()
-				try bootstrappedFuture.setSuccess(())
+				do { try bootstrappedFuture.setSuccess(()) } catch {}
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
-				Task {
-					try await peerLogistics.run()
-				}
 				do {
 					try await withTaskCancellationHandler {
 						try await withGracefulShutdownHandler {
 							try await channel.closeFuture.get()
+							self.state = .disconnected
 						} onGracefulShutdown: { [c = channel, l = logger] in
 							_ = c.close()
 							l.debug("invoking graceful shutdown of wireguard nio interface")
@@ -216,13 +214,44 @@ extension WGInterface:Service {
 					inboundData.finish(throwing: error)
 					throw error
 				}
-				inboundData.finish()
-				state = .terminated
+				switch state {
+					case .disconnected:
+						logger.error("Peer disconnected. Attempting to reconnect in \(5) seconds")
+						Task {
+							try? await Task.sleep(for: .seconds(5))
+							guard !Task.isCancelled else { return }
+							wgh.setConfiguration(recentSavedConfig)
+							do { try await _run() } catch { }
+						}
+					default:
+						inboundData.finish()
+						for (_, fifo) in await peerLogistics.info {
+							fifo.finish()
+						}
+						state = .terminated
+				}
 			case .engaged(_), .engaging, .terminated:
 				throw InvalidInterfaceStateError()
 		}
-
+	}
+	
+	/// Starts the WireGuard interface
+	public func run() async throws {
+		Task {
+			try await peerLogistics.run()
+		}
+		try await _run()
 		logger.info("server closed successfully.")
+	}
+	
+	public func setConfiguration(peerConfig:[PeerInfo]) throws {
+		switch state {
+			case .engaged(_):
+				wgh.setConfiguration(peerConfig)
+				recentSavedConfig = peerConfig
+			default:
+				throw InvalidInterfaceStateError()
+		}
 	}
 	
 	public func getChannel() throws -> Channel  {

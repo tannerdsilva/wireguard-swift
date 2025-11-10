@@ -52,19 +52,16 @@ extension WireguardHandler {
 			removalHandler = rhIn
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in initiallyConfigured {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:logLevel)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, logLevel:logLevel)
 			}
 			peers = buildPeers
 		}
 		
 		/// set the current set of peers that should be considered 'active' and 'enabled' for networking with this endpoint.
-		internal mutating func setPeers<S>(context:borrowing ChannelHandlerContext, _ newPeers:consuming S, handler:WireguardHandler) where S:Sequence, S.Element == PeerInfo {
-			#if DEBUG
-			context.eventLoop.assertInEventLoop()
-			#endif
+		internal mutating func setPeers<S>(_ newPeers:consuming S, handler:WireguardHandler) where S:Sequence, S.Element == PeerInfo {
 			var buildPeers = [PublicKey:PeerInfo.Live]()
 			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, context:context, logLevel:log.logLevel)
+				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, logLevel:log.logLevel)
 			}
 			peers = buildPeers
 		}
