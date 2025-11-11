@@ -7,20 +7,21 @@ import bedrock_ip
 import wireguard_crypto_core
 
 extension Endpoint: Codable {
-	enum CodingKeys: String, CodingKey { case endpoint }
 
 	public init(from decoder: Decoder) throws {
-		let container = try decoder.container(keyedBy: CodingKeys.self)
+		let container = try decoder.singleValueContainer()
+		let epString = try container.decode(String.self)
 
-		let epString = try container.decode(String.self, forKey: .endpoint)
 		let parts = epString.split(separator: ":", maxSplits: 1).map(String.init)
-		
-		self = Endpoint(Address(parts[0])!, port: Endpoint.Port(integerLiteral: Int(parts[1])!))
+		guard parts.count == 2 else {
+			fatalError("Endpoint failed to decode.")
+		}
+		self = Endpoint(Address(parts[0])!,
+						port: Endpoint.Port(integerLiteral: Int(parts[1])!))
 	}
-
 	public func encode(to encoder: Encoder) throws {
-		var container = encoder.container(keyedBy: CodingKeys.self)
-		try container.encode(String(describing: self), forKey: .endpoint)
+		var container = encoder.singleValueContainer()
+		try container.encode(String(describing: self))
 	}
 }
 
@@ -55,10 +56,10 @@ public struct PeerInfoNoFifo:PeerInformation, Sendable, Hashable {
 	public typealias inboundQueue = Never
 	public typealias inboundHandshakeSignal = Never
 	public var inboundData: Never {
-		fatalError()
+		fatalError("Access to Never")
 	}
 	public var inboundHandshakeSignal: Never {
-		fatalError()
+		fatalError("Access to Never")
 	}
 	
 	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
@@ -130,7 +131,7 @@ extension PeerInfoNoFifo:Codable {
 		let publicKeyString = try container.decode(String.self, forKey: .publicKey)
 		let bytes = try RAW_base64.decode(publicKeyString)
 		guard bytes.count == 32 else {
-			fatalError()
+			fatalError("Public Key failed to decode.")
 		}
 		let publicKey = RAW_dh25519.PublicKey(RAW_staticbuff: bytes)
 		let endpoint  = try container.decodeIfPresent(Endpoint.self, forKey: .endpoint)
