@@ -26,6 +26,8 @@ extension PeerInfo {
 
 		/// thrown when pending data could not be written because the handshake rekey attempt time was exceeded
 		internal struct RekeyAttemptTimeExceeded:Swift.Error {}
+		/// throws when a peer roams endpoints during it's handshake initiation task
+		internal struct RoamingEndpoint:Swift.Error {}
 		private var handshakeInitiationTask:(NIODeadline, RepeatedTask)? = nil {
 			didSet {
 				oldValue?.1.cancel()
@@ -271,6 +273,11 @@ extension PeerInfo.Live {
 		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:useInitialDelay, delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = logger, upi = usePeerIndex] _ in
 			guard let self = self else { return }
 			let currentTime = NIODeadline.now()
+			guard toEP == self.endpoint() else {
+				l.info("Halting handshake initiation task due to endpoint change.", metadata:["old_endpoint":"\(String(describing:toEP))", "new_endpoint":"\(String(describing:self.endpoint()))"])
+				self.handshakeInitiationTask = nil
+				throw RoamingEndpoint()
+			}
 			guard (self.rekeyAttemptTimeNow! + WireguardHandler.rekeyAttemptTime) > currentTime else {
 				// rekey time has passed, we can no longer attempt to make handshake initiations
 				l.info("halting handshake initiation emission. rekey attempt time exceeded.", metadata:["rekey_attempt_time":"\(String(describing:self.rekeyAttemptTimeNow))", "current_time":"\(currentTime)"])

@@ -10,7 +10,7 @@ public final class KeepAliveHandler:PeerAssociatedHeadHandler, @unchecked Sendab
 	/// logger instance for this handler
 	private let logger:Logger
 	private var sendTasks:[PublicKey:RepeatedTask] = [:]
-	private let config:[PeerInfo]
+	private var config:[PeerInfo]
 
 	public init(peers:[PeerInfo], logLevel:consuming Logger.Level) {
 		var buildLogger = Logger(label:"\(String(describing:Self.self))")
@@ -48,5 +48,26 @@ extension KeepAliveHandler {
 			sendTasks[key] = nil
 		}
 		logger.debug("handler removed from pipeline.")
+	}
+	public func userInboundEventTriggered(context: ChannelHandlerContext, event:Any) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		switch event {
+			case let e as InboundEvent:
+				switch e {
+					case .peerConfigUpdate(let newConfig):
+						context.fireUserInboundEventTriggered(event)
+						logger.info("Configuration updated, resetting keep alive updates")
+						for (key, task) in sendTasks {
+							task.cancel()
+							sendTasks[key] = nil
+						}
+						config = newConfig
+						scheduleRepeatedKeepAlives(context: context)
+				}
+			default:
+				context.fireUserInboundEventTriggered(event)
+		}
 	}
 }

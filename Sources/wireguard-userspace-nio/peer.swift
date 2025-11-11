@@ -24,31 +24,6 @@ extension Endpoint: Codable {
 	}
 }
 
-extension PublicKey: @retroactive Decodable {}
-extension PublicKey: @retroactive Encodable {}
-extension RAW_dh25519.PublicKey {
-
-	enum CodingKeys: String, CodingKey { case key }
-
-	public init(from decoder: Decoder) throws {
-		let container = try decoder.container(keyedBy: CodingKeys.self)
-
-		let base64 = try container.decode(String.self, forKey: .key)
-		let bytes = try RAW_base64.decode(base64)
-		guard bytes.count == 32 else {
-			throw DecodingError.dataCorrupted(
-				DecodingError.Context(codingPath: [CodingKeys.key],
-									  debugDescription: "Public key must be 32 bytes")
-			)
-		}
-		self = RAW_dh25519.PublicKey(RAW_staticbuff: bytes)
-	}
-
-	public func encode(to encoder: Encoder) throws {
-		var container = encoder.container(keyedBy: CodingKeys.self)
-		try container.encode(String(describing: self), forKey: .key)
-	}
-}
 
 extension TimeAmount: @retroactive Decodable {}
 extension TimeAmount: @retroactive Encodable {}
@@ -63,7 +38,52 @@ extension TimeAmount {
 	}
 }
 
-public struct PeerInfo:Sendable {
+public protocol PeerInformation:Sendable {
+	var publicKey:PublicKey { get }
+	var endpoint:Endpoint? { get }
+	var internalKeepAlive:TimeAmount? { get }
+	associatedtype inboundQueue = FIFO<ByteBuffer, Swift.Error>
+	var inboundData:inboundQueue { get }
+	associatedtype inboundHandshakeQueue = FIFO<HandshakeInfo, Swift.Error>
+	var inboundHandshakeSignal:inboundHandshakeQueue { get }
+}
+
+public struct PeerInfoNoFifo:PeerInformation, Sendable, Hashable {
+	public let publicKey:PublicKey
+	public let endpoint:Endpoint?
+	public let internalKeepAlive:TimeAmount?
+	public typealias inboundQueue = Never
+	public typealias inboundHandshakeSignal = Never
+	public var inboundData: Never {
+		fatalError()
+	}
+	public var inboundHandshakeSignal: Never {
+		fatalError()
+	}
+	
+	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
+		self.publicKey = publicKey
+		self.internalKeepAlive = internalKeepAlive
+		
+		if (ipAddress != nil && port != nil) {
+			do {
+				self.endpoint = try Endpoint(SocketAddress(ipAddress: ipAddress!, port: port!))
+			} catch {
+				self.endpoint = nil
+			}
+		} else {
+			self.endpoint = nil
+		}
+	}
+	
+	public init(publicKey: PublicKey, endpoint:Endpoint?, internalKeepAlive: TimeAmount?) {
+		self.publicKey = publicKey
+		self.internalKeepAlive = internalKeepAlive
+		self.endpoint = endpoint
+	}
+}
+
+public struct PeerInfo:PeerInformation, Sendable {
 	public let publicKey:PublicKey
 	public let endpoint:Endpoint?
 	public let internalKeepAlive:TimeAmount?
@@ -96,7 +116,7 @@ public struct PeerInfo:Sendable {
 	}
 }
 
-extension PeerInfo: Codable {
+extension PeerInfoNoFifo:Codable {
 	enum CodingKeys: String, CodingKey {
 		case publicKey
 		case endpoint
@@ -107,24 +127,24 @@ extension PeerInfo: Codable {
 		let container = try decoder.container(keyedBy: CodingKeys.self)
 
 		// the three codable fields
-		let publicKey = try container.decode(PublicKey.self, forKey: .publicKey)
+		let publicKeyString = try container.decode(String.self, forKey: .publicKey)
+		let bytes = try RAW_base64.decode(publicKeyString)
+		guard bytes.count == 32 else {
+			fatalError()
+		}
+		let publicKey = RAW_dh25519.PublicKey(RAW_staticbuff: bytes)
 		let endpoint  = try container.decodeIfPresent(Endpoint.self, forKey: .endpoint)
 		let keepAlive = try container.decodeIfPresent(TimeAmount.self, forKey: .internalKeepAlive)
 
-		let inboundData = FIFO<ByteBuffer, Swift.Error>()
-		let inboundHandshakeSignal = FIFO<HandshakeInfo, Swift.Error>()
-
 		self.init(publicKey: publicKey,
 				  endpoint:endpoint,
-				  internalKeepAlive: keepAlive,
-				  inboundData: inboundData,
-				  inboundHandshakeSignal: inboundHandshakeSignal)
+				  internalKeepAlive: keepAlive)
 	}
 
-	// MARK: Encoding ------------------------------------------------
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.container(keyedBy: CodingKeys.self)
-		try container.encode(publicKey, forKey: .publicKey)
+		let publicKeyString = String(RAW_base64.encode(publicKey))
+		try container.encode(publicKeyString, forKey: .publicKey)
 		try container.encodeIfPresent(endpoint, forKey: .endpoint)
 		try container.encodeIfPresent(internalKeepAlive, forKey: .internalKeepAlive)
 	}

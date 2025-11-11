@@ -167,8 +167,17 @@ extension WireguardHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		let logger = log
-		logger.trace("user inbound event triggered")
+		switch event {
+			case let e as InboundEvent:
+				switch e {
+					case .peerConfigUpdate(let newConfig):
+						context.fireUserInboundEventTriggered(event)
+						log.info("Configuration updated, updating live wg peers")
+						peerDeltaEngine.setPeers(newConfig, handler: self)
+				}
+			default:
+				context.fireUserInboundEventTriggered(event)
+		}
 	}
 }
 

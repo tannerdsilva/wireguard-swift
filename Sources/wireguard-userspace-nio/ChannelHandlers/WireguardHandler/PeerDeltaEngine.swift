@@ -59,11 +59,21 @@ extension WireguardHandler {
 		
 		/// set the current set of peers that should be considered 'active' and 'enabled' for networking with this endpoint.
 		internal mutating func setPeers<S>(_ newPeers:consuming S, handler:WireguardHandler) where S:Sequence, S.Element == PeerInfo {
-			var buildPeers = [PublicKey:PeerInfo.Live]()
-			for peer in newPeers {
-				buildPeers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, logLevel:log.logLevel)
+			for (key, _) in peers {
+				if(!newPeers.contains { $0.publicKey == key }) {
+					peers[key] = nil
+				}
 			}
-			peers = buildPeers
+			for peer in newPeers {
+				guard peers[peer.publicKey] != nil else {
+					peers[peer.publicKey] = PeerInfo.Live(peer, handler:handler, logLevel:log.logLevel)
+					continue
+				}
+				guard let ep = peer.endpoint else {
+					continue
+				}
+				peers[peer.publicKey]!.updateEndpoint(ep)
+			}
 		}
 		
 		/// lookup a peers instance by its public key.

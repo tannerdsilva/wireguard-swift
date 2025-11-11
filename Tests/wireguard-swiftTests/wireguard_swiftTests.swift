@@ -288,9 +288,8 @@ extension WireguardSwiftTests {
 				while(true) {
 					if let incomingDataBytes = try await iterator.next() {
 						let incomingData = Array(incomingDataBytes.readableBytesView)
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+						cliLogger.info("Received data that is \(incomingData.count) bytes long")
 						#expect(incomingData == messageBytes)
-						cliLogger.info("bob received data that is \(incomingData.count) bytes long")
 						foo.cancelAll()
 						try await foo.waitForAll()
 						return
@@ -348,6 +347,60 @@ extension WireguardSwiftTests {
 					#expect(incomingSignal.recordedTime > firstWrite)
 					#expect(incomingSignal.recordedTime < secondWrite)
 					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+				}
+				
+				foo.cancelAll()
+				try await foo.waitForAll()
+				return
+			})
+		}
+		
+		@Test func testPeerConfigurationUpdate() async throws {
+			let payloadSize: Int = 10
+			let payload = [UInt8](repeating: 0, count: payloadSize)
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 12012, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let aliceInterface = try WGInterface<KeepAlive>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePeers, cliLogger.logLevel), listeningPort: 36001)
+
+				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 12020, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobInterface = try WGInterface<KeepAlive>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPeers, cliLogger.logLevel), listeningPort: 36000)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+				
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
+				
+				let now = NIODeadline.now()
+				foo.addTask {
+					try await Task.sleep(for: .seconds(2))
+					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+					try await aliceInterface.setConfiguration(peerConfig: newAlicePeers)
+				}
+				
+				let aliceSignalIterator = alicesHandshakeSignals.makeAsyncConsumer()
+				let bobSignalIterator = bobsHandshakeSignals.makeAsyncConsumer()
+				if let incomingSignal = try await aliceSignalIterator.next() {
+					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
+					cliLogger.info("RTT: \(ms) ms")
+					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+					#expect(NIODeadline.now() >= now - .seconds(2))
+				}
+				if let incomingSignal = try await bobSignalIterator.next() {
+					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
+					cliLogger.info("RTT: \(ms) ms")
+					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+					#expect(NIODeadline.now() >= now - .seconds(2))
 				}
 				
 				foo.cancelAll()

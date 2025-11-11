@@ -191,8 +191,8 @@ extension WGInterface:Service {
 	
 	public func setConfiguration(peerConfig:[PeerInfo]) throws {
 		switch state {
-			case .engaged(_):
-				wgh.setConfiguration(peerConfig)
+			case .engaged(let channel):
+				channel.pipeline.fireUserInboundEventTriggered(InboundEvent.peerConfigUpdate(peerConfig))
 				recentSavedConfig = peerConfig
 			default:
 				throw InvalidInterfaceStateError()
