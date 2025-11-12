@@ -42,8 +42,6 @@ extension PeerInfo {
 
 		private var rekeyAttemptTimeNow:NIODeadline? = nil
 		
-		private var handshakeCompletionSignals:FIFO<HandshakeInfo, Swift.Error>
-		
 		private var canHandshakeAgainAt:NIODeadline = NIODeadline.now()
 		internal var recentHandshakeTime:NIODeadline = NIODeadline.now()
 		
@@ -64,7 +62,6 @@ extension PeerInfo {
 			let um = handler
 			wireguardHandler = um
 			selfInitiatedKeys = CurrentSelfInitiatedInfo(responderStaticPublicKey:peerInfo.publicKey, handler:um)
-			handshakeCompletionSignals = peerInfo.inboundHandshakeSignal
 		}
 				
 		deinit {
@@ -197,7 +194,6 @@ extension PeerInfo.Live {
 				}
 				rotation.next!.nVar.valueRecv = newValue
 				context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry:element.geometry))
-				handshakeCompletionSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(recentHandshakeTime.uptimeNanoseconds))))
 				applyRotation(context:context, now:now)
 				if rotation.previous == nil {
 					var writeResult:Bool = false
@@ -449,7 +445,6 @@ extension PeerInfo.Live {
 	
 		// cancel the scheduled handshake initiation task
 		handshakeInitiationTask = nil
-		handshakeCompletionSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(recentHandshakeTime.uptimeNanoseconds))))
 
 		// fire the handshake information to the channel
 		context.fireUserInboundEventTriggered(WireguardHandler.WireguardHandshakeNotification(sessionStartDate:now, publicKey:publicKey, geometry: element))

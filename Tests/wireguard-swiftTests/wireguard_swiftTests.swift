@@ -259,13 +259,11 @@ extension WireguardSwiftTests {
 			let stringToSend = "Hello, world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
@@ -302,13 +300,11 @@ extension WireguardSwiftTests {
 			let payloadSize: Int = 10
 			let payload = [UInt8](repeating: 0, count: payloadSize)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
@@ -332,8 +328,8 @@ extension WireguardSwiftTests {
 				let secondWrite = NIODeadline.now()
 				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
 				
-				let aliceSignalIterator = alicesHandshakeSignals.makeAsyncConsumer()
-				let bobSignalIterator = bobsHandshakeSignals.makeAsyncConsumer()
+				let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
+				let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
 				if let incomingSignal = try await aliceSignalIterator.next() {
 					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
 					cliLogger.info("RTT: \(ms) ms")
@@ -359,13 +355,11 @@ extension WireguardSwiftTests {
 			let payloadSize: Int = 10
 			let payload = [UInt8](repeating: 0, count: payloadSize)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 12012, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KeepAlive>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePeers, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 12020, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KeepAlive>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPeers, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
@@ -384,12 +378,12 @@ extension WireguardSwiftTests {
 				let now = NIODeadline.now()
 				foo.addTask {
 					try await Task.sleep(for: .seconds(2))
-					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 					try await aliceInterface.setConfiguration(peerConfig: newAlicePeers)
 				}
 				
-				let aliceSignalIterator = alicesHandshakeSignals.makeAsyncConsumer()
-				let bobSignalIterator = bobsHandshakeSignals.makeAsyncConsumer()
+				let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
+				let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
 				if let incomingSignal = try await aliceSignalIterator.next() {
 					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
 					cliLogger.info("RTT: \(ms) ms")
@@ -409,61 +403,15 @@ extension WireguardSwiftTests {
 			})
 		}
 
-		@Test func attemptMTUOverflow() async throws {
-//			let stringToSend = [UInt8](repeating: 65, count: 2000)
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-
-//				try await confirmation("confirm that alice cannot successfully send a message larger than the mtu", expectedCount:0) { freeConfirm in
-//					cliLogger.info("alice is writing...")
-//					do {
-//						try await aliceInterface.write(publicKey: bobPublicKey, data: stringToSend)
-//						freeConfirm.confirm(count:1)
-//					} catch let error as ChannelErrors.OutboundMessageMTUExceeded {
-//						cliLogger.info("alice encountered an error sending the oversized packet, so bob should not receive anything.")
-//						#expect(ChannelErrors.OutboundMessageMTUExceeded(attemptedOutboundSize:2000 + 32, mtuLimitOutbound:1400) == error)
-//						foo.cancelAll()
-//						try await foo.waitForAll()
-//						return
-//					}
-//				}
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
-			})
-		}
-
 		@Test func sendSmallStringSerialized() async throws {
 			let stringToSend = "Hello world!"
 			let messageBytes: [UInt8] = Array(stringToSend.utf8)
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
@@ -514,13 +462,11 @@ extension WireguardSwiftTests {
 			let payload2 = tempPayload
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
@@ -578,13 +524,11 @@ extension WireguardSwiftTests {
 			}
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
@@ -636,19 +580,15 @@ extension WireguardSwiftTests {
 			let carolPayload = [UInt8](repeating: 1, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 				
-				let bobsHandshakeSignals4Alice = FIFO<HandshakeInfo, Swift.Error>()
-				let bobsHandshakeSignals4Carol = FIFO<HandshakeInfo, Swift.Error>()
 				let alicePeerFifo = FIFO<ByteBuffer, Swift.Error>()
 				let carolPeerFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30), inboundData: alicePeerFifo, inboundHandshakeSignal: bobsHandshakeSignals4Alice), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36002, internalKeepAlive: .seconds(30), inboundData: carolPeerFifo, inboundHandshakeSignal: bobsHandshakeSignals4Carol)]
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30), inboundData: alicePeerFifo), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36002, internalKeepAlive: .seconds(30), inboundData: carolPeerFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 				
-				let carolsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: carolsHandshakeSignals)]
+				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 				let carolInterface = try WGInterface<KCPChannels>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (carolPrivateKey, cliLogger.logLevel), listeningPort: 36002)
 
 				foo.addTask {
@@ -708,14 +648,12 @@ extension WireguardSwiftTests {
 			let payload = [UInt8](repeating: 0, count: payloadSize)
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicesHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>(), inboundHandshakeSignal: alicesHandshakeSignals)]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: encryptedPacketProcessor, customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
 
-				let bobsHandshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo, inboundHandshakeSignal: bobsHandshakeSignals)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: encryptedPacketProcessor, customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
 
 				foo.addTask {
 					try await aliceInterface.run()

@@ -6,6 +6,7 @@ import RAW
 import wireguard_crypto_core
 import Synchronization
 import bedrock
+import bedrock_fifo
 
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// the type of value that is emitted by this handler to notify downstream inbound handlers that handshakes have occurred on the interface.
@@ -75,6 +76,8 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal var encodeBuffer:ByteBuffer!
 	/// the current operational state of the handler.
 	private var operatingState:State
+	
+	internal var handshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
 
 	/// used to indicate that a flush should be performed after channelReadComplete is called. returns back to false after channelReadComplete is called.
 	internal var flushAfterChannelReadComplete:Bool = false
@@ -125,6 +128,9 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 extension WireguardHandler {
 	internal func setConfiguration<S>(_ newPeers:consuming S) where S:Sequence, S.Element == PeerInfo {
 		peerDeltaEngine.setPeers(newPeers, handler: self)
+	}
+	internal func getHandshakeFifo() -> FIFO<HandshakeInfo, Swift.Error> {
+		return handshakeSignals
 	}
 }
 
@@ -298,6 +304,8 @@ extension WireguardHandler {
 					livePeerInfo.updateEndpoint(endpoint)
 					try livePeerInfo.applySelfInitiated(context:context, now:now, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(peerPub)"])
+					handshakeSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(livePeerInfo.recentHandshakeTime.uptimeNanoseconds)), publicKey: peerPub))
+
 					break;
 					
 				case .cookie(let cookiePayload):
@@ -362,6 +370,12 @@ extension WireguardHandler {
 						}
 					}
 
+					switch existingGeometryPositioned {
+						case .next(_):
+							handshakeSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(livePeerInfo.recentHandshakeTime.uptimeNanoseconds)), publicKey: identifiedPublicKey))
+						default:
+							break
+					}
 					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
 					context.fireChannelRead(wrapInboundOut(PeerAssociated<ByteBuffer>(publicKey:identifiedPublicKey, buffer:encodeBuffer)))
 			}

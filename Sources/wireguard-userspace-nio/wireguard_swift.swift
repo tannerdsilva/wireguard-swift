@@ -37,6 +37,7 @@ extension SocketAddress {
 public struct HandshakeInfo:Sendable {
 	public let recordedTime:NIODeadline
 	public let rtt:NIODeadline
+	public let publicKey:PublicKey
 }
 
 /// primary wireguard interface. this is how connections will be made.
@@ -57,7 +58,6 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
 	private let inboundData = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
-	private let inboundHandshakeSignal = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
 	public let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 	private var recentSavedConfig:[PeerInfo]
@@ -197,6 +197,10 @@ extension WGInterface:Service {
 			default:
 				throw InvalidInterfaceStateError()
 		}
+	}
+	
+	public func getHandshakeFifo() -> FIFO<HandshakeInfo, Swift.Error> {
+		return wgh.getHandshakeFifo()
 	}
 	
 	public func getChannel() throws -> Channel  {

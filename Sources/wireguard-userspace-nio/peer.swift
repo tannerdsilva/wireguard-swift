@@ -45,8 +45,36 @@ public protocol PeerInformation:Sendable {
 	var internalKeepAlive:TimeAmount? { get }
 	associatedtype inboundQueue = FIFO<ByteBuffer, Swift.Error>
 	var inboundData:inboundQueue { get }
-	associatedtype inboundHandshakeQueue = FIFO<HandshakeInfo, Swift.Error>
-	var inboundHandshakeSignal:inboundHandshakeQueue { get }
+}
+
+public struct PeerInfo:PeerInformation, Sendable {
+	public let publicKey:PublicKey
+	public let endpoint:Endpoint?
+	public let internalKeepAlive:TimeAmount?
+	public let inboundData:FIFO<ByteBuffer, Swift.Error>
+	
+	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>) {
+		self.publicKey = publicKey
+		self.internalKeepAlive = internalKeepAlive
+		self.inboundData = inboundData
+		
+		if (ipAddress != nil && port != nil) {
+			do {
+				self.endpoint = try Endpoint(SocketAddress(ipAddress: ipAddress!, port: port!))
+			} catch {
+				self.endpoint = nil
+			}
+		} else {
+			self.endpoint = nil
+		}
+	}
+	
+	public init(publicKey: PublicKey, endpoint:Endpoint?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>) {
+		self.publicKey = publicKey
+		self.internalKeepAlive = internalKeepAlive
+		self.inboundData = inboundData
+		self.endpoint = endpoint
+	}
 }
 
 public struct PeerInfoNoFifo:PeerInformation, Sendable, Hashable {
@@ -54,12 +82,8 @@ public struct PeerInfoNoFifo:PeerInformation, Sendable, Hashable {
 	public let endpoint:Endpoint?
 	public let internalKeepAlive:TimeAmount?
 	public typealias inboundQueue = Never
-	public typealias inboundHandshakeSignal = Never
 	public var inboundData: Never {
-		fatalError("Access to Never")
-	}
-	public var inboundHandshakeSignal: Never {
-		fatalError("Access to Never")
+		fatalError("Access to Never - file:\(#file), line: \(#line)")
 	}
 	
 	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?) {
@@ -80,39 +104,6 @@ public struct PeerInfoNoFifo:PeerInformation, Sendable, Hashable {
 	public init(publicKey: PublicKey, endpoint:Endpoint?, internalKeepAlive: TimeAmount?) {
 		self.publicKey = publicKey
 		self.internalKeepAlive = internalKeepAlive
-		self.endpoint = endpoint
-	}
-}
-
-public struct PeerInfo:PeerInformation, Sendable {
-	public let publicKey:PublicKey
-	public let endpoint:Endpoint?
-	public let internalKeepAlive:TimeAmount?
-	public let inboundData:FIFO<ByteBuffer, Swift.Error>
-	public let inboundHandshakeSignal:FIFO<HandshakeInfo, Swift.Error>
-	
-	public init(publicKey: PublicKey, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>, inboundHandshakeSignal:FIFO<HandshakeInfo, Swift.Error>) {
-		self.publicKey = publicKey
-		self.internalKeepAlive = internalKeepAlive
-		self.inboundData = inboundData
-		self.inboundHandshakeSignal = inboundHandshakeSignal
-		
-		if (ipAddress != nil && port != nil) {
-			do {
-				self.endpoint = try Endpoint(SocketAddress(ipAddress: ipAddress!, port: port!))
-			} catch {
-				self.endpoint = nil
-			}
-		} else {
-			self.endpoint = nil
-		}
-	}
-	
-	public init(publicKey: PublicKey, endpoint:Endpoint?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>, inboundHandshakeSignal:FIFO<HandshakeInfo, Swift.Error>) {
-		self.publicKey = publicKey
-		self.internalKeepAlive = internalKeepAlive
-		self.inboundData = inboundData
-		self.inboundHandshakeSignal = inboundHandshakeSignal
 		self.endpoint = endpoint
 	}
 }
