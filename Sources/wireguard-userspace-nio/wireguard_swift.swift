@@ -58,7 +58,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
 	private let inboundData = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
-	public let peerLogistics:PeerLogistics
+	private let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 	private var recentSavedConfig:[PeerInfo]
 
@@ -69,7 +69,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 	private let cch:any CustomChannels
 
 	/// Initialize with owners `PrivateKey` and the configuration `[PeerInfo]`
-	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, encryptedPacketProcessor: some EncryptedPacketProcessor, customChannelArgs:C.ArgumentType, listeningPort:Int? = nil) throws {
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, customChannelArgs:C.ArgumentType, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
@@ -81,6 +81,38 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
 		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.cch = C(customChannelArgs, mtuLimits: &mtuLims)
+		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
+		self.recentSavedConfig = initialConfiguration
+	}
+	
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws where C == KCPChannels{
+		var makeLogger = Logger(label: "\(String(describing:Self.self))")
+		makeLogger.logLevel = logLevel
+		self.logger = makeLogger
+		self.staticPrivateKey = staticPrivateKey
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
+		self.listeningPort = listeningPort ?? 36361
+		var mtuLims = MTULimits(bidirectional:Int(mtu))
+		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
+		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
+		self.cch = C((staticPrivateKey, logLevel), mtuLimits: &mtuLims)
+		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
+		self.recentSavedConfig = initialConfiguration
+	}
+	
+	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws where C == KeepAlive{
+		var makeLogger = Logger(label: "\(String(describing:Self.self))")
+		makeLogger.logLevel = logLevel
+		self.logger = makeLogger
+		self.staticPrivateKey = staticPrivateKey
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
+		self.listeningPort = listeningPort ?? 36361
+		var mtuLims = MTULimits(bidirectional:Int(mtu))
+		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
+		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
+		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
+		self.cch = C((initialConfiguration, logLevel), mtuLimits: &mtuLims)
 		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
 		self.recentSavedConfig = initialConfiguration
 	}
@@ -97,7 +129,18 @@ extension WGInterface:Service {
 		case soWriteBufferWaterMarkSetFailed
 	}
 	
-	public func _run() async throws {
+	actor TerminationFlag {
+		var properlyTerminated = false
+		func terminate() async {
+			properlyTerminated = true
+		}
+		func isTerminated() async -> Bool {
+			properlyTerminated
+		}
+	}
+	
+	/// Called by `run()`. Reruns the service if the channel disconnected due to an internet error.
+	private func _run() async throws {
 		switch state {
 			case .initialized, .disconnected:
 				state = .engaging
@@ -139,24 +182,39 @@ extension WGInterface:Service {
 					}
 					
 				let channel = try await bootstrap.bind(host:"0.0.0.0", port:self.listeningPort).get()
-				do { try bootstrappedFuture.setSuccess(()) } catch {}
+				do { try bootstrappedFuture.setSuccess(()) } catch let error{
+					fatalError("Channel could not initialize \(error)")
+				}
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
 				do {
+					let terminationFlag = TerminationFlag()
 					try await withTaskCancellationHandler {
 						try await withGracefulShutdownHandler {
 							try await channel.closeFuture.get()
-							self.state = .disconnected
+							if await !terminationFlag.isTerminated() {
+								self.state = .disconnected
+							}
 						} onGracefulShutdown: { [c = channel, l = logger] in
-							_ = c.close()
+							Task {
+								await terminationFlag.terminate()
+								_ = try await c.close()
+							}
 							l.debug("invoking graceful shutdown of wireguard nio interface")
 						}
 					} onCancel: { [c = channel, l = logger] in
-						_ = c.close()
+						Task {
+							await terminationFlag.terminate()
+							_ = try await c.close()
+						}
 						l.debug("invoking cancellation of wireguard nio interface")
 					}
 				} catch let error {
 					inboundData.finish(throwing: error)
+					for (_, fifo) in await peerLogistics.info {
+						fifo.finish(throwing: error)
+					}
+					wgh.getHandshakeFifo().finish(throwing: error)
 					throw error
 				}
 				switch state {
@@ -173,6 +231,7 @@ extension WGInterface:Service {
 						for (_, fifo) in await peerLogistics.info {
 							fifo.finish()
 						}
+						wgh.getHandshakeFifo().finish()
 						state = .terminated
 				}
 			case .engaged(_), .engaging, .terminated:
@@ -203,6 +262,7 @@ extension WGInterface:Service {
 		return wgh.getHandshakeFifo()
 	}
 	
+	/// Returns the engaged channel. Throws if the channel isn't active.
 	public func getChannel() throws -> Channel  {
 		switch state {
 			case .engaged(let channel):

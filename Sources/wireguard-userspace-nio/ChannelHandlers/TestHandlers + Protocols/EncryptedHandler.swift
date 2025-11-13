@@ -52,12 +52,12 @@ extension EncryptedPacketHandler {
 
 // MARK: Write
 extension EncryptedPacketHandler {
-	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) throws {
+	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
 		var unwrappedData = unwrapOutboundIn(data)
-		var endpoint = try Endpoint(unwrappedData.remoteAddress)
+		var endpoint = try! Endpoint(unwrappedData.remoteAddress)
 		epp.willWriteOutbound(&unwrappedData.data, ep:&endpoint)
 		unwrappedData.remoteAddress = SocketAddress(endpoint)
 		context.write(wrapOutboundOut(unwrappedData), promise:promise)

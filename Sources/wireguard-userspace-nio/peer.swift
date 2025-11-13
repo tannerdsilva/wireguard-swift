@@ -161,4 +161,10 @@ public final actor PeerLogistics:Sendable {
 			}
 		}
 	}
+	
+	deinit {
+		for (_, fifo) in info {
+			fifo.finish()
+		}
+	}
 }

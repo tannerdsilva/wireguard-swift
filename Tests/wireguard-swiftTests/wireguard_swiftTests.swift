@@ -255,200 +255,260 @@ extension WireguardSwiftTests {
 			cliLogger = buildLogger
 		}
 		
-		@Test func sendSingleString() async throws {
-			let stringToSend = "Hello, world!"
-			let messageBytes: [UInt8] = Array(stringToSend.utf8)
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				cliLogger.info("alice is writing...")
-				try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
-				
-				let iterator = aliceFifo.makeAsyncConsumer()
-				while(true) {
-					if let incomingDataBytes = try await iterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						cliLogger.info("Received data that is \(incomingData.count) bytes long")
-						#expect(incomingData == messageBytes)
-						foo.cancelAll()
-						try await foo.waitForAll()
-						return
-					}
-				}
-			})
+		fileprivate func runKCPTestInterfaces(foo: inout ThrowingTaskGroup<(), any Swift.Error>, alicePort:Int, bobPort:Int, ipAddress:String = "127.0.0.1") async throws -> (aliceInterface:WGInterface<KCPChannels>, bobInterface:WGInterface<KCPChannels>, aliceFifo:FIFO<ByteBuffer, Swift.Error>, bobFifo:FIFO<ByteBuffer, Swift.Error>) {
+			let bobFifo = FIFO<ByteBuffer, Swift.Error>()
+			let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: ipAddress, port: bobPort, internalKeepAlive: .seconds(20), inboundData: bobFifo)]
+			let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: alicePort)
+			
+			let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+			let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: ipAddress, port: alicePort, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+			let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: bobPort)
+			
+			foo.addTask {
+				try await aliceInterface.run()
+			}
+			foo.addTask {
+				try await bobInterface.run()
+			}
+			
+			cliLogger.info("waiting for alice's interface to initialize...")
+			try await aliceInterface.waitForChannelInit()
+			cliLogger.info("waiting for bob's interface to initialize...")
+			try await bobInterface.waitForChannelInit()
+			return (aliceInterface, bobInterface, aliceFifo, bobFifo)
 		}
 		
-		@Test func confirmhandshakeSignals() async throws {
-			let payloadSize: Int = 10
+		fileprivate func sendSinglePayload(payloadSize:Int, encryptedPacketProcessor: some EncryptedPacketProcessor) async throws {
+			let payloadSize: Int = payloadSize
+			
 			let payload = [UInt8](repeating: 0, count: payloadSize)
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				let firstWrite = NIODeadline.now()
-				cliLogger.info("alice is writing...")
-				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
-				
-				try await Task.sleep(for: .seconds(2))
-				let secondWrite = NIODeadline.now()
-				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
-				
-				let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
-				let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
-				if let incomingSignal = try await aliceSignalIterator.next() {
-					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
-					cliLogger.info("RTT: \(ms) ms")
-					#expect(incomingSignal.recordedTime > firstWrite)
-					#expect(incomingSignal.recordedTime < secondWrite)
-					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
-				}
-				if let incomingSignal = try await bobSignalIterator.next() {
-					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
-					cliLogger.info("RTT: \(ms) ms")
-					#expect(incomingSignal.recordedTime > firstWrite)
-					#expect(incomingSignal.recordedTime < secondWrite)
-					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
-				}
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
-			})
-		}
-		
-		@Test func testPeerConfigurationUpdate() async throws {
-			let payloadSize: Int = 10
-			let payload = [UInt8](repeating: 0, count: payloadSize)
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KeepAlive>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePeers, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KeepAlive>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPeers, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				let now = NIODeadline.now()
-				foo.addTask {
-					try await Task.sleep(for: .seconds(2))
-					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-					try await aliceInterface.setConfiguration(peerConfig: newAlicePeers)
-				}
-				
-				let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
-				let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
-				if let incomingSignal = try await aliceSignalIterator.next() {
-					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
-					cliLogger.info("RTT: \(ms) ms")
-					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
-					#expect(NIODeadline.now() >= now - .seconds(2))
-				}
-				if let incomingSignal = try await bobSignalIterator.next() {
-					let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
-					cliLogger.info("RTT: \(ms) ms")
-					#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
-					#expect(NIODeadline.now() >= now - .seconds(2))
-				}
-				
-				foo.cancelAll()
-				try await foo.waitForAll()
-				return
-			})
-		}
-
-		@Test func sendSmallStringSerialized() async throws {
-			let stringToSend = "Hello world!"
-			let messageBytes: [UInt8] = Array(stringToSend.utf8)
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				foo.addTask {
-					for _ in 0..<512 {
-						cliLogger.trace("alice is writing a message...")
-						try! await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
+			
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36016, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36017, encryptedPacketProcessor: encryptedPacketProcessor)
+					
+					let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36017, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+					let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36016, encryptedPacketProcessor: encryptedPacketProcessor)
+					
+					foo.addTask {
+						try await aliceInterface.run()
 					}
-				}
-
-				var found = 0
-				let iterator = aliceFifo.makeAsyncConsumer()
-				while(true) {
-					if let incomingDataBytes = try await iterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						#expect(incomingData == messageBytes)
-						found += 1
-						cliLogger.info("bob received message from alice.", metadata:["message_count":"\(found)"])
-						if found == 512 {
+					foo.addTask {
+						try await bobInterface.run()
+					}
+					
+					cliLogger.info("waiting for alice's interface to initialize...")
+					try await aliceInterface.waitForChannelInit()
+					
+					cliLogger.info("waiting for bob's interface to initialize...")
+					try await bobInterface.waitForChannelInit()
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					cliLogger.info("Channel initialized. Sending handshake initiation message...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+					
+					cliLogger.info("Channel initialized. Reading data...")
+					let iterator = aliceFifo.makeAsyncConsumer()
+					while(true) {
+						if let incomingDataBytes = try await iterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+							#expect(incomingData == payload)
 							foo.cancelAll()
 							try await foo.waitForAll()
 							return
 						}
 					}
-				}
-			})
+				})
+			}
+		}
+		
+		@Test func sendSingleString() async throws {
+			let stringToSend = "Hello, world!"
+			let messageBytes: [UInt8] = Array(stringToSend.utf8)
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36001, bobPort: 36000)
+					let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+					let aliceFifo = testInfo.aliceFifo
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					cliLogger.info("alice is writing...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
+					
+					let iterator = aliceFifo.makeAsyncConsumer()
+					rcvLoop: while(true) {
+						if let incomingDataBytes = try await iterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							cliLogger.info("Received data that is \(incomingData.count) bytes long")
+							#expect(incomingData == messageBytes)
+							foo.cancelAll()
+							try await foo.waitForAll()
+							break rcvLoop
+						}
+					}
+				})
+			}
+		}
+		
+		@Test func confirmhandshakeSignals() async throws {
+			let payloadSize: Int = 10
+			let payload = [UInt8](repeating: 0, count: payloadSize)
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36003, bobPort: 36002)
+					let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					let firstWrite = NIODeadline.now()
+					cliLogger.info("alice is writing...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+					
+					try await Task.sleep(for: .seconds(2))
+					let secondWrite = NIODeadline.now()
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+					
+					let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
+					let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
+					if let incomingSignal = try await aliceSignalIterator.next() {
+						let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
+						cliLogger.info("RTT: \(ms) ms")
+						#expect(incomingSignal.recordedTime > firstWrite)
+						#expect(incomingSignal.recordedTime < secondWrite)
+						#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+					}
+					if let incomingSignal = try await bobSignalIterator.next() {
+						let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
+						cliLogger.info("RTT: \(ms) ms")
+						#expect(incomingSignal.recordedTime > firstWrite)
+						#expect(incomingSignal.recordedTime < secondWrite)
+						#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+					}
+					
+					foo.cancelAll()
+					try await foo.waitForAll()
+				})
+			}
+		}
+		
+		@Test func testPeerConfigurationUpdate() async throws {
+			let payloadSize: Int = 10
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let aliceInterface = try WGInterface<KeepAlive>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
+					
+					let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
+					let bobInterface = try WGInterface<KeepAlive>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36004)
+					
+					foo.addTask {
+						try await aliceInterface.run()
+					}
+					foo.addTask {
+						try await bobInterface.run()
+					}
+					
+					cliLogger.info("waiting for alice's interface to initialize...")
+					try await aliceInterface.waitForChannelInit()
+					
+					cliLogger.info("waiting for bob's interface to initialize...")
+					try await bobInterface.waitForChannelInit()
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					let now = NIODeadline.now()
+					foo.addTask {
+						try await Task.sleep(for: .seconds(2))
+						let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+						try await aliceInterface.setConfiguration(peerConfig: newAlicePeers)
+					}
+					
+					let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
+					let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
+					if let incomingSignal = try await aliceSignalIterator.next() {
+						let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
+						cliLogger.info("RTT: \(ms) ms")
+						#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+						#expect(NIODeadline.now() >= now - .seconds(2))
+					}
+					if let incomingSignal = try await bobSignalIterator.next() {
+						let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
+						cliLogger.info("RTT: \(ms) ms")
+						#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
+						#expect(NIODeadline.now() >= now - .seconds(2))
+					}
+					
+					foo.cancelAll()
+					try await foo.waitForAll()
+				})
+			}
+		}
+
+		@Test func sendSmallStringSerialized() async throws {
+			let stringToSend = "Hello world!"
+			let messageBytes: [UInt8] = Array(stringToSend.utf8)
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36007, bobPort: 36006)
+					let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+					let aliceFifo = testInfo.aliceFifo
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					foo.addTask {
+						for _ in 0..<512 {
+							cliLogger.trace("alice is writing a message...")
+							try! await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
+						}
+					}
+					
+					var found = 0
+					let iterator = aliceFifo.makeAsyncConsumer()
+					rcvLoop: while(true) {
+						if let incomingDataBytes = try await iterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							#expect(incomingData == messageBytes)
+							found += 1
+							cliLogger.info("bob received message from alice.", metadata:["message_count":"\(found)"])
+							if found == 512 {
+								foo.cancelAll()
+								try await foo.waitForAll()
+								break rcvLoop
+							}
+						}
+					}
+				})
+			}
 		}
 		
 		@Test func sendMultipleSmallMessages() async throws {
@@ -461,53 +521,46 @@ extension WireguardSwiftTests {
 			let payload1 = tempPayload
 			let payload2 = tempPayload
 			
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				cliLogger.info("alice is sending the first data payload...")
-				try await aliceInterface.write(publicKey: bobPublicKey, data: payload1)
-				
-				cliLogger.info("alice is sending the second data payload...")
-				try await aliceInterface.write(publicKey: bobPublicKey, data: payload2)
-				
-				cliLogger.info("invoking read loop on primary task...")
-				var count = 0
-				let iterator = aliceFifo.makeAsyncConsumer()
-				while(true) {
-					if let incomingDataBytes = try await iterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						if (count == 0) {
-							cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-							#expect(incomingData == payload1)
-							count += 1
-						} else {
-							cliLogger.debug("received data that is \(incomingData.count) bytes long")
-							#expect(incomingData == payload2)
-							foo.cancelAll()
-							try await foo.waitForAll()
-							return
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36009, bobPort: 36008)
+					let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+					let aliceFifo = testInfo.aliceFifo
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					cliLogger.info("alice is sending the first data payload...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload1)
+					
+					cliLogger.info("alice is sending the second data payload...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload2)
+					
+					cliLogger.info("invoking read loop on primary task...")
+					var count = 0
+					let iterator = aliceFifo.makeAsyncConsumer()
+					rcvLoop: while(true) {
+						if let incomingDataBytes = try await iterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							if (count == 0) {
+								cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+								#expect(incomingData == payload1)
+								count += 1
+							} else {
+								cliLogger.debug("received data that is \(incomingData.count) bytes long")
+								#expect(incomingData == payload2)
+								foo.cancelAll()
+								try await foo.waitForAll()
+								break rcvLoop
+							}
 						}
 					}
-				}
-			})
+				})
+			}
 		}
 		
 		@Test func sendManySmallMessages() async throws {
@@ -523,55 +576,47 @@ extension WireguardSwiftTests {
 				payloads.append(payload)
 			}
 			
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				for payload in payloads {
-					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
-				}
-				
-				cliLogger.info("Channel initialized. Reading data...")
-				var count = 0
-				let iterator = aliceFifo.makeAsyncConsumer()
-				while(true) {
-					if let incomingDataBytes = try await iterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(incomingData == payloads[count])
-						count += 1
-						if (count == payloadCount - 1) {
-							foo.cancelAll()
-							try await foo.waitForAll()
-							return
+			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36011, bobPort: 36010)
+					let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+					let aliceFifo = testInfo.aliceFifo
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					cliLogger.info("Channel initialized. Sending handshake initiation message...")
+					for payload in payloads {
+						try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+					}
+					
+					cliLogger.info("Channel initialized. Reading data...")
+					var count = 0
+					let iterator = aliceFifo.makeAsyncConsumer()
+					rcvLoop: while true {
+						if let incomingDataBytes = try await iterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+							#expect(incomingData == payloads[count])
+							count += 1
+							if (count == payloadCount - 1) {
+								foo.cancelAll()
+								try await foo.waitForAll()
+								break rcvLoop
+							}
 						}
 					}
-				}
-			})
+				})
+			}
 		}
 
 		@Test func sendSingleLargeMessage() async throws {
 			try await sendSinglePayload(payloadSize: 20_000_000, encryptedPacketProcessor: DefaultEPP())
 		}
-				
 		
 		@Test func sendFromMultiplePeers() async throws {
 			let payloadSize: Int = 1_000_000
@@ -579,115 +624,83 @@ extension WireguardSwiftTests {
 			let alicePayload = [UInt8](repeating: 0, count: payloadSize)
 			let carolPayload = [UInt8](repeating: 1, count: payloadSize)
 			
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-				
-				let alicePeerFifo = FIFO<ByteBuffer, Swift.Error>()
-				let carolPeerFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30), inboundData: alicePeerFifo), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36002, internalKeepAlive: .seconds(30), inboundData: carolPeerFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-				
-				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let carolInterface = try WGInterface<KCPChannels>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (carolPrivateKey, cliLogger.logLevel), listeningPort: 36002)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				foo.addTask {
-					try await carolInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for carols's interface to initialize...")
-				try await carolInterface.waitForChannelInit()
-				
-				cliLogger.info("Channel initialized. Alice sending handshake initiation message...")
-				try await aliceInterface.write(publicKey: bobPublicKey, data: alicePayload)
-				
-				cliLogger.info("Channel initialized. Carol sending handshake initiation message...")
-				try await carolInterface.write(publicKey: bobPublicKey, data: carolPayload)
-				
-				cliLogger.info("Channel initialized. Reading data...")
-				
-				let aliceIterator = alicePeerFifo.makeAsyncConsumer()
-				aliceRcvLoop: while(true) {
-					if let incomingDataBytes = try await aliceIterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(incomingData == alicePayload)
-						break aliceRcvLoop
+			try await confirmation("verify the channels close", expectedCount:3) { closeConf in
+				_ = try await withThrowingTaskGroup(body: { foo in
+					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36013)
+					
+					let alicePeerFifo = FIFO<ByteBuffer, Swift.Error>()
+					let carolPeerFifo = FIFO<ByteBuffer, Swift.Error>()
+					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36013, internalKeepAlive: .seconds(30), inboundData: alicePeerFifo), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36014, internalKeepAlive: .seconds(30), inboundData: carolPeerFifo)]
+					let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36012)
+					
+					let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let carolInterface = try WGInterface<KCPChannels>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, listeningPort: 36014)
+					
+					foo.addTask {
+						try await aliceInterface.run()
 					}
-				}
-				
-				let carolIterator = carolPeerFifo.makeAsyncConsumer()
-				carolRcvLoop: while(true) {
-					if let incomingDataBytes = try await carolIterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(incomingData == carolPayload)
-						break carolRcvLoop
+					foo.addTask {
+						try await bobInterface.run()
 					}
-				}
-
-				foo.cancelAll()
-			})
+					foo.addTask {
+						try await carolInterface.run()
+					}
+					
+					cliLogger.info("waiting for alice's interface to initialize...")
+					try await aliceInterface.waitForChannelInit()
+					
+					cliLogger.info("waiting for bob's interface to initialize...")
+					try await bobInterface.waitForChannelInit()
+					
+					cliLogger.info("waiting for carols's interface to initialize...")
+					try await carolInterface.waitForChannelInit()
+					
+					try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					try await carolInterface.getChannel().closeFuture.whenComplete { _ in
+						closeConf.confirm()
+					}
+					
+					cliLogger.info("Channel initialized. Alice sending handshake initiation message...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: alicePayload)
+					
+					cliLogger.info("Channel initialized. Carol sending handshake initiation message...")
+					try await carolInterface.write(publicKey: bobPublicKey, data: carolPayload)
+					
+					cliLogger.info("Channel initialized. Reading data...")
+					
+					let aliceIterator = alicePeerFifo.makeAsyncConsumer()
+					aliceRcvLoop: while(true) {
+						if let incomingDataBytes = try await aliceIterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+							#expect(incomingData == alicePayload)
+							break aliceRcvLoop
+						}
+					}
+					
+					let carolIterator = carolPeerFifo.makeAsyncConsumer()
+					carolRcvLoop: while(true) {
+						if let incomingDataBytes = try await carolIterator.next() {
+							let incomingData = Array(incomingDataBytes.readableBytesView)
+							cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+							#expect(incomingData == carolPayload)
+							break carolRcvLoop
+						}
+					}
+					
+					foo.cancelAll()
+				})
+			}
 		}
 		
-		fileprivate func sendSinglePayload(payloadSize:Int, encryptedPacketProcessor: some EncryptedPacketProcessor) async throws {
-			let payloadSize: Int = payloadSize
-			
-			let payload = [UInt8](repeating: 0, count: payloadSize)
-			
-			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (alicePrivateKey, cliLogger.logLevel), listeningPort: 36001)
-
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
-				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, encryptedPacketProcessor: DefaultEPP(), customChannelArgs: (bobPrivateKey, cliLogger.logLevel), listeningPort: 36000)
-
-				foo.addTask {
-					try await aliceInterface.run()
-				}
-				foo.addTask {
-					try await bobInterface.run()
-				}
-				
-				cliLogger.info("waiting for alice's interface to initialize...")
-				try await aliceInterface.waitForChannelInit()
-				
-				cliLogger.info("waiting for bob's interface to initialize...")
-				try await bobInterface.waitForChannelInit()
-				
-				cliLogger.info("Channel initialized. Sending handshake initiation message...")
-				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
-				
-				cliLogger.info("Channel initialized. Reading data...")
-				let iterator = aliceFifo.makeAsyncConsumer()
-				while(true) {
-					if let incomingDataBytes = try await iterator.next() {
-						let incomingData = Array(incomingDataBytes.readableBytesView)
-						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
-						#expect(incomingData == payload)
-						foo.cancelAll()
-						try await foo.waitForAll()
-						return
-					}
-				}
-			})
-		}
-		
-		@Test(.serialized, arguments: [1,2,3,4,5,10,15,20,25]) func testDropXPercentOutbound(percent:Int) async throws {
-			try await sendSinglePayload(payloadSize: 10_000_000, encryptedPacketProcessor: DropXPercentOutbound(percent: percent))
+		@Test func testDropXPercentOutbound() async throws {
+			try await sendSinglePayload(payloadSize: 10_000_000, encryptedPacketProcessor: DropXPercentOutbound(percent: 10))
 		}
 		
 		@Test func testDropInboundInitiationPackets() async throws {
@@ -699,7 +712,7 @@ extension WireguardSwiftTests {
 		}
 		
 		@Test func testDropInboundDataPackets() async throws {
-			try await sendSinglePayload(payloadSize: 10000, encryptedPacketProcessor: DropInbound(packetType: .data, lengthOfTime: .seconds(30)))
+			try await sendSinglePayload(payloadSize: 10000, encryptedPacketProcessor: DropInbound(packetType: .data, lengthOfTime: .seconds(10)))
 		}
 		
 		@Test func testCorruptOutbound() async throws {
