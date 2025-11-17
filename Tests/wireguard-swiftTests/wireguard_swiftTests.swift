@@ -351,16 +351,13 @@ extension WireguardSwiftTests {
 					try await aliceInterface.write(publicKey: bobPublicKey, data: messageBytes)
 					
 					let iterator = aliceFifo.makeAsyncConsumer()
-					rcvLoop: while(true) {
-						if let incomingDataBytes = try await iterator.next() {
-							let incomingData = Array(incomingDataBytes.readableBytesView)
-							cliLogger.info("Received data that is \(incomingData.count) bytes long")
-							#expect(incomingData == messageBytes)
-							foo.cancelAll()
-							try await foo.waitForAll()
-							break rcvLoop
-						}
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
+						cliLogger.info("Received data that is \(incomingData.count) bytes long")
+						#expect(incomingData == messageBytes)
 					}
+					foo.cancelAll()
+					try await foo.waitForAll()
 				})
 			}
 		}
@@ -413,14 +410,15 @@ extension WireguardSwiftTests {
 		
 		@Test func testPeerConfigurationUpdate() async throws {
 			let payloadSize: Int = 10
+			let payload = [UInt8](repeating: 0, count: payloadSize)
 			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
 				_ = try await withThrowingTaskGroup(body: { foo in
 					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
-					let aliceInterface = try WGInterface<KeepAlive>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
+					let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
 					
-					let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
-					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
-					let bobInterface = try WGInterface<KeepAlive>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36004)
+					let oldAliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: oldAliceFifo)]
+					let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36004)
 					
 					foo.addTask {
 						try await aliceInterface.run()
@@ -442,26 +440,25 @@ extension WireguardSwiftTests {
 						closeConf.confirm()
 					}
 					
-					let now = NIODeadline.now()
+					foo.addTask {
+						cliLogger.info("alice is writing...")
+						try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+						cliLogger.info("data successfully sent")
+					}
+					
+					let newAliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let newBobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36005, internalKeepAlive: .seconds(1), inboundData: newAliceFifo)]
+					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
 					foo.addTask {
 						try await Task.sleep(for: .seconds(2))
-						let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+						try await bobInterface.setConfiguration(peerConfig: newBobPeers)
 						try await aliceInterface.setConfiguration(peerConfig: newAlicePeers)
 					}
 					
-					let aliceSignalIterator = await aliceInterface.getHandshakeFifo().makeAsyncConsumer()
-					let bobSignalIterator = await bobInterface.getHandshakeFifo().makeAsyncConsumer()
-					if let incomingSignal = try await aliceSignalIterator.next() {
-						let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
-						cliLogger.info("RTT: \(ms) ms")
-						#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
-						#expect(NIODeadline.now() >= now - .seconds(2))
-					}
-					if let incomingSignal = try await bobSignalIterator.next() {
-						let ms = Double(incomingSignal.rtt.uptimeNanoseconds) / 1_000_000
-						cliLogger.info("RTT: \(ms) ms")
-						#expect(incomingSignal.rtt.uptimeNanoseconds > 0)
-						#expect(NIODeadline.now() >= now - .seconds(2))
+					let iterator = newAliceFifo.makeAsyncConsumer()
+					if let incomingData = try await iterator.next() {
+						cliLogger.info("Received data that is \(incomingData.readableBytes) bytes long")
+						#expect(incomingData == ByteBuffer(bytes:payload))
 					}
 					
 					foo.cancelAll()

@@ -58,13 +58,14 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
 	private let inboundData = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
-	private let peerLogistics:PeerLogistics
+//	private let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 	private var recentSavedConfig:[PeerInfo]
 
 	private let ph:PacketHandler
 	private let eph:EncryptedPacketHandler
 	private let wgh:WireguardHandler
+	private let dhh:DataHandoffHandler
 	
 	private let cch:any CustomChannels
 
@@ -81,7 +82,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
 		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.cch = C(customChannelArgs, mtuLimits: &mtuLims)
-		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
+		self.dhh = DataHandoffHandler(initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.recentSavedConfig = initialConfiguration
 	}
 	
@@ -97,7 +98,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
 		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.cch = C((staticPrivateKey, logLevel), mtuLimits: &mtuLims)
-		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
+		self.dhh = DataHandoffHandler(initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.recentSavedConfig = initialConfiguration
 	}
 	
@@ -113,7 +114,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
 		self.wgh = WireguardHandler(privateKey:staticPrivateKey, mtu:&mtuLims, initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.cch = C((initialConfiguration, logLevel), mtuLimits: &mtuLims)
-		self.peerLogistics = PeerLogistics(initialConfiguration, channelFifoQueue: inboundData)
+		self.dhh = DataHandoffHandler(initialPeers: initialConfiguration, logLevel:logger.logLevel)
 		self.recentSavedConfig = initialConfiguration
 	}
 }
@@ -150,7 +151,7 @@ extension WGInterface:Service {
 				let bootstrap = DatagramBootstrap(group: group)
 					.channelOption(ChannelOptions.socketOption(.so_reuseaddr), value:1)
 					.channelOption(ChannelOptions.socketOption(.so_rcvbuf), value:8<<20)
-					.channelInitializer { [dhh = DataHandoffHandler(handoff:inboundData, logLevel:logger.logLevel), l = logger, customChannels = customChannels] channel in
+					.channelInitializer { [dhh = dhh, l = logger, customChannels = customChannels] channel in
 						let channelHandlers: [any ChannelHandler & Sendable] = [self.ph, self.eph, self.wgh] + customChannels + [dhh]
 						let initializationFuture = channel.eventLoop.makePromise(of:Void.self)
 						channel.getOption(ChannelOptions.socketOption(.so_rcvbuf)).whenComplete { [l = l] valueResult in
@@ -211,7 +212,7 @@ extension WGInterface:Service {
 					}
 				} catch let error {
 					inboundData.finish(throwing: error)
-					for (_, fifo) in await peerLogistics.info {
+					for (_, fifo) in dhh.getHandoffFifos() {
 						fifo.finish(throwing: error)
 					}
 					wgh.getHandshakeFifo().finish(throwing: error)
@@ -228,7 +229,7 @@ extension WGInterface:Service {
 						}
 					default:
 						inboundData.finish()
-						for (_, fifo) in await peerLogistics.info {
+						for (_, fifo) in dhh.getHandoffFifos() {
 							fifo.finish()
 						}
 						wgh.getHandshakeFifo().finish()
@@ -241,9 +242,6 @@ extension WGInterface:Service {
 	
 	/// Starts the WireGuard interface
 	public func run() async throws {
-		Task {
-			try await peerLogistics.run()
-		}
 		try await _run()
 		logger.info("server closed successfully.")
 	}
