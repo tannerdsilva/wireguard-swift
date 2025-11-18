@@ -388,6 +388,16 @@ extension PeerInfo.Live {
 
 // MARK: Handshake Apply
 extension PeerInfo.Live {
+	/// Called to check if we can send a response
+	internal func canSendResponse(myPublicKey:PublicKey) -> Bool {
+		guard handshakeInitiationTask != nil else {
+			return true
+		}
+		guard publicKey < myPublicKey else {
+			return true
+		}
+		return false
+	}
 	/// called when a peer initiated handshake is received and a response is going to be sent out. the provided c value pointer is used to derive the handshake keys.
 	internal borrowing func applyPeerInitiated(context:borrowing ChannelHandlerContext, now:NIODeadline, _ element:HandshakeGeometry<PeerIndex>, cPtr:UnsafeRawPointer, count:Int) throws {
 		let logger = log

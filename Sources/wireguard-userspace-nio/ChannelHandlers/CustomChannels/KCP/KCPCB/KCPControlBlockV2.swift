@@ -163,6 +163,9 @@ internal struct KCPControlBlock {
 	internal var readWindow:UInt32
 	internal var remoteWindow:UInt32
 	internal var flightBytes:UInt32 = 0
+	
+	internal var storedSendingGenesis:UInt64 = 0
+	internal var lastGenesis:UInt64 = 0
 
 	internal init(context:ChannelHandlerContext, peerPublicKey:PublicKey, conv:UInt16, mss:Int, writeWindow:UInt32, readWindow:UInt32, rmt_wnd:UInt32 = IKCP_WND_RCV, logLevel:Logger.Level) {
 		#if DEBUG
@@ -182,7 +185,8 @@ internal struct KCPControlBlock {
 		self.remoteWindow = rmt_wnd
 	}
 
-	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, congestionWindow:inout Int, maxCongestionWindow:inout Int, writeCounter:inout Int) throws {
+	@discardableResult
+	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, congestionWindow:inout Int, maxCongestionWindow:inout Int, writeCounter:inout Int) throws -> Bool {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		guard conv == associatedSegment.associatedValue.header.conversationID else {
@@ -213,6 +217,16 @@ internal struct KCPControlBlock {
 				
 				// Update congestion window. Logarithmic growth
 				congestionWindow += maxCongestionWindow / congestionWindow
+			case KCPSegment.Command.genesis:
+				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:iclock(NIODeadline.now()), una:rcv_nxt, len:0), data:ByteBufferView())
+				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
+				writeCounter += 1
+				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
+					parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
+					lastGenesis = associatedSegment.associatedValue.header.timestamp
+				} else if associatedSegment.associatedValue.header.timestamp != lastGenesis {
+					return true
+				}
 			case KCPSegment.Command.push:
 				// write the acknowledgement instead of pushing it to the acklist
 				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:associatedSegment.associatedValue.header.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
@@ -232,10 +246,11 @@ internal struct KCPControlBlock {
 				}
 			case KCPSegment.Command.probeResponse:
 				// Nothing to do
-				break;
+				break
 			case KCPSegment.Command.probeKill:
 				isInactive = true
 		}
+		return false
 	}
 }
 
@@ -243,7 +258,8 @@ internal struct KCPControlBlock {
 // MARK: Parse Inbound
 extension KCPControlBlock {
 	/// parse inbound data segment from a handler with its context
-	private mutating func parseInbound(data segment:KCPSegment, handler:KCPControlBlock.Handler, context:ChannelHandlerContext) {
+	@discardableResult
+	private mutating func parseInbound(data segment:KCPSegment, handler:KCPControlBlock.Handler, context:ChannelHandlerContext) -> Bool {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
@@ -271,6 +287,7 @@ extension KCPControlBlock {
 		}
 		
 		writeAllInboundOut(handler: handler, context: context)
+		return isDuplicate
 	}
 	
 	public mutating func writeAllInboundOut(handler:KCPControlBlock.Handler, context:ChannelHandlerContext) {
@@ -361,12 +378,14 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
-	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?) {
+	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, isGenesis:Bool) {
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
 		for offset in stride(from: 0, to: message.readableBytes, by: Int(mss)) {
 			let fragSize = min(Int(mss), message.readableBytes - offset)
 			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
-			let header = KCPSegment.Header(conv: conv, cmd: .push, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt16(fragSize))
+			let command = offset == 0 ? (isGenesis ? KCPSegment.Command.genesis : KCPSegment.Command.push) : KCPSegment.Command.push
+			if isGenesis { storedSendingGenesis = UInt64.random(in: UInt64.min...UInt64.max) }
+			let header = KCPSegment.Header(conv: conv, cmd: command, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt16(fragSize))
 			snd_nxt &+= 1
 			let seg = KCPSegment(header: header, data: view!.readableBytesView)
 			
@@ -402,7 +421,7 @@ extension KCPControlBlock {
 				node.value!.data.runtimeMetadata.xmit = 1
 				node.value!.data.runtimeMetadata.rto = rttInfo.rx_rto
 				node.value!.data.runtimeMetadata.resendts = now &+ node.value!.data.runtimeMetadata.rto
-				node.value!.data.header.timestamp = now
+				node.value!.data.header.timestamp = node.value!.data.header.command == .genesis ? storedSendingGenesis : now
 				node.value!.data.header.una = rcv_nxt
 				log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(node.value!.data.header.sequenceNumber)", "segment_command":"\(node.value!.data.header.command)", "segment_data_length":"\(node.value!.data.header.dataLength)", "segment_fragment_id":"\(node.value!.data.header.fragmentID)", "segment_timestamp":"\(node.value!.data.header.timestamp)", "segment_una":"\(node.value!.data.header.una)"])
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)
@@ -416,7 +435,7 @@ extension KCPControlBlock {
 				resendCount = Int(seg.data.runtimeMetadata.xmit)
 				node.value!.data.runtimeMetadata.rto = node.value!.data.runtimeMetadata.rto &+ (node.value!.data.runtimeMetadata.rto / 2)
 				node.value!.data.runtimeMetadata.resendts = now &+ node.value!.data.runtimeMetadata.rto
-				node.value!.data.header.timestamp = now
+				node.value!.data.header.timestamp = node.value!.data.header.command == .genesis ? storedSendingGenesis : now
 				node.value!.data.header.una = rcv_nxt
 				log.trace("writing kcp segment to next handler in pipeline.", metadata:["public-key_remote":"\(peerPublicKey)", "segment_sequence_number":"\(node.value!.data.header.sequenceNumber)", "segment_command":"\(node.value!.data.header.command)", "segment_data_length":"\(node.value!.data.header.dataLength)", "segment_fragment_id":"\(node.value!.data.header.fragmentID)", "segment_timestamp":"\(node.value!.data.header.timestamp)", "segment_una":"\(node.value!.data.header.una)"])
 				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:node.value!.data)), promise:node.value!.writePromise)

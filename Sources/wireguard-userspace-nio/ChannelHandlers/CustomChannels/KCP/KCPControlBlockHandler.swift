@@ -4,10 +4,6 @@ import RAW_dh25519
 import RAW_blake2
 import Logging
 import wireguard_crypto_core
-import kcp_nio
-
-@available(*, deprecated, renamed:"KCPControlBlock.Handler")
-internal typealias KcpControlBlockHandler = KCPControlBlock.Handler
 
 internal final class KCPLivePeer {
 	/// the rolling set of control blocks associated with this peer. index 0 is the newest control block. Index count-1 reserved for the magic ID control block
@@ -51,13 +47,16 @@ internal final class KCPLivePeer {
 		rotateActiveControlBlock(context: context, handler: handler)
 	}
 
-	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int) throws {
+	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int, isGenesis:Bool) throws {
 		let now = NIODeadline.now()
-		controlBlocks[0].handleWrite(context: context, handler: handler, message: message, writePromise: writePromise, ackPromise: ackPromise)
+		controlBlocks[0].handleWrite(context: context, handler: handler, message: message, writePromise: writePromise, ackPromise: ackPromise, isGenesis: isGenesis)
 		controlBlocks[0].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow, writerCount: &writeCounter)
 	}
 
-	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, writeCounter:inout Int) -> Bool {
+	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, writeCounter:inout Int) {
+		guard controlBlocks.count > 0 else {
+			return
+		}
 		let now = NIODeadline.now()
 		var receivedData:Bool = false
 		cbLoop: for i in 0..<count {
@@ -65,7 +64,11 @@ internal final class KCPLivePeer {
 				guard associatedSegment.associatedValue.header.conversationID == controlBlocks[i].conv else {
 					continue cbLoop
 				}
-				try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now, congestionWindow: &congestionWindow, maxCongestionWindow: &maxCongestionWindow, writeCounter:&writeCounter)
+				if (try controlBlocks[i].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now, congestionWindow: &congestionWindow, maxCongestionWindow: &maxCongestionWindow, writeCounter:&writeCounter)) {
+					reset(KCPControlBlock(context: context, peerPublicKey: controlBlocks[i].peerPublicKey, conv: 0, mss:handler.mtu.mtuOutboundIn, writeWindow: UInt32(handler.writeWindow), readWindow: UInt32(handler.readWindow), logLevel: logger.logLevel))
+					try controlBlocks[1].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now, congestionWindow: &congestionWindow, maxCongestionWindow: &maxCongestionWindow, writeCounter:&writeCounter)
+					return
+				}
 				if(congestionWindow > maxCongestionWindow) {
 					congestionWindow = maxCongestionWindow
 				}
@@ -79,13 +82,15 @@ internal final class KCPLivePeer {
 		if(receivedData == false) {
 			if(associatedSegment.associatedValue.header.command == .probeRequest) {
 				reprobe(context: context, handler: handler, associatedSegment: associatedSegment)
-			} else if (associatedSegment.associatedValue.header.conversationID == 0) {
-				return false
+			} else if (associatedSegment.associatedValue.header.command == .genesis) {
+				do {
+					reset(KCPControlBlock(context: context, peerPublicKey: controlBlocks[0].peerPublicKey, conv: 0, mss:handler.mtu.mtuOutboundIn, writeWindow: UInt32(handler.writeWindow), readWindow: UInt32(handler.readWindow), logLevel: logger.logLevel))
+					try controlBlocks[1].handleChannelRead(context: context, handler: handler, associatedSegment: associatedSegment, now:now, congestionWindow: &congestionWindow, maxCongestionWindow: &maxCongestionWindow, writeCounter:&writeCounter)
+				} catch { }
 			}
 		} else {
 			rotateActiveControlBlock(context: context, handler: handler)
 		}
-		return true
 	}
 
 	internal func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, writeCounter:inout Int) {
@@ -156,8 +161,8 @@ extension KCPControlBlock {
 		let mtu:MTULimits
 		var count = 0
 
-		private var readWindow:Int!
-		private var writeWindow:Int!
+		internal var readWindow:Int!
+		internal var writeWindow:Int!
 
 		private var writesSinceLastFlush:Int = 0
 		private var writesSinceChannelReadComplete:Int = 0
@@ -168,7 +173,7 @@ extension KCPControlBlock {
 			buildLogger[metadataKey:"public-key_self"] = "\(PublicKey(privateKey:key))"
 			logger = buildLogger
 			ourKey = PublicKey(privateKey:key)
-			mtu = MTULimits(mtuInboundIn:mtu.mtuInboundIn, mtuOutboundOut:mtu.mtuOutboundOut, mtuOutboundIn:mtu.mtuOutboundOut - MemoryLayout<Segment<ByteBufferView>.Header>.size, mtuInboundOut:mtu.mtuInboundIn - MemoryLayout<Segment<ByteBufferView>.Header>.size)
+			mtu = MTULimits(mtuInboundIn:mtu.mtuInboundIn, mtuOutboundOut:mtu.mtuOutboundOut, mtuOutboundIn:mtu.mtuOutboundOut - MemoryLayout<KCPSegment.Header>.size, mtuInboundOut:mtu.mtuInboundIn - MemoryLayout<KCPSegment.Header>.size)
 			self.mtu = mtu
 		}
 
@@ -220,11 +225,7 @@ extension KCPControlBlock.Handler {
 			kcp[key] = KCPLivePeer(mtu:mtu, logLevel:logger.logLevel, maxCongestionWindow: writeWindow)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:0, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel), context: context, handler: self)
 		}
-		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush) != true) {
-			// handle 'Disconnected' scenario
-			kcp[key]!.reset(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mss:mtu.mtuOutboundIn, writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
-			_ = kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush)
-		}
+		kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush)
 	}
 }
 
@@ -235,17 +236,19 @@ extension KCPControlBlock.Handler {
 		let data = unwrapOutboundIn(data)
 		let key = data.publicKey
 		// Check if control block exists
+		var isGenesis = false
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			kcp[key] = KCPLivePeer(mtu:mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mss:mtu.mtuOutboundIn, writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel), context: context, handler: self)
+			isGenesis = true
 		}
 
 		// Send data to control block
 		var iterationAdded = 0
 		do {
 			logger.trace("sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
-			try kcp[key]!.handleWrite(context: context, handler:self, message: data.associatedValue, writePromise: promise, ackPromise:nil, writeCounter:&iterationAdded)
+			try kcp[key]!.handleWrite(context: context, handler:self, message: data.associatedValue, writePromise: promise, ackPromise:nil, writeCounter:&iterationAdded, isGenesis: isGenesis)
 		} catch {
 			logger.error("error sending kcp data", metadata:["peer_public_key":"\(key)", "error_thrown":"\(error)"])
 		}

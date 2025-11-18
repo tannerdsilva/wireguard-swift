@@ -365,7 +365,6 @@ extension WireguardSwiftTests {
  						cliLogger.info("Received data that is \(incomingData.count) bytes long")
  						#expect(incomingData == payload)
  					}
-//					try await Task.sleep(for: .seconds(2))
  					try await aliceInterface.close()
  					let newAliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
  					foo.addTask {
@@ -378,14 +377,11 @@ extension WireguardSwiftTests {
  					}
  					try await newAliceInterface.write(publicKey: bobPublicKey, data: payload)
 					
- //					let iterator = aliceFifo.makeAsyncConsumer()
- //					for _ in 0..<2 {
- 						if let incomingDataBytes = try await iterator.next() {
- 							let incomingData = Array(incomingDataBytes.readableBytesView)
- 							cliLogger.info("Received data that is \(incomingData.count) bytes long")
- 							#expect(incomingData == payload)
- 						}
- //					}
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
+						cliLogger.info("Received data that is \(incomingData.count) bytes long")
+						#expect(incomingData == payload)
+					}
 					
  					foo.cancelAll()
  					try await foo.waitForAll()
@@ -575,6 +571,93 @@ extension WireguardSwiftTests.LiveSocketTests {
 
 	@Test func sendSingleLargeMessage() async throws {
 		try await sendSinglePayload(payloadSize: 20_000_000, encryptedPacketProcessor: DefaultEPP())
+	}
+	
+	@Test func sendSimultaneousLargeMessages() async throws {
+		let payloadSize: Int = 1_000_000
+		let payload = [UInt8](repeating: 0, count: payloadSize)
+		try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36001, bobPort: 36000)
+				let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+				let aliceFifo = testInfo.aliceFifo;
+				
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				
+				foo.addTask {
+					cliLogger.info("alice is writing...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+				}
+				
+				foo.addTask {
+					cliLogger.info("alice is writing...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+				}
+				
+				for _ in 0..<2 {
+					let iterator = aliceFifo.makeAsyncConsumer()
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
+						cliLogger.info("Received data that is \(incomingData.count) bytes long")
+						#expect(incomingData == payload)
+					}
+				}
+				
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
+	}
+	
+	@Test func sendLargePayloadTwoWay() async throws {
+		let payloadSize: Int = 1_000_000
+		let payload = [UInt8](repeating: 0, count: payloadSize)
+		try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let testInfo = try await runKCPTestInterfaces(foo: &foo, alicePort: 36001, bobPort: 36000)
+				let aliceInterface = testInfo.aliceInterface; let bobInterface = testInfo.bobInterface
+				let aliceFifo = testInfo.aliceFifo; let bobFifo = testInfo.bobFifo
+				
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				
+				foo.addTask {
+					cliLogger.info("alice is writing...")
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+				}
+				
+				foo.addTask {
+					cliLogger.info("bob is writing...")
+					try await bobInterface.write(publicKey: alicePublicKey, data: payload)
+				}
+				
+				let aliceIterator = aliceFifo.makeAsyncConsumer()
+				if let incomingDataBytes = try await aliceIterator.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.info("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload)
+				}
+				
+				let bobIterator = bobFifo.makeAsyncConsumer()
+				if let incomingDataBytes = try await bobIterator.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.info("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload)
+				}
+				
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
 	}
 	
 	@Test func sendFromMultiplePeers() async throws {

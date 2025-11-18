@@ -113,6 +113,8 @@ public struct KCPSegment:Sendable, Hashable {
 extension KCPSegment {
 	/// kcp commands that can be sent within a segment
 	internal enum Command:UInt8, Hashable, Equatable {
+		/// kcp command to signify a new connection
+		case genesis = 80
 		/// kcp command to signify the push of data
 		case push = 81
 		/// kcp command to signify an acknowledgement of received data
@@ -167,6 +169,8 @@ extension KCPSegment.Command:CustomDebugStringConvertible {
 	public var debugDescription:String {
 		get {
 			switch self {
+				case .genesis:
+					return "GEN"
 				case .push:
 					return "PUSH"
 				case .ack:

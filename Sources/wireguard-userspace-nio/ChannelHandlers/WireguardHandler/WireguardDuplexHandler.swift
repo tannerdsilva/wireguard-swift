@@ -257,6 +257,12 @@ extension WireguardHandler {
 						#endif
 						return
 					}
+					guard livePeerInfo.canSendResponse(myPublicKey: PublicKey(privateKey: privateKey)) == true else {
+						#if DEBUG
+						logger.info("conflicting initiation with peer. withdrawing response packet.", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
+						#endif
+						return
+					}
 					
 					let geometry = HandshakeGeometry<PeerIndex>.peerInitiated(m:responderPeerIndex, mp:payload.payload.initiatorPeerIndex)
 					livePeerInfo.updateEndpoint(endpoint)
