@@ -56,7 +56,7 @@ extension KeepAliveHandler {
 		switch event {
 			case let e as InboundEvent:
 				switch e {
-					case .peerConfigUpdate(let newConfig):
+					case .peerConfigUpdate(let newConfig, _):
 						context.fireUserInboundEventTriggered(event)
 						logger.info("Configuration updated, resetting keep alive updates")
 						for (key, task) in sendTasks {

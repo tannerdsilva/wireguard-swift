@@ -4,30 +4,6 @@ import RAW_chachapoly
 import RAW_base64
 import func Foundation.ceil
 
-// legacy support for DataMessage
-@available(*, deprecated, renamed: "Message.Data")
-public typealias DataMessage = Message.Data
-extension Message.Data {
-	@available(*, deprecated, renamed: "Payload")
-	public typealias DataPayload = Payload
-}
-
-// legay support for payload stored variable
-extension Message.Data.Payload {
-	@available(*, deprecated, renamed: "header")
-	public var payload:Message.Data.Header {
-		return header
-	}
-}
-
-extension Message.Data.Header {
-	/// responder's peer index (I_r)
-	@available(*, deprecated, renamed:"recipientIndex")
-	public var receiverIndex:PeerIndex {
-		return recipientIndex
-	}
-}
-
 extension Message {
 	public struct Data {
 		/// the header that is used for data messages in wireguard. in this case, header is a loosely used term, as it also includes the encryption tag "tail" which encodes at the end of the data sequence as opposed to before.

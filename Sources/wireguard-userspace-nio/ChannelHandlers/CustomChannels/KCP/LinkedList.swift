@@ -137,21 +137,10 @@ extension LinkedList:Sequence {
 
 			return (node, node.value!)
 		}
-		
-		internal func current() -> (Node, Element)? {
-			// Stop when we hit the sentinel again.
-			guard let node = nextNode, node !== sentinel else { return nil }
-
-			return (node, node.value!)
-		}
 	}
 
 	internal func makeIterator() -> Iterator {
 		return Iterator(start: front, sentinel: head)
-	}
-	
-	internal func makeLoopingIterator() -> Iterator {
-		return Iterator(start: head, sentinel: head)
 	}
 	
 	internal func makeReverseIterator() -> ReversedIterator {
@@ -193,61 +182,5 @@ extension LinkedList:Sequence {
 
 			return (node, node.value!)
 		}
-	}
-}
-
-extension LinkedList.Iterator {
-	/// Returns an iterator that would start at the node **after**
-	/// the element that this iterator will return on its next
-	/// call.  If the current iterator is already at the end,
-	/// `nil` is returned.
-	///
-	/// Example:
-	///     var it = list.makeIterator()
-	///     if let nextIt = it.nextIterator() { … }
-	///
-	/// - Returns: a new iterator positioned after the current
-	///            element, or `nil` when there is no next node.
-	internal func nextIterator() -> LinkedList.Iterator? {
-		// If this iterator has no element to return, we're at the end.
-		let current = self.nextNode
-		guard current!.next !== nil else {
-			return nil
-		}
-
-		// The node that would be returned by `next()`
-		let nodeThatWouldBeReturned = current
-
-		// The node *after* that one
-		let nextNode = nodeThatWouldBeReturned!.next
-
-		// If nextNode is the sentinel, the list is exhausted.
-		return LinkedList.Iterator(start: nextNode, sentinel: sentinel)
-	}
-	/// Returns an iterator that would start at the node **before**
-	/// the element this iterator would return on its next call.
-	///
-	/// • If the iterator is already exhausted (`currentNode == nil`) or
-	///   the list is empty, `nil` is returned.
-	///
-	/// The original iterator is **not** mutated.
-	///
-	/// - Returns: a new iterator positioned at the preceding node,
-	///            or `nil` if no such node exists.
-	internal func prevIterator() -> LinkedList.Iterator? {
-		// 1. If this iterator has nothing left, we’re at the end.
-		let current = self.nextNode
-		guard current!.prev !== nil else {
-			return nil
-		}
-		
-		// 2. The node that `next()` would return now
-		let nodeThatWouldBeReturned = current
-		
-		// 3. The node *before* that one
-		let prevNode = nodeThatWouldBeReturned!.prev
-		
-		// 4. If we’d hit the sentinel (or an empty list) we’re done.
-		return LinkedList.Iterator(start: prevNode, sentinel: sentinel)
 	}
 }

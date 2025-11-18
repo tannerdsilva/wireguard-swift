@@ -47,7 +47,8 @@ internal final class DataHandoffHandler:@unchecked Sendable, ChannelInboundHandl
 		switch event {
 			case let e as InboundEvent:
 				switch e {
-					case .peerConfigUpdate(let newConfig):
+					case .peerConfigUpdate(let newConfig, let promise):
+						promise.succeed()
 						context.fireUserInboundEventTriggered(event)
 						log.info("Configuration updated, updating data handoff fifos")
 						for (key, _) in handoffs {

@@ -1,6 +1,8 @@
 import NIO
 import Logging
 
+fileprivate struct DropAllError:Sendable, Swift.Error {}
+
 public final class DropAllHandler:PeerAssociatedTailHandler, @unchecked Sendable {
 	public typealias InboundIn = Never
 	public typealias OutboundOut = Never
@@ -14,5 +16,8 @@ public final class DropAllHandler:PeerAssociatedTailHandler, @unchecked Sendable
 	}
 	public func handlerAdded(context: ChannelHandlerContext) { logger.trace("handler added to pipeline.") }
 	public func channelRead(context: ChannelHandlerContext, data: NIOAny) { logger.trace("Dropping channelRead packet") }
-	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) { logger.trace("Dropping write packet") }
+	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
+		logger.trace("Dropping write packet")
+		promise?.fail(DropAllError())
+	}
 }

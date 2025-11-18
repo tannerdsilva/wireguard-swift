@@ -26,9 +26,6 @@ internal func iclock(_ time:NIODeadline) -> UInt64 {
 	let now = time.uptimeNanoseconds
 	return UInt64(now / 1_000_000) // nanoseconds → milliseconds
 }
-@inline(__always) private func imax(_ a: UInt32, _ b: UInt32) -> UInt32 {
-	return a > b ? a : b
-}
 @inline(__always) private func ibound(_ lower: UInt64, _ value: UInt64, _ upper: UInt64) -> UInt64 {
 	return min(max(value, lower), upper)
 }
@@ -57,34 +54,6 @@ let IKCP_THRESH_INIT:UInt32 = 2
 let IKCP_THRESH_MIN:UInt32 = 2
 let IKCP_PROBE_INIT:UInt32 = 7000
 let IKCP_PROBE_LIMIT:UInt32 = 120000
-
-extension KCPControlBlock {
-	internal struct MSSMeter:Sendable {
-		private var total:UInt64 = 0
-		private var count:UInt64 = 0
-		private let maxSamples:UInt64
-
-		internal init(maxSamples:UInt64) {
-			self.maxSamples = maxSamples
-		}
-
-		internal mutating func record(mss value: UInt32) {
-			total &+= UInt64(value)
-			count &+= 1
-			if count > maxSamples {
-				total >>= 1
-				count >>= 1
-			}
-		}
-
-		internal func currentMSS() -> UInt32? {
-			guard count > 0 else {
-				return nil
-			}
-			return UInt32(total / count)
-		}
-	}
-}
 /*
 
 LAW OF THE LAND
@@ -95,36 +64,6 @@ nodelay = 1 ALWAYS. this is not a param but a hard coded reality of the architec
 nocwnd NEVER. there WILL be a congestion window under ALL circumstances.
 
 */
-
-extension KCPControlBlock {
-	@available(*, deprecated, renamed:"writeWindow")
-	internal var snd_wnd:UInt32 {
-		get {
-			return writeWindow
-		}
-		set {
-			writeWindow = newValue
-		}
-	}
-	@available(*, deprecated, renamed:"readWindow")
-	internal var rcv_wnd:UInt32 {
-		get {
-			return readWindow
-		}
-		set {
-			readWindow = newValue
-		}
-	}
-	@available(*, deprecated, renamed:"remoteWindow")
-	internal var rmt_wnd:UInt32 {
-		get {
-			return remoteWindow
-		}
-		set {
-			remoteWindow = newValue
-		}
-	}
-}
 
 extension KCPControlBlock {
 	/// thrown when a kcp control block reaches a dead link state.
@@ -241,19 +180,6 @@ internal struct KCPControlBlock {
 		self.writeWindow = writeWindow
 		self.readWindow = readWindow
 		self.remoteWindow = rmt_wnd
-	}
-
-	internal mutating func handleChannelReadComplete(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
-		#if DEBUG
-		context.eventLoop.assertInEventLoop()
-		#endif
-		var logger = log
-		logger[metadataKey:"_func"] = "\(#function)"
-		if outboundOutSegmentsWrittenSinceChannelReadComplete > 0 {
-			context.flush()
-			outboundOutSegmentsWrittenSinceChannelReadComplete = 0
-			logger.trace("done reading \(outboundOutSegmentsWrittenSinceChannelReadComplete) segments.")
-		}
 	}
 
 	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, congestionWindow:inout Int, maxCongestionWindow:inout Int, writeCounter:inout Int) throws {
@@ -512,22 +438,5 @@ extension KCPControlBlock {
 			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt64(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
 			log.trace("writing probe request")
 		}
-	}
-}
-
-extension KCPControlBlock {
-	internal mutating func recomputeEffectiveWindow(context:borrowing ChannelHandlerContext, mssMeter:inout MSSMeter) {
-		// this is a stupid thing that is needed now but probably not needed by the time you raed this I hope (if not, plz fix)
-		guard flightBytes < writeWindow else {
-			return
-		}
-		let freeBytes = UInt32(writeWindow - flightBytes)
-		guard freeBytes > 0 else {
-			writeWindow = 0
-			return
-		}
-		let avgMSS = max(1, mssMeter.currentMSS() ?? mss)
-		let pktBudget = freeBytes / avgMSS
-		writeWindow = min(UInt32(cwndInfo.cwnd), pktBudget)
 	}
 }

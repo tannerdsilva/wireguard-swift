@@ -37,7 +37,7 @@ internal final class KCPLivePeer {
 		}
 	}
 
-	internal func insertLatestControlBlock(_ block:KCPControlBlock) {
+	internal func insertLatestControlBlock(_ block:KCPControlBlock, context:ChannelHandlerContext, handler: KCPControlBlock.Handler) {
 		controlBlocks.insert(block, at:0)
 		if(count == 1) {
 			controlBlocks[0].isActiveReceiver = true
@@ -48,7 +48,7 @@ internal final class KCPLivePeer {
 				logger.debug("Inserting new control block", metadata: ["activeConvID": "\(controlBlocks[i].conv)"])
 			}
 		}
-		
+		rotateActiveControlBlock(context: context, handler: handler)
 	}
 
 	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int) throws {
@@ -110,7 +110,6 @@ internal final class KCPLivePeer {
 				controlBlocks[i-1].isActiveReceiver = true
 				controlBlocks[i-1].writeAllInboundOut(handler: handler, context: context)
 				logger.debug("Rotating control block", metadata: ["newActiveConvID": "\(controlBlocks[i-1].conv)"])
-				// kill the
 				controlBlocks.remove(at: i)
 				return
 			}
@@ -125,7 +124,6 @@ internal final class KCPLivePeer {
 		logger.info("Connection reset. Recreating kcp control blocks.")
 	}
 	
-	//
 	internal func reprobe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>) {
 		context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:controlBlocks[0].peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:associatedSegment.associatedValue.header.conversationID, cmd:.probeKill, rcv_wnd_size:0, frg:0, sn:0, ts:0, una:0, len:0), data:ByteBufferView()))), promise:nil)
 	}
@@ -220,7 +218,7 @@ extension KCPControlBlock.Handler {
 		let key = data.publicKey
 		if (kcp[key] == nil) {
 			kcp[key] = KCPLivePeer(mtu:mtu, logLevel:logger.logLevel, maxCongestionWindow: writeWindow)
-			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:0, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel))
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:0, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel), context: context, handler: self)
 		}
 		if (kcp[key]!.handleChannelRead(context: context, handler: self, associatedSegment: data, writeCounter:&writesSinceLastFlush) != true) {
 			// handle 'Disconnected' scenario
@@ -240,7 +238,7 @@ extension KCPControlBlock.Handler {
 		if (kcp[key] == nil) {
 			// Create the magic id control block
 			kcp[key] = KCPLivePeer(mtu:mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
-			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mss:mtu.mtuOutboundIn, writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel))
+			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mss:mtu.mtuOutboundIn, writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel), context: context, handler: self)
 		}
 
 		// Send data to control block
@@ -290,9 +288,9 @@ extension KCPControlBlock.Handler {
 				 if (kcp[key] == nil) {
 				 	// Create the magic id control block
 				 	kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
-					 kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:0, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel))
+					 kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:0, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel), context: context, handler: self)
 				 }
-				kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:convID, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel))
+				kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:convID, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel), context: context, handler: self)
 
 			default:
 				context.fireUserInboundEventTriggered(event)

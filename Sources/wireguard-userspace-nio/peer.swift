@@ -141,30 +141,3 @@ extension PeerInfoNoFifo:Codable {
 		try container.encodeIfPresent(internalKeepAlive, forKey: .internalKeepAlive)
 	}
 }
-
-public final actor PeerLogistics:Sendable {
-	private let channelFifoQueue:FIFO<(PublicKey, ByteBuffer), Swift.Error>
-	var info: [PublicKey: FIFO<ByteBuffer, Swift.Error>] = [:]
-	
-	init(_ peers:[PeerInfo], channelFifoQueue: FIFO<(PublicKey, ByteBuffer), Swift.Error>) {
-		for peer in peers {
-			self.info[peer.publicKey] = peer.inboundData
-		}
-		self.channelFifoQueue = channelFifoQueue
-	}
-	
-	func run() async throws {
-		let iterator = channelFifoQueue.makeAsyncConsumer()
-		while(true) {
-			if let (key, incomingData) = try await iterator.next() {
-				info[key]!.yield(incomingData)
-			}
-		}
-	}
-	
-	deinit {
-		for (_, fifo) in info {
-			fifo.finish()
-		}
-	}
-}

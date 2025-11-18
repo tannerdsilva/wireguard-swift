@@ -1,4 +1,4 @@
-
+import NIO
 internal enum InboundEvent {
-	case peerConfigUpdate([PeerInfo])
+	case peerConfigUpdate([PeerInfo], EventLoopPromise<Void>)
 }

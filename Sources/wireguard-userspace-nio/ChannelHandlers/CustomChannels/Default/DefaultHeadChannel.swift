@@ -46,7 +46,7 @@ extension DefaultHeadChannel {
 
 // MARK: Write
 extension DefaultHeadChannel {
-	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) throws {
+	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif

@@ -61,6 +61,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 //	private let peerLogistics:PeerLogistics
 	private let listeningPort:Int
 	private var recentSavedConfig:[PeerInfo]
+	private let terminationFlag = TerminationFlag()
 
 	private let ph:PacketHandler
 	private let eph:EncryptedPacketHandler
@@ -189,7 +190,6 @@ extension WGInterface:Service {
 				state = .engaged(channel)
 				logger.info("WireGuard interface started successfully on \(channel.localAddress!)")
 				do {
-					let terminationFlag = TerminationFlag()
 					try await withTaskCancellationHandler {
 						try await withGracefulShutdownHandler {
 							try await channel.closeFuture.get()
@@ -198,14 +198,14 @@ extension WGInterface:Service {
 							}
 						} onGracefulShutdown: { [c = channel, l = logger] in
 							Task {
-								await terminationFlag.terminate()
+								await self.terminationFlag.terminate()
 								_ = try await c.close()
 							}
 							l.debug("invoking graceful shutdown of wireguard nio interface")
 						}
 					} onCancel: { [c = channel, l = logger] in
 						Task {
-							await terminationFlag.terminate()
+							await self.terminationFlag.terminate()
 							_ = try await c.close()
 						}
 						l.debug("invoking cancellation of wireguard nio interface")
@@ -246,11 +246,23 @@ extension WGInterface:Service {
 		logger.info("server closed successfully.")
 	}
 	
-	public func setConfiguration(peerConfig:[PeerInfo]) throws {
+	public func close() async throws {
 		switch state {
 			case .engaged(let channel):
-				channel.pipeline.fireUserInboundEventTriggered(InboundEvent.peerConfigUpdate(peerConfig))
+				await terminationFlag.terminate()
+				try await channel.close()
+			default:
+				throw InvalidInterfaceStateError()
+		}
+	}
+	
+	public func setConfiguration(peerConfig:[PeerInfo]) async throws {
+		switch state {
+			case .engaged(let channel):
+				let configPromise = channel.eventLoop.makePromise(of:Void.self)
+				channel.pipeline.fireUserInboundEventTriggered(InboundEvent.peerConfigUpdate(peerConfig, configPromise))
 				recentSavedConfig = peerConfig
+				try await configPromise.futureResult.get()
 			default:
 				throw InvalidInterfaceStateError()
 		}
@@ -269,7 +281,7 @@ extension WGInterface:Service {
 				throw InvalidInterfaceStateError()
 		}
 	}
-
+	
 	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
 		switch state {
 			case .engaged(let channel):
@@ -286,33 +298,5 @@ extension WGInterface:Service {
 		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
 		channel.pipeline.writeAndFlush(PeerAssociated(publicKey:publicKey, associatedValue:data), promise:myWritePromise)
 		try myWritePromise.futureResult.wait()
-	}
-}
-
-extension WGInterface:AsyncSequence {
-	public struct AsyncIterator:AsyncIteratorProtocol {
-		private let inboundDataOut:FIFO<(PublicKey, ByteBuffer), Swift.Error>.AsyncConsumerExplicit
-		internal init(inboundData:FIFO<(PublicKey, ByteBuffer), Swift.Error>) {
-			inboundDataOut = inboundData.makeAsyncConsumerExplicit()
-		}
-		public func next() async throws -> (PublicKey, ByteBuffer)? {
-			switch await inboundDataOut.next() {
-				case .element(let element):
-					return element
-				case .capped(let result):
-					switch result {
-						case .success(_):
-							return nil
-						case .failure(let error):
-							throw error
-					}
-				case .wouldBlock:
-					fatalError("WGInterface AsyncIterator should never return wouldBlock. this is a critical internal error. \(#fileID):\( #line) \(#function)")
-			}
-		}
-	}
-	
-	nonisolated public func makeAsyncIterator() -> AsyncIterator {
-		return AsyncIterator(inboundData:inboundData)
 	}
 }

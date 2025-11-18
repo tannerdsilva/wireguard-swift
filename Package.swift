@@ -49,13 +49,6 @@ let package = Package(
 			]
 		),
 		.target(
-			name:"kcp-nio",
-			dependencies: [
-				.product(name:"RAW", package:"rawdog"),
-				"encoded-essentials"
-			]
-		),
-		.target(
 			name:"encoded-essentials",
 			dependencies: [
 				.product(name:"RAW", package:"rawdog")
@@ -77,7 +70,6 @@ let package = Package(
 				.product(name:"ServiceLifecycle", package:"swift-service-lifecycle"),
 				.product(name:"bedrock_ip", package:"bedrock"),
 				"wireguard-crypto-core",
-				"kcp-nio",
 			]
 		),
 		.testTarget(

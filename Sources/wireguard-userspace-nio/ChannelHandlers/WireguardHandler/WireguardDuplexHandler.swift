@@ -176,7 +176,7 @@ extension WireguardHandler {
 		switch event {
 			case let e as InboundEvent:
 				switch e {
-					case .peerConfigUpdate(let newConfig):
+					case .peerConfigUpdate(let newConfig, _):
 						context.fireUserInboundEventTriggered(event)
 						log.info("Configuration updated, updating live wg peers")
 						peerDeltaEngine.setPeers(newConfig, handler: self)
