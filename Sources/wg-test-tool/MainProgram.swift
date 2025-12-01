@@ -228,7 +228,7 @@ struct CLI:AsyncParsableCommand {
 				cliLogger.info("Reading data...")
 				for peer in myPeers {
 					foo.addTask {
-						let iterator = peer.inboundData.makeAsyncConsumer()
+						let iterator = peer.inboundData!.makeAsyncConsumer()
 						while(true) {
 							if let incomingData = try await iterator.next() {
 								// ANSI escape codes

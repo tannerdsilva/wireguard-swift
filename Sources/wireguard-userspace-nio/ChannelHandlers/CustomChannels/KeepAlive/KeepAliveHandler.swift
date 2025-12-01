@@ -19,7 +19,7 @@ public final class KeepAliveHandler:PeerAssociatedHeadHandler, @unchecked Sendab
 		config = peers
 	}
 	
-	public func scheduleRepeatedKeepAlives(context:ChannelHandlerContext) {
+	private func scheduleRepeatedKeepAlives(context:ChannelHandlerContext) {
 		for peer in config {
 			sendTasks[peer.publicKey] = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: peer.internalKeepAlive ?? .seconds(15)) { [weak self, c = ContextContainer(context:context), l = logger] _ in
 				guard let self = self else {

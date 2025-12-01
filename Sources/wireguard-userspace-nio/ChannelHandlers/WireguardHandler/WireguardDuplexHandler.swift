@@ -41,7 +41,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	}
 
 	private enum State {
-		case initialized([PeerInfo])
+		case initialized([any PeerInformation])
 		case channelEngaged
 		case terminated
 	}
@@ -82,7 +82,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// used to indicate that a flush should be performed after channelReadComplete is called. returns back to false after channelReadComplete is called.
 	internal var flushAfterChannelReadComplete:Bool = false
 
-	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, initialPeers:consuming [PeerInfo], logLevel:Logger.Level) {
+	internal init(privateKey pkIn:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, initialPeers:consuming [any PeerInformation], logLevel:Logger.Level) {
 		privateKey = pkIn
 		let publicKey = PublicKey(privateKey: privateKey)
 		automaticallyUpdatedVariables = AutomaticallyUpdated(activelyInitiatingIndicies:AutomaticallyUpdated.ActivelyInitiatingIndex(), activeSessionIndicies:AutomaticallyUpdated.MPeerIndex(logLevel:logLevel))
@@ -126,7 +126,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 }
 
 extension WireguardHandler {
-	internal func setConfiguration<S>(_ newPeers:consuming S) where S:Sequence, S.Element == PeerInfo {
+	internal func setConfiguration<S>(_ newPeers:consuming S) where S:Sequence, S.Element == any PeerInformation {
 		peerDeltaEngine.setPeers(newPeers, handler: self)
 	}
 	internal func getHandshakeFifo() -> FIFO<HandshakeInfo, Swift.Error> {

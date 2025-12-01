@@ -14,6 +14,7 @@ public protocol PeerAssociatedTailHandler:Sendable, ChannelDuplexHandler where O
 /// The channels connect in the following order: HeadChannel - > BodyChannels[0] - > ... - > BodyChannels[n-1] - > TailChannel
 ///
 /// It is the responsibility of the user to ensure that the Inbound and Outbound variables align within these custom channels.
+/// See `KCPChannels`, `KeepAlive`, and `DefaultChannels` for implementations of the protocol.
 public protocol CustomChannels:Sendable {
 	associatedtype HeadChannel:PeerAssociatedHeadHandler
 	associatedtype TailChannel:PeerAssociatedTailHandler

@@ -40,7 +40,7 @@ extension WireguardHandler {
 		}
 		
 		/// initialize a new peer delta engine with the given initial peers and handlers.
-		internal init<S>(context:ChannelHandlerContext, initiallyConfigured:S, handler:WireguardHandler, logLevel:Logger.Level, additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) where S:Sequence, S.Element == PeerInfo {
+		internal init<S>(context:ChannelHandlerContext, initiallyConfigured:S, handler:WireguardHandler, logLevel:Logger.Level, additionHandler ahIn:@escaping PeerAdditionHandler, removalHandler rhIn:@escaping PeerRemovalHandler) where S:Sequence, S.Element == any PeerInformation {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
 			#endif
@@ -58,7 +58,7 @@ extension WireguardHandler {
 		}
 		
 		/// set the current set of peers that should be considered 'active' and 'enabled' for networking with this endpoint.
-		internal mutating func setPeers<S>(_ newPeers:consuming S, handler:WireguardHandler) where S:Sequence, S.Element == PeerInfo {
+		internal mutating func setPeers<S>(_ newPeers:consuming S, handler:WireguardHandler) where S:Sequence, S.Element == any PeerInformation {
 			for (key, _) in peers {
 				if(!newPeers.contains { $0.publicKey == key }) {
 					peers[key] = nil

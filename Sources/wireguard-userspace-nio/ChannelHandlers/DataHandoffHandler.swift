@@ -19,7 +19,7 @@ internal final class DataHandoffHandler:@unchecked Sendable, ChannelInboundHandl
 	private let log:Logger
 
 	/// initializes a data handoff handler with the given FIFO instance and log level.
-	internal init(initialPeers:[PeerInfo], logLevel:Logger.Level) {
+	internal init(initialPeers:[any PeerInformation], logLevel:Logger.Level) {
 		for peer in initialPeers {
 			handoffs[peer.publicKey] = peer.inboundData
 		}

@@ -1,6 +1,12 @@
 import NIO
 import Logging
 
+/// Struct defining the set of default CustomChannels.
+/// Use this struct as a template for any new struct conforming to CustomChannels
+///
+/// - Head Channel: Default channel that passes inbound/outbound data to the next handler
+/// - Body Channels: None
+/// - Tail Channel: Splicer Handler which splices outbound data according to the MTU of the pipeline.
 public struct DefaultChannels: CustomChannels {
 	
 	public var head: HeadChannel

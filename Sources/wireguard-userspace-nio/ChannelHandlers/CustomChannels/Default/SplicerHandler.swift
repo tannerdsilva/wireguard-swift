@@ -19,13 +19,14 @@ extension Array {
 }
 
 // SIVA Splicers (0_0)
+/// A ChannelDuplexHandler used to splice/combine large outbound/inbound segments to conform to the provided MTU.
+/// Use this channel in CustomChannels as a Tail Handler whenever data should be sent.
 public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
-	public typealias InboundIn = PeerAssociated<ByteBuffer> // From kcp handler, needs to be stitched together
-	public typealias InboundOut = PeerAssociated<ByteBuffer> // Send to the Handoff handler
+	public typealias InboundIn = PeerAssociated<ByteBuffer>
+	public typealias InboundOut = PeerAssociated<ByteBuffer>
 	
-	public typealias OutboundIn = PeerAssociated<ByteBuffer> // From writes from user
-	public typealias OutboundOut = PeerAssociated<ByteBuffer> // Send spliced data to kcp handler
-	// private var outboundOutDriver:WriteOrHold<OutboundOut>
+	public typealias OutboundIn = PeerAssociated<ByteBuffer>
+	public typealias OutboundOut = PeerAssociated<ByteBuffer>
 	
 	private var logger:Logger
 	
@@ -63,7 +64,6 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 
 			let buf = context.channel.allocator.buffer(bytes:payload)
 			
-			// Only this one segment
 			if (value == 0) {
 				logger.debug("Sending single message to DHH")
 				context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: buf)))
@@ -99,7 +99,6 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var associatedData = unwrapOutboundIn(data)
 		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
-		// determine if the data needs to be spliced into smaller segments
 		if (associatedData.associatedValue.readableBytes <= spliceByteLength) {
 			// there is no need to create multiple segments so we can add a zero at the end of the data.
 			_ = EncodedUInt32(RAW_native:0).RAW_access { footerBytesPtr in
@@ -118,10 +117,9 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 				}
 				let buf = context.channel.allocator.buffer(bytes:segment)
 				if (i == splices.count-1) {
-					// last segment to be written for this message
+					// Attach promise to the last segment to be written for this message
 					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
 				} else {
-					// 1 of n message fragments
 					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf))).cascadeFailure(to:promise)
 				}
 			}

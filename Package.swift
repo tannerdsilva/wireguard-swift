@@ -49,12 +49,6 @@ let package = Package(
 			]
 		),
 		.target(
-			name:"encoded-essentials",
-			dependencies: [
-				.product(name:"RAW", package:"rawdog")
-			]
-		),
-		.target(
 			name: "wireguard-userspace-nio",
 			dependencies:[
 				.product(name:"RAW", package:"rawdog"),
