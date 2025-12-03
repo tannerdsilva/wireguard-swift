@@ -44,7 +44,6 @@ public struct HandshakeInfo:Sendable {
 /// The interface uses a Swift Nio pipeline on UDP with a specified MTU.
 /// It comes typed with custom Nio ChannelHandlers (See the CustomChannels protocol for more information).
 /// All interfaces come with a unique `PrivateKey` and initial configuration of `[PeerInfo]` (`PrivateKey` can be generated using `dhGenerate()` from wireguard-crypto-core).
-///
 public final actor WGInterface<C:CustomChannels>:Sendable {
 	public enum State {
 		case initialized
@@ -73,7 +72,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 	
 	private let cch:any CustomChannels
 
-	/// Initialize with owners `PrivateKey` and the configuration `[PeerInfo]`
+	/// Initializer for any CustomChannels. The custom channels initializer argument must also be passed into the initializer.
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[any PeerInformation] = [], logLevel:Logger.Level, customChannelArgs:C.ArgumentType, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
@@ -90,6 +89,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.recentSavedConfig = initialConfiguration
 	}
 	
+	/// Shortened initializer for a WGInterface<KCPChannels>.
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[any PeerInformation] = [], logLevel:Logger.Level, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws where C == KCPChannels{
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
@@ -106,6 +106,8 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.recentSavedConfig = initialConfiguration
 	}
 	
+	/// Shortened initializer for a WGInterface<KeepAlive>.
+	/// Initial configuration must be with PeerInfo rather than any PeerInformation.
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws where C == KeepAlive {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
@@ -243,7 +245,7 @@ extension WGInterface:Service {
 		}
 	}
 	
-	/// Starts the WireGuard interface
+	/// Starts the WireGuard interface as a Service.
 	public func run() async throws {
 		try await _run()
 		logger.info("server closed successfully.")

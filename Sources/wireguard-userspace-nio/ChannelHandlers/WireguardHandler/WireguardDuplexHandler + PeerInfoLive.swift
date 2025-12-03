@@ -18,6 +18,9 @@ extension PeerInfo {
 		/// the public key of the remote peer
 		internal let publicKey:PublicKey
 		
+		/// the shared key between us and the remote peer
+		internal var sharedKey:MemoryGuarded<SharedKey>?
+		
 		/// the endpoint that the peer is known to be reachable at
 		private var ep:Endpoint?
 
@@ -56,6 +59,7 @@ extension PeerInfo {
 			log = buildLogger
 
 			publicKey = peerInfo.publicKey
+			sharedKey = peerInfo.sharedKey
 			ep = peerInfo.endpoint
 			rotation = Rotating<Session>()
 

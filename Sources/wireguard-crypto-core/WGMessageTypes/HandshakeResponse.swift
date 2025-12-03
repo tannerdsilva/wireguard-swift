@@ -40,7 +40,7 @@ extension Message {
 				}
 			}
 
-			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:Result.Bytes32, responderPeerIndex:PeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
+			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:MemoryGuarded<SharedKey>, responderPeerIndex:PeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
 				return try cIn.RAW_access_staticbuff_mutating { cPtr in
 					return try hIn.RAW_access_staticbuff_mutating { hPtr in
 						// step 1: (Epriv, Epub) := DH-GENERATE()
@@ -110,7 +110,7 @@ extension Message.Response.Payload {
 			self.msgMac2 = msgMac2
 		}
 
-		public borrowing func validate(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, preSharedKey:Result.Bytes32) throws -> (c:Result.Bytes32, h:Result.Bytes32) {
+		public borrowing func validate(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, preSharedKey:MemoryGuarded<SharedKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32) {
 			return try withUnsafePointer(to:self) { selfPtr in
 				try cIn.RAW_access_staticbuff_mutating { cPtr in
 					try hIn.RAW_access_staticbuff_mutating { hPtr in

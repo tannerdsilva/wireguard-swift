@@ -29,8 +29,6 @@ public struct KCPSegment:Sendable, Hashable {
 		/// the length of the data carried in this segment
 		internal let dataLength:UInt16
 
-		// not sure which of these stored instance varaibles should be `var` vs `let`, I would like to make a conclusive decision on this when the timing is right.
-
 		internal init(conv:UInt16, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt64, una unacknowledged:UInt32, len:UInt16) {
 			conversationID = conv
 			command = cmd

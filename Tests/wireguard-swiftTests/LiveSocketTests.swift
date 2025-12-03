@@ -132,6 +132,9 @@ extension WireguardSwiftTests {
 		
 		let carolPublicKey:PublicKey
 		let carolPrivateKey:MemoryGuarded<PrivateKey>
+		
+		let aliceBobSharedKey:MemoryGuarded<SharedKey>
+		let bobAliceSharedKey:MemoryGuarded<SharedKey>
 
 		let cliLogger:Logger
 
@@ -139,6 +142,8 @@ extension WireguardSwiftTests {
 			(alicePublicKey, alicePrivateKey) = (PublicKey(privateKey:Self.aliceStaticPrivateKey), Self.aliceStaticPrivateKey)
 			(bobPublicKey, bobPrivateKey) = (PublicKey(privateKey:Self.bobStaticPrivateKey), Self.bobStaticPrivateKey)
 			(carolPublicKey, carolPrivateKey) = (PublicKey(privateKey:Self.carolStaticPrivateKey), Self.carolStaticPrivateKey)
+			aliceBobSharedKey = try dhKeyExchange(privateKey: alicePrivateKey, publicKey: bobPublicKey)
+			bobAliceSharedKey = try dhKeyExchange(privateKey: bobPrivateKey, publicKey: alicePublicKey)
 			var buildLogger = Logger(label:"\(String(describing:Self.self))")
 			buildLogger.logLevel = .debug
 			cliLogger = buildLogger
@@ -573,6 +578,59 @@ extension WireguardSwiftTests.LiveSocketTests {
 		try await sendSinglePayload(payloadSize: 20_000_000, encryptedPacketProcessor: DefaultEPP())
 	}
 	
+	@Test func sendSinglePayloadWithSharedKey() async throws {
+		let payloadSize: Int = 2_000_000
+		
+		let payload = [UInt8](repeating: 0, count: payloadSize)
+		
+		try await confirmation("verify the channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, sharedKey: bobAliceSharedKey, ipAddress: "127.0.0.1", port: 36016, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36017)
+				
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, sharedKey: aliceBobSharedKey, ipAddress: "127.0.0.1", port: 36017, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36016)
+				
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+				
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
+				
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				
+				cliLogger.info("Channel initialized. Sending handshake initiation message...")
+				try await aliceInterface.write(publicKey: bobPublicKey, data: payload)
+				
+				cliLogger.info("Channel initialized. Reading data...")
+				let iterator = aliceFifo.makeAsyncConsumer()
+				while(true) {
+					if let incomingDataBytes = try await iterator.next() {
+						let incomingData = Array(incomingDataBytes.readableBytesView)
+						cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+						#expect(incomingData == payload)
+						foo.cancelAll()
+						try await foo.waitForAll()
+						return
+					}
+				}
+			})
+		}
+	}
+	
 	@Test func sendSimultaneousLargeMessages() async throws {
 		let payloadSize: Int = 1_000_000
 		let payload = [UInt8](repeating: 0, count: payloadSize)
@@ -734,6 +792,127 @@ extension WireguardSwiftTests.LiveSocketTests {
 						#expect(incomingData == carolPayload)
 						break carolRcvLoop
 					}
+				}
+				
+				foo.cancelAll()
+			})
+		}
+	}
+	
+	@Test func sendAroundMultiplePeers() async throws {
+		let payloadSize: Int = 100_000
+		
+		let payload1 = [UInt8](repeating: 0, count: payloadSize)
+		let payload2 = [UInt8](repeating: 1, count: payloadSize+1)
+		let payload3 = [UInt8](repeating: 1, count: payloadSize+2)
+		
+		try await confirmation("verify the channels close", expectedCount:3) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let aliceFifoB = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifoC = FIFO<ByteBuffer, Swift.Error>()
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(20), inboundData: aliceFifoB), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36014, internalKeepAlive: .seconds(20), inboundData: aliceFifoC)]
+				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36013)
+				
+				let bobFifoA = FIFO<ByteBuffer, Swift.Error>()
+				let bobFifoC = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36013, internalKeepAlive: .seconds(30), inboundData: bobFifoA), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36014, internalKeepAlive: .seconds(30), inboundData: bobFifoC)]
+				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36012)
+				
+				let carolFifoA = FIFO<ByteBuffer, Swift.Error>()
+				let carolFifoB = FIFO<ByteBuffer, Swift.Error>()
+				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(30), inboundData: carolFifoB), PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36013, internalKeepAlive: .seconds(30), inboundData: carolFifoA)]
+				let carolInterface = try WGInterface<KCPChannels>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, listeningPort: 36014)
+				
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+				foo.addTask {
+					try await carolInterface.run()
+				}
+				
+				cliLogger.info("waiting for alice's interface to initialize...")
+				try await aliceInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for bob's interface to initialize...")
+				try await bobInterface.waitForChannelInit()
+				
+				cliLogger.info("waiting for carols's interface to initialize...")
+				try await carolInterface.waitForChannelInit()
+				
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await carolInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				
+				cliLogger.info("Channel initialized. Sending Data...")
+				foo.addTask {
+					try await aliceInterface.write(publicKey: bobPublicKey, data: payload1)
+				}
+				foo.addTask {
+					try await aliceInterface.write(publicKey: carolPublicKey, data: payload2)
+				}
+				foo.addTask {
+					try await bobInterface.write(publicKey: alicePublicKey, data: payload3)
+				}
+				foo.addTask {
+					try await bobInterface.write(publicKey: carolPublicKey, data: payload3)
+				}
+				foo.addTask {
+					try await carolInterface.write(publicKey: bobPublicKey, data: payload2)
+				}
+				foo.addTask {
+					try await carolInterface.write(publicKey: alicePublicKey, data: payload1)
+				}
+				cliLogger.info("Reading data...")
+				
+				let aliceIteratorB = aliceFifoB.makeAsyncConsumer()
+				if let incomingDataBytes = try await aliceIteratorB.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload3)
+				}
+				
+				let aliceIteratorC = aliceFifoC.makeAsyncConsumer()
+				if let incomingDataBytes = try await aliceIteratorC.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload1)
+				}
+				
+				let bobIteratorA = bobFifoA.makeAsyncConsumer()
+				if let incomingDataBytes = try await bobIteratorA.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload1)
+				}
+				
+				let bobIteratorC = bobFifoC.makeAsyncConsumer()
+				if let incomingDataBytes = try await bobIteratorC.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload2)
+				}
+				
+				let carolIteratorA = carolFifoA.makeAsyncConsumer()
+				if let incomingDataBytes = try await carolIteratorA.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload2)
+				}
+				
+				let carolIteratorB = carolFifoB.makeAsyncConsumer()
+				if let incomingDataBytes = try await carolIteratorB.next() {
+					let incomingData = Array(incomingDataBytes.readableBytesView)
+					cliLogger.debug("Received data that is \(incomingData.count) bytes long")
+					#expect(incomingData == payload3)
 				}
 				
 				foo.cancelAll()

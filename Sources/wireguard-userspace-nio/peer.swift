@@ -102,6 +102,10 @@ extension PeerInfo:Codable {
 
 	public init(from decoder: Decoder) throws {
 		let container = try decoder.container(keyedBy: CodingKeys.self)
+		
+		let endpoint  = try container.decodeIfPresent(Endpoint.self, forKey: .endpoint)
+		let keepAlive = try container.decodeIfPresent(TimeAmount.self, forKey: .internalKeepAlive)
+		let fifo = FIFO<ByteBuffer, Swift.Error>()
 
 		let publicKeyString = try container.decode(String.self, forKey: .publicKey)
 		let publicKeyBytes = try RAW_base64.decode(publicKeyString)
@@ -109,19 +113,23 @@ extension PeerInfo:Codable {
 			fatalError("Public Key failed to decode.")
 		}
 		let publicKey = RAW_dh25519.PublicKey(RAW_staticbuff: publicKeyBytes)
+		
 		let sharedKeyString = try container.decodeIfPresent(String.self, forKey: .sharedKey)
-		let bytes = try RAW_base64.decode(publicKeyString)
+		guard let sharedKeyString = sharedKeyString else {
+			self.init(publicKey: publicKey,
+					  sharedKey: nil,
+					  endpoint:endpoint,
+					  internalKeepAlive: keepAlive,
+					  inboundData: fifo)
+			return
+		}
+		let bytes = try RAW_base64.decode(sharedKeyString)
 		guard bytes.count == 32 else {
 			fatalError("Public Key failed to decode.")
 		}
 		let sharedKey = bytes.withUnsafeBufferPointer { ptr in
 			return MemoryGuarded<SharedKey>.init(RAW_accessed: ptr)
 		}
-		
-		let endpoint  = try container.decodeIfPresent(Endpoint.self, forKey: .endpoint)
-		let keepAlive = try container.decodeIfPresent(TimeAmount.self, forKey: .internalKeepAlive)
-		let fifo = FIFO<ByteBuffer, Swift.Error>()
-
 		self.init(publicKey: publicKey,
 				  sharedKey: sharedKey,
 				  endpoint:endpoint,
