@@ -17,17 +17,6 @@ internal func wgMAC<K, A>(key:consuming K, data:consuming A) throws -> Result.By
 	return try newHasher.finish()
 }
 
-internal func wgMAC(key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> Result.Bytes16 {
-	var newHasher = try RAW_blake2.Hasher<S, Result.Bytes16>(key:key, count:keyCount)
-	try newHasher.update(data, count:dataCount)
-	return try newHasher.finish()
-}
-internal func wgHmac<K, A>(key:consuming K, data:consuming A) throws -> Result.Bytes32 where A:RAW_accessible, K:RAW_accessible {
-	var hmac = try HMAC<RAW_blake2.Hasher<S, Result.Bytes32>>(key:key)
-	try hmac.update(message:data)
-	return try hmac.finish()
-}
-
 internal func wgHMACv2(key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> Result.Bytes32 {
 	var hmac = try HMAC<RAW_blake2.Hasher<S, Result.Bytes32>>(key:key, count:keyCount)
 	try hmac.update(message:data, count:dataCount)

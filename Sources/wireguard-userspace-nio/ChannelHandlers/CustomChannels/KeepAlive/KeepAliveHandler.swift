@@ -2,6 +2,7 @@ import NIO
 import Logging
 import RAW_dh25519
 
+/// Handler that schedules a repeated task to send an empty ByteBuffer outbound.
 public final class KeepAliveHandler:PeerAssociatedHeadHandler, @unchecked Sendable {
 	public typealias InboundIn = PeerAssociated<ByteBuffer>
 	public typealias OutboundIn = Never
@@ -58,12 +59,15 @@ extension KeepAliveHandler {
 				switch e {
 					case .peerConfigUpdate(let newConfig, _):
 						context.fireUserInboundEventTriggered(event)
+						guard let peerInfo = newConfig as? [PeerInfo] else {
+							return
+						}
 						logger.info("Configuration updated, resetting keep alive updates")
 						for (key, task) in sendTasks {
 							task.cancel()
 							sendTasks[key] = nil
 						}
-						config = newConfig
+						config = peerInfo
 						scheduleRepeatedKeepAlives(context: context)
 				}
 			default:

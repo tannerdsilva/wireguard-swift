@@ -21,6 +21,8 @@ extension Array {
 // SIVA Splicers (0_0)
 /// A ChannelDuplexHandler used to splice/combine large outbound/inbound segments to conform to the provided MTU.
 /// Use this channel in CustomChannels as a Tail Handler whenever data should be sent.
+///
+/// The channel attaches a 4-byte length indicating the number of spliced segments to expect to complete the message.
 public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
 	public typealias InboundIn = PeerAssociated<ByteBuffer>
 	public typealias InboundOut = PeerAssociated<ByteBuffer>

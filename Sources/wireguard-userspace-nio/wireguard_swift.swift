@@ -147,6 +147,8 @@ extension WGInterface:Service {
 	}
 	
 	/// Called by `run()`. Reruns the service if the channel disconnected due to an internet error.
+	/// Runs the NIO pipeline and awaits a task cancellation or graceful shutdown.
+	/// Closes the service when the function throws.
 	private func _run() async throws {
 		switch state {
 			case .initialized, .disconnected:
@@ -251,6 +253,8 @@ extension WGInterface:Service {
 		logger.info("server closed successfully.")
 	}
 	
+	/// Closes this WireGuard service if it's running.
+	/// Throws an error if the interface is not running.
 	public func close() async throws {
 		switch state {
 			case .engaged(let channel):
@@ -261,7 +265,9 @@ extension WGInterface:Service {
 		}
 	}
 	
-	public func setConfiguration(peerConfig:[PeerInfo]) async throws {
+	/// Sends an inbound event containing the peers wanting to be configured.
+	/// Be careful not to block inbound event in any custom channels. ALWAYS pass the inbound event through.
+	public func setConfiguration(peerConfig:[any PeerInformation]) async throws {
 		switch state {
 			case .engaged(let channel):
 				let configPromise = channel.eventLoop.makePromise(of:Void.self)
@@ -273,6 +279,7 @@ extension WGInterface:Service {
 		}
 	}
 	
+	/// Returns the handshake fifo from the WireGuard channel.
 	public func getHandshakeFifo() -> FIFO<HandshakeInfo, Swift.Error> {
 		return wgh.getHandshakeFifo()
 	}
@@ -287,6 +294,7 @@ extension WGInterface:Service {
 		}
 	}
 	
+	/// Writes the provided [UInt8] to the chnanel pipeline as a ByteBuffer.
 	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
 		switch state {
 			case .engaged(let channel):
@@ -299,6 +307,8 @@ extension WGInterface:Service {
 				throw InvalidInterfaceStateError()
 		}
 	}
+	
+	/// Writes the ByteBuffer directly to the channel pipeline.
 	static public func write(channel:Channel, publicKey: PublicKey, data:ByteBuffer) throws {
 		let myWritePromise = channel.eventLoop.makePromise(of:Void.self)
 		channel.pipeline.writeAndFlush(PeerAssociated(publicKey:publicKey, associatedValue:data), promise:myWritePromise)

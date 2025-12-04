@@ -43,22 +43,6 @@ public struct TypeHeading:Sendable, ExpressibleByIntegerLiteral, CustomDebugStri
 	public var debugDescription: String {
 		return "\(type.RAW_native())"
 	}
-
-	/// validates that the type is a valid wireguard packet type and that the reserved bytes are all zero.
-	/// - returns: true if the type is valid and the reserved bytes are all zero, false otherwise.
-	public borrowing func isValid() -> Bool {
-		switch type {
-			case 0x1, 0x2, 0x3, 0x4:
-				return reserved.RAW_access {
-					guard $0[0] == 0 && $0[1] == 0 && $0[2] == 0 else {
-						return false
-					}
-					return true
-				}
-			default:
-				return false
-		}
-	}
 }
 
 @RAW_staticbuff(bytes:4)

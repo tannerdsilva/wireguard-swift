@@ -23,13 +23,3 @@ extension TAI64N {
     }
 }
 #endif
-
-import Foundation
-
-extension Foundation.Date {
-	init(ta64n: TAI64N) {
-		let seconds = Int(ta64n.seconds.RAW_native()) - 4611686018427387914
-		let nanoseconds = Int(ta64n.nano.RAW_native())
-		self.init(timeIntervalSince1970:TimeInterval(seconds) + TimeInterval(nanoseconds) / 1_000_000_000.0)
-	}
-}

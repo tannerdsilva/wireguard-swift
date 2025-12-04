@@ -42,13 +42,11 @@ public struct KCPSegment:Sendable, Hashable {
 
 		/// decode a kcp segment header from a byte buffer. the bytes will be read from the buffer.
 		internal init?(decode buffer:inout ByteBuffer) {
-			// read the conversation id
 			guard let cid = buffer.readInteger(endianness: .big, as:UInt16.self) else {
 				return nil
 			}
 			conversationID = cid
 			
-			// read the command byte and validate it by creating the enum
 			guard let cmdByte = buffer.readInteger(as:UInt8.self) else {
 				return nil
 			}
@@ -57,37 +55,31 @@ public struct KCPSegment:Sendable, Hashable {
 			}
 			command = cmdEnum
 
-			// read the fragment id
 			guard let frgParsed = buffer.readInteger(as:UInt8.self) else {
 				return nil
 			}
 			fragmentID = frgParsed
 
-			// read the receive window size
 			guard let wndParsed = buffer.readInteger(endianness: .big, as:UInt16.self) else {
 				return nil
 			}
 			receiveWindowSize = wndParsed
 
-			// read the rest of the header fields
 			guard let tsParsed = buffer.readInteger(endianness: .big, as:UInt64.self) else {
 				return nil
 			}
 			timestamp = tsParsed
 
-			// read the sequence number
 			guard let snParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
 				return nil
 			}
 			sequenceNumber = snParsed
 
-			// read the next expected sequence number
 			guard let unaParsed = buffer.readInteger(endianness: .big, as:UInt32.self) else {
 				return nil
 			}
 			una = unaParsed
 
-			// read the data length
 			guard let lenParsed = buffer.readInteger(endianness: .big, as:UInt16.self) else {
 				return nil
 			}

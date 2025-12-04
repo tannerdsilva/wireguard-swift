@@ -107,6 +107,9 @@ extension KCPSegment {
 			return didWrite
 		}
 
+		/// Writes the stacked KCPSegments from the ByteBuffer
+		/// Attaches the promises properly to the corresponding KCPSegment
+		/// Clear all from the segment and promise stack.
 		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()

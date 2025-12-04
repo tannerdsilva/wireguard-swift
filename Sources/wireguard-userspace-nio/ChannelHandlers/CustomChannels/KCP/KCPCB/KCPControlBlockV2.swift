@@ -33,7 +33,6 @@ internal func iclock(_ time:NIODeadline) -> UInt64 {
 	return Int64(bitPattern: a &- b)
 }
 
-let IKCP_RTO_NDL:UInt32 = 30
 let IKCP_RTO_MIN:UInt64 = 100
 let IKCP_RTO_DEF:UInt64 = 200
 let IKCP_RTO_MAX:UInt64 = 60000
@@ -44,16 +43,8 @@ let IKCP_CMD_WASK:UInt8 = 83
 let IKCP_CMD_WINS:UInt8 = 84
 let IKCP_CMD_KILL:UInt8 = 85
 
-let IKCP_ASK_SEND:UInt32 = 1
-let IKCP_ASK_TELL:UInt32 = 2
-let IKCP_WND_SND:UInt32 = 256
 let IKCP_WND_RCV:UInt32 = 256
 let IKCP_OVERHEAD:UInt32 = 24
-let IKCP_DEADLINK:UInt32 = 20
-let IKCP_THRESH_INIT:UInt32 = 2
-let IKCP_THRESH_MIN:UInt32 = 2
-let IKCP_PROBE_INIT:UInt32 = 7000
-let IKCP_PROBE_LIMIT:UInt32 = 120000
 /*
 
 LAW OF THE LAND
@@ -117,10 +108,6 @@ internal struct KCPControlBlock {
 	
 	/// used to track the round trip time and retransmission information for this control block
 	internal var rttInfo:RoundTripTimeInfo = RoundTripTimeInfo()
-
-	/// used to track the congestion window state for this control block
-	internal var cwndInfo:CongestionWindowInfo = CongestionWindowInfo()
-
 
 	/// used to track the window-probe state for this control block
 	internal var probeInfo:ProbeInfo = ProbeInfo()
@@ -257,7 +244,10 @@ internal struct KCPControlBlock {
 // parse data, ack, una.
 // MARK: Parse Inbound
 extension KCPControlBlock {
-	/// parse inbound data segment from a handler with its context
+	/// Called for `.push` and `.genesis` segments only.
+	/// Parses inbound data segment from a handler with its context
+	/// Discards duplicate segments.
+	/// Attempts to writeAllInboundOut after every parse of a data segment.
 	@discardableResult
 	private mutating func parseInbound(data segment:KCPSegment, handler:KCPControlBlock.Handler, context:ChannelHandlerContext) -> Bool {
 		#if DEBUG
@@ -290,37 +280,35 @@ extension KCPControlBlock {
 		return isDuplicate
 	}
 	
+	/// Attaches any in-order, continuous segments from the inbound segment buffer to an inbount out byte buffer.
+	/// The byte buffer grows as segments attach to the end of the buffer.
+	/// Once a fragmentID of 0 is found, we write the completed message to the next handler.
+	///
+	/// Use a clear byte buffer flag to determine if a message was written. If it was writte, then clear the buffer before building a new one.
 	public mutating func writeAllInboundOut(handler:KCPControlBlock.Handler, context:ChannelHandlerContext) {
-		// loop through any continuous segments in the receive buffer and write them to the outbound out byte buffer
 		while let firstNode = inboundInBuffer.front, firstNode.value!.header.sequenceNumber == rcv_nxt, isActiveReceiver  {
-			// remove the node from the receive buffer and add it to the receive queue
-			// start by popping it from the receive buffer
 			inboundInBuffer.remove(firstNode)
 
-			// if the inboundOutByteBuffer is marked to be cleared on next use, clear it now
 			if inboundOutInfo.inboundOutByteByfferClearOnNextUse == true {
 				inboundOutInfo.inboundOutByteBuffer.clear()
 				inboundOutInfo.inboundOutByteByfferClearOnNextUse = false
 			}
 
-			// write the segment contents to the inboundOutByteBuffer
 			inboundOutInfo.inboundOutByteBuffer.writeBytes(firstNode.value!.data)
 			
-			// if this is the last fragment of a message, fire the entire inboundOutByteBuffer to the pipeline and mark it to be cleared on next reader in the pipeline
 			if firstNode.value!.header.fragmentID == 0 {
 				context.fireChannelRead(handler.wrapInboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:inboundOutInfo.inboundOutByteBuffer)))
 				inboundOutInfo.inboundOutByteByfferClearOnNextUse = true
 			}
 
-			// increment rcv_nxt to expect the next segment
 			rcv_nxt &+= 1
 		}
 	}
 
-	/// parse inbound una data
+	/// Called for all segments.
+	/// Removes any sent segments with a sequence number lower than una.
 	private mutating func parseInbound(una:UInt32) {
 		for (node, seg) in outboundInBuffer.makeIterator() {
-			// guard isAcked == true
 			guard Int32(bitPattern: una &- seg.data.header.sequenceNumber) > 0 else {
 				snd_una = seg.data.header.sequenceNumber
 				return
@@ -331,7 +319,7 @@ extension KCPControlBlock {
 		snd_una = snd_nxt
 	}
 
-	/// parse inbound ack data
+	/// Called for `.ack` segments only.
 	private mutating func parseInbound(ack sn:UInt32) {
 		guard Int32(bitPattern:sn &- snd_una) >= 0 && Int32(bitPattern:sn &- snd_nxt) < 0 else {
 			return
@@ -355,6 +343,8 @@ extension KCPControlBlock {
 		}
 	}
 
+	/// Updates stored rtt values for the control block using the segments rtt.
+	/// Uses the same rtt calculations as TCP
 	private mutating func updateInbound(rtt: UInt64) {
 		if rttInfo.rx_srtt == 0 {
 			rttInfo.rx_srtt = rtt

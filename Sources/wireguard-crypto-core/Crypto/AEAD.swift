@@ -16,20 +16,6 @@ internal func aeadEncrypt<A, D, K>(key:UnsafePointer<K>, counter:UInt64, text:Un
 	}
 }
 
-internal func aeadEncryptV2<A, D, K, O>(as _:O.Type = A.self, key:borrowing K, counter:UInt64, text:borrowing A, aad:UnsafePointer<D>) throws -> (O, Tag) where A:RAW_staticbuff, O:RAW_staticbuff, D:RAW_accessible, K:RAW_staticbuff, K.RAW_staticbuff_storetype == Key32.RAW_staticbuff_storetype, A.RAW_staticbuff_storetype == O.RAW_staticbuff_storetype {
-	var context = RAW_chachapoly.Context(key:key)
-	return try text.RAW_access { textBuff in
-		let cipherText = UnsafeMutableBufferPointer<UInt8>.allocate(capacity:textBuff.count)
-		defer { cipherText.deallocate() }
-		let tag = try aad.pointee.RAW_access { aadBuff in
-			return try CountedNonce(counter: counter).RAW_access_staticbuff { 
-				try context.encrypt(nonce:$0.load(as:Nonce.self), associatedData:aadBuff, inputData:textBuff, output:cipherText.baseAddress!)
-			}
-		}
-		return (O(RAW_decode:cipherText.baseAddress!, count: textBuff.count)!, tag)
-	}
-}
-
 internal func aeadEncryptV3(plaintext:UnsafeRawBufferPointer, key:UnsafeRawBufferPointer, counter:UInt64, cipherText cipherTextPtr:UnsafeMutableRawPointer, aad aadPtr:UnsafeRawBufferPointer, tag:UnsafeMutableRawPointer) throws {
 	var context = RAW_chachapoly.Context(key:key)!
 	return try CountedNonce(counter: counter).RAW_access_staticbuff { 

@@ -33,6 +33,8 @@ internal final class KCPLivePeer {
 		}
 	}
 
+	/// Inserts the new control block at index 0 and sets it as active if it's the only one.
+	/// Signals, with the isStalling flag, the active control block to delete itself when it can.
 	internal func insertLatestControlBlock(_ block:KCPControlBlock, context:ChannelHandlerContext, handler: KCPControlBlock.Handler) {
 		controlBlocks.insert(block, at:0)
 		if(count == 1) {
@@ -47,12 +49,18 @@ internal final class KCPLivePeer {
 		rotateActiveControlBlock(context: context, handler: handler)
 	}
 
+	/// ALWAYS write from the newest control block. Immediately send the data.
 	internal func handleWrite(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, message: ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, writeCounter:inout Int, isGenesis:Bool) throws {
 		let now = NIODeadline.now()
 		controlBlocks[0].handleWrite(context: context, handler: handler, message: message, writePromise: writePromise, ackPromise: ackPromise, isGenesis: isGenesis)
 		controlBlocks[0].resendAndProbe(context: context, handler: handler, now:now, congestionWindow: &congestionWindow, minCongestionWindow: minCongestionWindow, writerCount: &writeCounter)
 	}
 
+	/// Attempts to read the data into each control block.
+	/// If the data matches a control block, then attempt to reset if it's a new handshake.
+	/// If the data doesn't match any current control block, then check if it's command tag.
+	///  - `.probe`: There is a zombie control block on peer. Send a kill probe (`.probeKill`) to that conversation id.
+	///  - `.genesis`: Peer disconnected. Reset our control blocks (deleting any current blocks)
 	internal func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, writeCounter:inout Int) {
 		guard controlBlocks.count > 0 else {
 			return
@@ -101,6 +109,8 @@ internal final class KCPLivePeer {
 		context.flush()
 	}
 	
+	/// Loops through the control blocks and checks if any control block can be removed (isActiveReceiver && isInactive).
+	/// If it can be removed, then remove it and set the next control block in line as the active receiver.
 	internal func rotateActiveControlBlock(context:ChannelHandlerContext, handler:KCPControlBlock.Handler) {
 		guard count >= 2 else {
 			guard count == 1 else {
@@ -116,11 +126,15 @@ internal final class KCPLivePeer {
 				controlBlocks[i-1].writeAllInboundOut(handler: handler, context: context)
 				logger.debug("Rotating control block", metadata: ["newActiveConvID": "\(controlBlocks[i-1].conv)"])
 				controlBlocks.remove(at: i)
+				rotateActiveControlBlock(context: context, handler: handler)
 				return
 			}
 		}
 	}
 	
+	/// Keep the control block from the new connection handshake.
+	/// Put the genesis control block behind it to receive any genesis data.
+	/// Sets the genesis control block as the active control block.
 	internal func reset(_ block:KCPControlBlock) {
 		controlBlocks = [controlBlocks[0]]
 		controlBlocks.append(block)
@@ -129,6 +143,7 @@ internal final class KCPLivePeer {
 		logger.info("Connection reset. Recreating kcp control blocks.")
 	}
 	
+	/// Sends a segment with a `.probeKill` command.
 	internal func reprobe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>) {
 		context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:controlBlocks[0].peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:associatedSegment.associatedValue.header.conversationID, cmd:.probeKill, rcv_wnd_size:0, frg:0, sn:0, ts:0, una:0, len:0), data:ByteBufferView()))), promise:nil)
 	}
@@ -143,7 +158,6 @@ extension KCPControlBlock {
 		internal typealias OutboundIn = PeerAssociated<ByteBuffer>
 		internal typealias OutboundOut = PeerAssociated<KCPSegment>
 		
-		// kcp control blocks: index 0 is the newest control block
 		private var kcp:[PublicKey:KCPLivePeer] = [:]
 		private var updateTask:RepeatedTask? {
 			didSet {
@@ -159,13 +173,11 @@ extension KCPControlBlock {
 		private let logger:Logger
 
 		let mtu:MTULimits
-		var count = 0
-
+		
 		internal var readWindow:Int!
 		internal var writeWindow:Int!
 
 		private var writesSinceLastFlush:Int = 0
-		private var writesSinceChannelReadComplete:Int = 0
 			
 		internal init(key:MemoryGuarded<PrivateKey>, mtu:inout MTULimits, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:KCPControlBlock.self)).\(String(describing:Self.self))")
@@ -177,6 +189,7 @@ extension KCPControlBlock {
 			self.mtu = mtu
 		}
 
+		/// Scheduled resend and reprobe task primarily for sending probes and resending segments.
 		private func scheduleRepeatedKCPUpdates(context:ChannelHandlerContext) {
 			updateTask = context.eventLoop.scheduleRepeatedTask(initialDelay: .seconds(0), delay: kcpUpdateTime) { [weak self, c = ContextContainer(context:context)] _ in
 				guard let self = self else {
@@ -218,6 +231,7 @@ extension KCPControlBlock.Handler {
 
 // MARK: Read
 extension KCPControlBlock.Handler {
+	/// Reads incoming kcp segment. Creates a new KCPLivePeer if thre doesn't exist one for this public key already.
 	internal func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let data = unwrapInboundIn(data)
 		let key = data.publicKey
@@ -231,20 +245,17 @@ extension KCPControlBlock.Handler {
 
 // MARK: Write
 extension KCPControlBlock.Handler {
-	// Receiving data which needs to be sent
+	/// Writes outbound data into the KCPLivePeer. Creates a new KCPLivePeer if thre doesn't exist one for this public key already.
 	internal func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let data = unwrapOutboundIn(data)
 		let key = data.publicKey
-		// Check if control block exists
 		var isGenesis = false
 		if (kcp[key] == nil) {
-			// Create the magic id control block
 			kcp[key] = KCPLivePeer(mtu:mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 			kcp[key]!.insertLatestControlBlock(KCPControlBlock(context: context, peerPublicKey: key, conv: 0, mss:mtu.mtuOutboundIn, writeWindow: UInt32(writeWindow), readWindow: UInt32(readWindow), logLevel: logger.logLevel), context: context, handler: self)
 			isGenesis = true
 		}
 
-		// Send data to control block
 		var iterationAdded = 0
 		do {
 			logger.trace("sending kcp segment", metadata: ["size": "\(data.associatedValue.readableBytes) bytes"])
@@ -254,6 +265,8 @@ extension KCPControlBlock.Handler {
 		}
 		writesSinceLastFlush += iterationAdded
 	}
+	/// Stops kcp update task when channel isn't writable.
+	/// Starts kcp update when channel is writable.
 	func channelWritabilityChanged(context: ChannelHandlerContext) {
 		defer {
 			context.fireChannelWritabilityChanged()
@@ -262,14 +275,13 @@ extension KCPControlBlock.Handler {
 		if (context.channel.isWritable == true) {
 			scheduleRepeatedKCPUpdates(context: context)
 		} else {
-			updateTask = nil // cancellation happens automatically via didSet block on the stored property
+			updateTask = nil
 		}
 	}
 	func flush(context:ChannelHandlerContext) {
 		if writesSinceLastFlush > 0 {
 			logger.trace("flushing kcp handler", metadata: ["writes_since_last_flush":"\(writesSinceLastFlush)"])
 			writesSinceLastFlush = 0
-			writesSinceChannelReadComplete = 0
 			context.flush()
 		} else {
 			logger.trace("flush called with no writes since last flush")
@@ -279,17 +291,15 @@ extension KCPControlBlock.Handler {
 
 // MARK: User Events
 extension KCPControlBlock.Handler {
-	// Inbound events (Handshake Reset)
+	/// Handles the new handshake inbound event
+	/// Creates a new control block for the live peer.
 	internal func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
 		switch event {
 			case let evt as WireguardHandler.WireguardHandshakeNotification:
 				logger.debug("resetting kcp", metadata: ["public-key_remote":"\(evt.publicKey)"])
-				// Need to figure out how to make this into a conversation id
 				let key = evt.publicKey
 				let convID = UInt16(truncatingIfNeeded: evt.geometry.initiator.RAW_native())
-				 // Check if control block exists
 				 if (kcp[key] == nil) {
-				 	// Create the magic id control block
 				 	kcp[key] = KCPLivePeer(mtu: mtu, logLevel: logger.logLevel, maxCongestionWindow: writeWindow)
 					 kcp[key]!.insertLatestControlBlock(KCPControlBlock(context:context, peerPublicKey:key, conv:0, mss:mtu.mtuOutboundIn, writeWindow:UInt32(writeWindow), readWindow:UInt32(readWindow), logLevel:logger.logLevel), context: context, handler: self)
 				 }
