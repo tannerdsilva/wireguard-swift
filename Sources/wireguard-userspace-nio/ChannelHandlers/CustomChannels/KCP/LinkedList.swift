@@ -1,6 +1,4 @@
 /// A minimal doubly‑linked list that behaves like the C i‑queue used by KCP.
-
-import Spatial
 internal struct LinkedList<ListElement> {
 	/// a node in the linked list.
 	internal final class Node {
