@@ -1,15 +1,17 @@
 /// A minimal doubly‑linked list that behaves like the C i‑queue used by KCP.
-internal struct LinkedList<Element> {
+
+import Spatial
+internal struct LinkedList<ListElement> {
 	/// a node in the linked list.
 	internal final class Node {
 		/// the value will only be `nil` for the sentinel node. else, it contains the `Element` instance.
-		internal var value:Element?
+		internal var value:ListElement?
 		/// the next node in the list, or self if this is the sentinel and the list is empty.
 		internal var next:Node!
 		/// the previous node in the list, or self if this is the sentinel and the list is empty.
 		internal var prev:Node!
 		/// create a new node with the given value. if `value` is `nil`, this is the sentinel node.
-		internal init(value:Element? = nil) {
+		internal init(value:ListElement? = nil) {
 			self.value = value
 			self.next = self
 			self.prev = self
@@ -51,18 +53,18 @@ internal struct LinkedList<Element> {
 		count -= 1
 	}
 	
-	private static func makeNode(_ element: Element) -> Node {
+	private static func makeNode(_ element: ListElement) -> Node {
 		return Node(value: element)
 	}
 
-	public mutating func popFront() -> Element? {
+	public mutating func popFront() -> ListElement? {
 		guard let n = front else { return nil }
 		let v = n.value!
 		remove(n)
 		return v
 	}
 
-	public mutating func popBack() -> Element? {
+	public mutating func popBack() -> ListElement? {
 		guard let n = back else { return nil }
 		let v = n.value!
 		remove(n)
@@ -99,36 +101,36 @@ internal struct LinkedList<Element> {
 }
 
 extension LinkedList {
-	@discardableResult internal mutating func add(_ element:Element) -> Node {
+	@discardableResult internal mutating func add(_ element:ListElement) -> Node {
 		let newNode = Self.makeNode(element)
 		add(newNode)
 		return newNode
 	}
-	@discardableResult internal mutating func addTail(_ element:Element) -> Node {
+	@discardableResult internal mutating func addTail(_ element:ListElement) -> Node {
 		let newNode = Self.makeNode(element)
 		addTail(newNode)
 		return newNode
 	}
-	@discardableResult internal mutating func insert(_ element:Element, after anchor:Node) -> Node {
+	@discardableResult internal mutating func insert(_ element:ListElement, after anchor:Node) -> Node {
 		let newNode = Self.makeNode(element)
 		insert(newNode, after:anchor)
 		return newNode
 	}
 }
-
+	
 extension LinkedList:Sequence {
 	internal struct Iterator:IteratorProtocol, Sequence {
 		// The node that will be returned on the next call to `next()`.
-		private var nextNode: LinkedList<Element>.Node?
+		private var nextNode: LinkedList<ListElement>.Node?
 		// Sentinel node that marks the end of the list.
-		private let sentinel: LinkedList<Element>.Node
+		private let sentinel: LinkedList<ListElement>.Node
 
-		internal init(start: LinkedList<Element>.Node?, sentinel: LinkedList<Element>.Node) {
+		internal init(start: LinkedList<ListElement>.Node?, sentinel: LinkedList<ListElement>.Node) {
 			self.nextNode = start			// start at the real head (or nil)
 			self.sentinel = sentinel   		// the dummy head that points to itself
 		}
 
-		internal mutating func next() -> (Node, Element)? {
+		internal mutating func next() -> (Node, ListElement)? {
 			// Stop when we hit the sentinel again.
 			guard let node = nextNode, node !== sentinel else { return nil }
 
@@ -149,16 +151,16 @@ extension LinkedList:Sequence {
 	
 	internal struct ReversedIterator:IteratorProtocol, Sequence {
 		/// The node that will be returned on the next call to `next()`.
-		private var nextNode: LinkedList<Element>.Node?
+		private var nextNode: LinkedList<ListElement>.Node?
 		/// Sentinel node that marks the end of the list.
-		private let sentinel:LinkedList<Element>.Node
+		private let sentinel:LinkedList<ListElement>.Node
 
 		/// Create a new iterator.
 		///
 		/// - Parameters:
 		///   - start:   The node that should be returned first – typically `back`.
 		///   - sentinel: The dummy head node (`head`) that points to itself.
-		internal init(start: LinkedList<Element>.Node?, sentinel: LinkedList<Element>.Node) {
+		internal init(start: LinkedList<ListElement>.Node?, sentinel: LinkedList<ListElement>.Node) {
 			self.nextNode = start
 			self.sentinel = sentinel
 		}
@@ -171,7 +173,7 @@ extension LinkedList:Sequence {
 		/// removed node’s `prev` and `next` to itself.
 		///
 		/// - Returns: `(Node, Element)` if there is a next element, otherwise `nil`.
-		internal mutating func next() -> (Node, Element)? {
+		internal mutating func next() -> (Node, ListElement)? {
 			// Stop when we hit the sentinel again.
 			guard let node = nextNode, node !== sentinel else { return nil }
 
