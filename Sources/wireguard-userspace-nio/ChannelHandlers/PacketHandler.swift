@@ -116,14 +116,12 @@ extension PacketHandler {
 			return byteBuffer[0]
 		}
 		logger[metadataKey:"wg_packet_type"] = "\(firstByte)"
-		#if DEBUG
 		guard envelope.data.readableBytes <= mtu.mtuInboundIn else {
 			#if DEBUG
 			logger.error("mtu for InboundIn is exceeding the configured limit.", metadata:["inbound_size":"\(envelope.data.readableBytes)", "mtu_inboundIn":"\(mtu.mtuInboundIn)"])
 			#endif
 			return
 		}
-		#endif
 		// proceed based on the first byte of the buffer
 		let wireBytes:Int
 		switch firstByte {
@@ -210,7 +208,8 @@ extension PacketHandler {
 			#if DEBUG
 			log.error("mtu for OutboundOut is exceeding the configured limit.", metadata:["outbound_size":"\(unwrappedData.data.readableBytes)", "mtu_outboundOut":"\(mtu.mtuOutboundOut)"])
 			#endif
-			fatalError()
+			promise?.fail(ChannelError.OutboundMessageMTUExceeded(attemptedOutboundSize:unwrappedData.data.readableBytes, mtuLimitOutbound:Int(mtu.mtuOutboundOut)))
+			return
 		}
 		packetsWrittenSinceLastFlush += 1
 		bytesWrittenSinceLastFlush += unwrappedData.bytesOnWire

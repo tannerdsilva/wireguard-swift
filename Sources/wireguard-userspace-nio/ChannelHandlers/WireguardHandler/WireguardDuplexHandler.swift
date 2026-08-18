@@ -30,6 +30,10 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	internal static let rekeyAfterTime = TimeAmount.seconds(120)
 	internal static let rejectAfterTime = TimeAmount.seconds(300)
 	internal static let activeCookieTime = TimeAmount.seconds(120)
+	/// Reject-After-Messages: the transport message counter limit (2⁶⁴−2¹³−1) after which
+	/// WireGuard refuses to send or receive more transport data messages with the current
+	/// session (whitepaper section 6.2).
+	internal static let rejectAfterMessages:UInt64 = UInt64.max - (1 << 13)
 
 	/// used to specify the wireguard overhead for mtu calculations.
 	internal static let wireguardDataOverhead = MemoryLayout<Message.Data.Header>.size + MemoryLayout<Tag>.size
@@ -46,12 +50,41 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		case terminated
 	}
 	
-	internal var secretCookieR:Result.Bytes8 = Result.Bytes8(RAW_staticbuff:Result.Bytes8.RAW_staticbuff_zeroed())//try! generateSecureRandomBytes(as:Result.Bytes8.self)
+	internal var secretCookieR:Result.Bytes8 = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+	/// the previous cookie secret, retained for a grace period so that in-flight cookies issued
+	/// just before a rotation remain valid. the whitepaper (section 5.3) requires the secret to
+	/// change every two minutes; keeping the prior secret for validation avoids breaking a
+	/// legitimate handshake that began just before the rotation.
+	internal var oldSecretCookieR:Result.Bytes8? = nil
+	/// the time at which `secretCookieR` was last rotated.
+	private var cookieSecretSetTime:NIODeadline = .now()
+
+	/// rotates the per-peer cookie secret `R` every `activeCookieTime` (120 seconds), as required
+	/// by the whitepaper (section 5.3: "the responder maintains a secret random value that changes
+	/// every two minutes"). the previous secret is retained so cookies already issued remain valid
+	/// during the grace window. call this on the receive path before validating handshake messages.
+	internal func rotateCookieSecret(now:NIODeadline) {
+		guard now - cookieSecretSetTime >= WireguardHandler.activeCookieTime else {
+			return
+		}
+		oldSecretCookieR = secretCookieR
+		guard let newSecret = try? generateSecureRandomBytes(as:Result.Bytes8.self) else {
+			// unable to obtain fresh entropy; keep the current secret and retry next rotation.
+			cookieSecretSetTime = now
+			return
+		}
+		secretCookieR = newSecret
+		cookieSecretSetTime = now
+	}
 	
 	/// logger that will be used to produce output for the work completed by this handler
 	private let log:Logger
 	private let privateKey:MemoryGuarded<PrivateKey>
 	internal let precomputedCookieKey:RAW_xchachapoly.Key
+	/// pre-computed `HASH(LABEL-MAC1 || Spub_self)` (the whitepaper notes this value can be
+	/// pre-computed). it lets the responder reject initiations with an invalid `msg.mac1` in
+	/// constant time *before* performing any curve25519 work (whitepaper sections 5.3 and 5.4.4).
+	private let precomputedMAC1Key:Result.Bytes32
 	
 	internal let isCongested:Atomic<Bool> = .init(false)
 
@@ -96,6 +129,11 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		try! hasher.update([UInt8]("cookie--".utf8))
 		try! hasher.update(publicKey)
 		precomputedCookieKey = try! hasher.finish()
+		// pre-computing HASH(LABEL-MAC1 || Spub) for cheap, pre-curve25519 mac1 rejection.
+		var mac1Hasher = try! WGHasher<Result.Bytes32>()
+		try! mac1Hasher.update([UInt8]("mac1----".utf8))
+		try! mac1Hasher.update(publicKey)
+		precomputedMAC1Key = try! mac1Hasher.finish()
 		operatingState = .initialized(initialPeers)
 		mtu = MTULimits(mtuInboundIn:mtu.mtuInboundIn, mtuOutboundOut:mtu.mtuOutboundOut, mtuOutboundIn:(Self.maxPayloadPrePadded(forMTU:mtu.mtuOutboundOut) - Self.wireguardDataOverhead), mtuInboundOut:(Self.maxPayloadPrePadded(forMTU:mtu.mtuInboundIn) - Self.wireguardDataOverhead))
 		self.mtu = mtu
@@ -225,22 +263,30 @@ extension WireguardHandler {
 					Im = responder peer index
 					Im' = initiator peer index
 					*/
+					// rotate the per-peer cookie secret (R) every two minutes before any handshake validation.
+					rotateCookieSecret(now: now)
+					// M1: cheap pre-curve25519 mac1 gate. an initiation with an invalid msg.mac1 is
+					// rejected before any DH work (DoS hardening; whitepaper sections 5.3/5.4.4).
+					// stays silent on unauthenticated packets per the whitepaper's stealthiness goal.
+					do {
+						try payload.validateMac1(precomputedKey: precomputedMAC1Key)
+					} catch {
+						#if DEBUG
+						logger.error("received invalid handshake initiation packet. ignoring.")
+						#endif
+						return
+					}
 					if !context.channel.isWritable {
 						do {
-							try payload.validateUnderLoad(responderStaticPrivateKey:privateKey, R:secretCookieR, endpoint:endpoint)
-						} catch Message.Initiation.Payload.Authenticated.Error.mac1Invalid {
-							#if DEBUG
-							logger.error("received invalid handshake initiation packet. ignoring.")
-							#endif
-							return
+							try payload.validateUnderLoad(responderStaticPrivateKey:privateKey, R:secretCookieR, oldR:oldSecretCookieR, endpoint:endpoint)
 						} catch {
-							// create and send the cookie
+							// mac1 was already verified above, so a failure here means an invalid or
+							// missing mac2 while under load -> send a cookie reply (whitepaper 5.4.7).
 							logger.trace("Under load. Sending cookie response", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)"])
 							let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:payload.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:payload.msgMac1)
 							switch writeMessage(.cookie(cookie), to:endpoint, context:context, promise:nil) {
 								case true:
 									flushAfterChannelReadComplete = true
-									
 								default:
 									// held - no need to flush now.
 									break
@@ -248,9 +294,19 @@ extension WireguardHandler {
 							return
 						}
 					}
-					
+				
 					let responderPeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
 					var (c, h, initiatorStaticPublicKey, _) = try payload.validate(responderStaticPrivateKey: privateKey)
+					// H2: the message's msg.mac2 must be valid (or the all-zero `0¹⁶` sent by a peer
+					// that has no cookie). an invalid non-zero mac2 indicates a forged/attributable
+					// initiation and is rejected even when the responder is not under load. this
+					// enforces the DoS/IP-attribution property of the whitepaper (sections 5.3/5.4.4).
+					guard try payload.isMac2Valid(R:secretCookieR, oldR:oldSecretCookieR, endpoint:endpoint) else {
+						#if DEBUG
+						logger.warning("received handshake initiation with invalid mac2. ignoring.", metadata:["index_initiator":"\(payload.payload.initiatorPeerIndex)"])
+						#endif
+						return
+					}
 					guard let livePeerInfo = peerDeltaEngine.peerLookup(publicKey:initiatorStaticPublicKey) else {
 						#if DEBUG
 						logger.notice("interface not configured to operate with remote peer.", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
@@ -360,6 +416,12 @@ extension WireguardHandler {
 						return
 					}
 					var varsRecv = livePeerInfo.getRecvVars(context:context, geometry:existingGeometryPositioned, now:now)!
+					// M2: Reject-After-Messages. refuse transport data received past the protocol counter
+					// limit (whitepaper section 6.2).
+					guard counter.RAW_native() < WireguardHandler.rejectAfterMessages else {
+						logger.warning("receive counter exceeded reject-after-messages limit. dropping.", metadata:["public-key_remote":"\(identifiedPublicKey)", "counter":"\(counter.RAW_native())"])
+						return
+					}
 					guard varsRecv.nRecv.isPacketAllowed(counter.RAW_native()) else {
 						logger.warning("sliding window rejected packet", metadata:["public-key_remote":"\(identifiedPublicKey)", "nRecv":"\(varsRecv.nRecv)", "tRecv":"\(varsRecv.tRecv.debugDescription)", "counter":"\(counter.RAW_native())"])
 						return

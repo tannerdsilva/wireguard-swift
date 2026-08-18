@@ -122,6 +122,11 @@ extension PeerInfo.Live {
 		guard currentRotation.establishedDate + WireguardHandler.rejectAfterTime > now else {
 			return guardCaught()
 		}
+		// M2: Reject-After-Messages. if the send counter has reached the protocol limit, refuse to
+		// send with this session and trigger a rekey (whitepaper section 6.2).
+		guard currentRotation.nVar.valueSend.RAW_native() < WireguardHandler.rejectAfterMessages else {
+			return guardCaught()
+		}
 		return .sendImmediately(.init(nSend:currentRotation.nVar.valueSend, tSend:currentRotation.tVar.valueSend, session:currentRotation))
 	}
 
@@ -421,10 +426,11 @@ extension PeerInfo.Live {
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
 		
 		// handle the session that falls out of the rotation
-		guard let outgoingIndexValue = rotation.apply(next:Session(geometry:element, nVar:SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults), establishedDate:now)) else {
+		guard var outgoingIndexValue = rotation.apply(next:Session(geometry:element, nVar:SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:SendReceive<Result.Bytes32, Result.Bytes32>(peerInitiated:kdfResults), establishedDate:now)) else {
 			// no outgoing index value, return
 			return
 		}
+		outgoingIndexValue.zeroOut()
 		wgh.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingIndexValue.geometry.m)
 
 		// cancel the scheduled handshake initiation task
@@ -449,10 +455,12 @@ extension PeerInfo.Live {
 		let rotationResults = rotation.rotate(replacingNext:Session(geometry:element, nVar:SendReceive<Counter, SlidingWindow<Counter>>(valueSend:0, valueRecv:SlidingWindow(windowSize:64)), tVar:SendReceive<Result.Bytes32, Result.Bytes32>(selfInitiated:kdfResults), establishedDate:now))
 		
 		// automatically update the wireguard handler as needed
-		if let outgoingPrevious = rotationResults.previous {
+		if var outgoingPrevious = rotationResults.previous {
+			outgoingPrevious.zeroOut()
 			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingPrevious.geometry.m)
 		}
-		if let outgoingNext = rotationResults.next {
+		if var outgoingNext = rotationResults.next {
+			outgoingNext.zeroOut()
 			wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingNext.geometry.m)
 		}
 		wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.add(indexM:element.m, publicKey:publicKey)
@@ -487,9 +495,10 @@ extension PeerInfo.Live {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		log.debug("applying rotation to active cryptokey set. next -> current -> previous.")
-		guard let outgoingID = rotation.rotate() else {
+		guard var outgoingID = rotation.rotate() else {
 			return
 		}
+		outgoingID.zeroOut()
 		wireguardHandler.automaticallyUpdatedVariables.activeSessionIndicies.removeIfPresent(indexM:outgoingID.geometry.m)
 	}
 }

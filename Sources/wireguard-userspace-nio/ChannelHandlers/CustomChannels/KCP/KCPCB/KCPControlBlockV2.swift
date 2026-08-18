@@ -1,6 +1,7 @@
 import NIO
 import struct RAW_dh25519.PublicKey
 import Logging
+import RAW
 
 public enum SendError:Swift.Error {
 	case mssValueError
@@ -374,7 +375,13 @@ extension KCPControlBlock {
 			let fragSize = min(Int(mss), message.readableBytes - offset)
 			let view = message.getSlice(at: message.readerIndex + offset, length: fragSize)
 			let command = offset == 0 ? (isGenesis ? KCPSegment.Command.genesis : KCPSegment.Command.push) : KCPSegment.Command.push
-			if isGenesis { storedSendingGenesis = UInt64.random(in: UInt64.min...UInt64.max) }
+			if isGenesis {
+				if let rnd = try? generateSecureRandomBytes(count: 8) {
+					storedSendingGenesis = rnd.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+				} else {
+					storedSendingGenesis = UInt64.random(in: UInt64.min...UInt64.max)
+				}
+			}
 			let header = KCPSegment.Header(conv: conv, cmd: command, rcv_wnd_size:UInt16(readWindow/mtu), frg: UInt8(count - offset/Int(mss) - 1), sn: snd_nxt, ts:0, una:0, len: UInt16(fragSize))
 			snd_nxt &+= 1
 			let seg = KCPSegment(header: header, data: view!.readableBytesView)

@@ -65,12 +65,17 @@ extension Endpoint: Codable {
 		let container = try decoder.singleValueContainer()
 		let epString = try container.decode(String.self)
 
+		// L3: reject malformed endpoints with a decoding error rather than crashing the process.
 		let parts = epString.split(separator: ":", maxSplits: 1).map(String.init)
-		guard parts.count == 2 else {
-			fatalError("Endpoint failed to decode.")
+		guard
+			parts.count == 2,
+			let portValue = Int(parts[1]),
+			(0...Int(UInt16.max)).contains(portValue),
+			let address = Address(parts[0])
+		else {
+			throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid endpoint: \(epString)")
 		}
-		self = Endpoint(Address(parts[0])!,
-						port: Endpoint.Port(integerLiteral: Int(parts[1])!))
+		self = Endpoint(address, port: Endpoint.Port(integerLiteral: portValue))
 	}
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.singleValueContainer()
@@ -110,7 +115,8 @@ extension PeerInfo:Codable {
 		let publicKeyString = try container.decode(String.self, forKey: .publicKey)
 		let publicKeyBytes = try RAW_base64.decode(publicKeyString)
 		guard publicKeyBytes.count == 32 else {
-			fatalError("Public Key failed to decode.")
+			// L3: fail the decode rather than crashing the process on a malformed config.
+			throw DecodingError.dataCorruptedError(forKey:.publicKey, in: container, debugDescription: "Public key must be 32 bytes.")
 		}
 		let publicKey = RAW_dh25519.PublicKey(RAW_staticbuff: publicKeyBytes)
 		
@@ -125,7 +131,7 @@ extension PeerInfo:Codable {
 		}
 		let bytes = try RAW_base64.decode(sharedKeyString)
 		guard bytes.count == 32 else {
-			fatalError("Public Key failed to decode.")
+			throw DecodingError.dataCorruptedError(forKey:.sharedKey, in: container, debugDescription: "Shared key must be 32 bytes.")
 		}
 		let sharedKey = bytes.withUnsafeBufferPointer { ptr in
 			return MemoryGuarded<SharedKey>.init(RAW_accessed: ptr)

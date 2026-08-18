@@ -157,7 +157,7 @@ extension Message.Initiation.Payload {
 			self.msgMac2 = msgMac2
 		}
 
-		public borrowing func validateUnderLoad(responderStaticPrivateKey:MemoryGuarded<PrivateKey>, R:Result.Bytes8, endpoint:Endpoint) throws {
+		public func validateUnderLoad(responderStaticPrivateKey:MemoryGuarded<PrivateKey>, R:Result.Bytes8, oldR:Result.Bytes8?, endpoint:Endpoint) throws {
 			try withUnsafePointer(to:self) { selfPtr in
 				// setup: get responder public key
 				let responderStaticPublicKey = PublicKey(privateKey:responderStaticPrivateKey)
@@ -171,6 +171,32 @@ extension Message.Initiation.Payload {
 					throw Error.mac1Invalid
 				}
 				
+				guard try isMac2Valid(R:R, oldR:oldR, endpoint:endpoint) else {
+					throw Error.mac2Invalid
+				}
+			}
+		}
+
+		/// cheaply validates `msg.mac1` against a pre-computed MAC1 key
+		/// (`HASH(LABEL-MAC1 || Spub_m')`). unlike `validate(_:)`, this performs NO curve25519
+		/// work and depends only on the responder's public key and the raw packet, so it can be
+		/// used as a cheap pre-DH authenticity gate to reject unauthenticated initiations before
+		/// expending CPU (DoS hardening; whitepaper sections 5.3 and 5.4.4).
+		public borrowing func validateMac1(precomputedKey:Result.Bytes32) throws {
+			try withUnsafePointer(to:self) { selfPtr in
+				let mac1 = try wgMAC(key:precomputedKey, data:selfPtr.pointer(to:\.payload)!.pointee)
+				guard mac1 == selfPtr.pointer(to:\.msgMac1)!.pointee else {
+					throw Error.mac1Invalid
+				}
+			}
+		}
+
+		/// computes the expected value of `msg.mac2` for this message given the responder's
+		/// per-peer-cookie secret `R` and the source `endpoint` from which the message arrived.
+		/// per the whitepaper (sections 5.4.4 and 5.4.7):
+		/// `T := Mac(R, endpoint)`, `msg.mac2 := Mac(T, msgβ)` where `msgβ` is all bytes prior to mac2.
+		public borrowing func computeExpectedMac2(R:Result.Bytes8, endpoint:Endpoint) throws -> Result.Bytes16 {
+			try withUnsafePointer(to:self) { selfPtr in
 				let T:Result.Bytes16
 				switch endpoint {
 					case .v4(let v4ep):
@@ -178,11 +204,27 @@ extension Message.Initiation.Payload {
 					case .v6(let v6ep):
 						T = try wgMAC(key:R, data:v6ep)
 				}
-				let mac2 = try wgMAC(key:T, data:MSGb(payload:selfPtr.pointer(to:\.payload)!.pointee, msgMac1:mac1))
-				guard mac2 == selfPtr.pointer(to:\.msgMac2)!.pointee else {
-					throw Error.mac2Invalid
-				}
+				return try wgMAC(key:T, data:MSGb(payload:selfPtr.pointer(to:\.payload)!.pointee, msgMac1:selfPtr.pointer(to:\.msgMac1)!.pointee))
 			}
+		}
+
+		/// returns `true` if the message carries a valid `msg.mac2` for the given cookie secret(s)
+		/// and source endpoint. the all-zero `mac2` (`0¹⁶`) is always accepted here, since a peer
+		/// without a cookie legitimately sends `mac2 := 0¹⁶`; whether that zero value is *acceptable*
+		/// is a policy decision made by the caller based on whether the responder is under load
+		/// (the whitepaper only *requires* a valid non-zero mac2 when the responder is under load).
+		public borrowing func isMac2Valid(R:Result.Bytes8, oldR:Result.Bytes8?, endpoint:Endpoint) throws -> Bool {
+			let zeroMac2 = Result.Bytes16(RAW_staticbuff:Result.Bytes16.RAW_staticbuff_zeroed())
+			if msgMac2 == zeroMac2 {
+				return true
+			}
+			if try computeExpectedMac2(R:R, endpoint:endpoint) == msgMac2 {
+				return true
+			}
+			if let oldR = oldR, try computeExpectedMac2(R:oldR, endpoint:endpoint) == msgMac2 {
+				return true
+			}
+			return false
 		}
 		
 		public borrowing func validate(responderStaticPrivateKey:MemoryGuarded<PrivateKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32, initPublicKey:PublicKey, timestamp:TAI64N) {

@@ -108,7 +108,90 @@ extension WireguardSwiftTests {
 
 			authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey, cookie: cookie, savedMac1:authenticatedPacketToSend.msgMac1)
 
-			try authenticatedPacketToSend.validateUnderLoad(responderStaticPrivateKey:responderStaticPrivateKey, R: secretCookieR, endpoint:Endpoint(endpoint))
+			try authenticatedPacketToSend.validateUnderLoad(responderStaticPrivateKey:responderStaticPrivateKey, R: secretCookieR, oldR:nil, endpoint:Endpoint(endpoint))
+		}
+
+		@Test func isMac2ValidAcceptsZeroMac2() throws {
+			// a handshake initiation with the all-zero mac2 (peer has no cookie) must be
+			// accepted when not under load.
+			let initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			let responderPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var responderPublicKey = PublicKey(privateKey:responderPrivateKey)
+			let forged = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderPublicKey)
+			let authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey)
+			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
+			#expect(try authenticated.isMac2Valid(R:secretCookieR, oldR:nil, endpoint:endpoint))
+		}
+
+		@Test func isMac2ValidRejectsForgedNonZeroMac2() throws {
+			// a non-zero mac2 that does not match the cookie derived from the responder secret
+			// must be rejected, even when the responder is not under load.
+			let initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			let responderPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var responderPublicKey = PublicKey(privateKey:responderPrivateKey)
+			let forged = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderPublicKey)
+			var authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey)
+
+			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
+			try! hasher.update([UInt8]("cookie--".utf8))
+			try! hasher.update(responderPublicKey)
+			let precomputedCookieKey = try! hasher.finish()
+
+			let issuerSecret = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
+			// produce a valid non-zero mac2 bound to `issuerSecret`.
+			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:authenticated.payload.initiatorPeerIndex, k:precomputedCookieKey, r:issuerSecret, endpoint:endpoint, m:authenticated.msgMac1)
+			authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey, cookie:cookie, savedMac1:authenticated.msgMac1)
+			#expect(try authenticated.isMac2Valid(R:issuerSecret, oldR:nil, endpoint:endpoint))
+			// ...but a *different* responder secret must not accept it (no old-secret grace).
+			let differentSecret = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			#expect(!(try authenticated.isMac2Valid(R:differentSecret, oldR:nil, endpoint:endpoint)))
+		}
+
+		@Test func isMac2ValidAcceptsCookieUnderCurrentSecret() throws {
+			// a valid cookie produced under the current secret must validate.
+			let initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			let responderPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var responderPublicKey = PublicKey(privateKey:responderPrivateKey)
+			let forged = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderPublicKey)
+			var authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey)
+
+			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
+			try! hasher.update([UInt8]("cookie--".utf8))
+			try! hasher.update(responderPublicKey)
+			let precomputedCookieKey = try! hasher.finish()
+
+			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
+			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:authenticated.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:authenticated.msgMac1)
+			authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey, cookie:cookie, savedMac1:authenticated.msgMac1)
+			#expect(try authenticated.isMac2Valid(R:secretCookieR, oldR:nil, endpoint:endpoint))
+		}
+
+		@Test func isMac2ValidAcceptsCookieUnderOldSecretGrace() throws {
+			// a cookie produced under a now-rotated (previous) secret must still validate via
+			// the old-secret grace period.
+			let initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			let responderPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
+			var responderPublicKey = PublicKey(privateKey:responderPrivateKey)
+			let forged = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderPublicKey)
+			var authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey)
+
+			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
+			try! hasher.update([UInt8]("cookie--".utf8))
+			try! hasher.update(responderPublicKey)
+			let precomputedCookieKey = try! hasher.finish()
+
+			let oldSecretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let newSecretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
+			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:authenticated.payload.initiatorPeerIndex, k:precomputedCookieKey, r:oldSecretCookieR, endpoint:endpoint, m:authenticated.msgMac1)
+			authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey, cookie:cookie, savedMac1:authenticated.msgMac1)
+			// mac2 is valid under the new secret...
+			#expect(try authenticated.isMac2Valid(R:newSecretCookieR, oldR:nil, endpoint:endpoint) == false)
+			// ...but accepted via the old-secret grace period.
+			#expect(try authenticated.isMac2Valid(R:newSecretCookieR, oldR:oldSecretCookieR, endpoint:endpoint))
 		}
 	}
 }

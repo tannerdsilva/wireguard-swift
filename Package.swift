@@ -14,7 +14,7 @@ let package = Package(
 		.library(name:"wireguard-userspace-nio", targets:["wireguard-userspace-nio"]),
 	],
 	dependencies:[
-		.package(url:"https://github.com/tannerdsilva/rawdog.git", revision: "1c4966c72102fc01b169cbc18ee5f0be10d802de"),
+		.package(url:"https://github.com/tannerdsilva/rawdog.git", "20.0.0"..<"21.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
 		.package(url:"https://github.com/tannerdsilva/bedrock.git", "7.0.1"..<"8.0.0"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
