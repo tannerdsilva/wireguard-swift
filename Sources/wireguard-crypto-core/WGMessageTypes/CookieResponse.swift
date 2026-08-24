@@ -6,25 +6,28 @@ import RAW_xchachapoly
 import RAW_base64
 import bedrock_ip // replacement target for NIO.SocketAddress
 
+/// A deprecated alias for `Message.Cookie`.
 @available(*, deprecated, renamed: "Message.Cookie")
 public typealias CookieReplyMessage = Message.Cookie
 
 extension Message {
+	/// A cookie reply message, sent by under-load responders to authenticate handshakes.
 	public struct Cookie {
+		/// The serialized contents of a cookie reply message.
 		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Nonce.self, Result.Bytes16.self, Tag.self)
 		public struct Payload:Sendable, Sequence {
-			/// message type (type and reserved)
+			/// The message type header (type and reserved bytes).
 			public let typeHeader:TypeHeading
-			/// responder's peer index (I_r)
+			/// The responder's peer index (I_r).
 			public let initiatorIndex:PeerIndex
-			/// random nonce
+			/// A random nonce.
 			public let nonce:Nonce
-			/// cookie message
+			/// The encrypted cookie message.
 			public let cookieMsg:Result.Bytes16
-			/// cookie tag
+			/// The authentication tag for the cookie message.
 			public let cookieTag:Tag
 
-			/// initializes a new HandshakeResponseMessage
+			/// Creates a new cookie reply payload.
 			fileprivate init(initiatorIndex:PeerIndex, nonce:Nonce, cookieMsg:Result.Bytes16, cookieTag:Tag) {
 				self.typeHeader = 0x3
 				self.initiatorIndex = initiatorIndex
@@ -33,6 +36,15 @@ extension Message {
 				self.cookieTag = cookieTag
 			}
 
+			/// Builds a cookie reply payload for the given initiator, cookie key, and source endpoint.
+			/// - Parameters:
+			///   - initiatorsPeerIndex: The initiator's peer index (I_r) to echo back.
+			///   - k: The responder's cookie key.
+			///   - r: The responder's per-peer cookie secret.
+			///   - endpoint: The source endpoint of the message being answered.
+			///   - m: The message being answered, used as AEAD associated data.
+			/// - Returns: The forged cookie reply payload.
+			/// - Throws: If key derivation or encryption fails.
 			public static func forge(initiatorsPeerIndex:PeerIndex, k:RAW_xchachapoly.Key, r:Result.Bytes8, endpoint:Endpoint, m:Result.Bytes16) throws -> Self {
 				let T:Result.Bytes16
 				switch endpoint {

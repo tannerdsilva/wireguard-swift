@@ -3,23 +3,37 @@ import struct RAW_dh25519.PublicKey
 import Logging
 import RAW
 
+/// Errors that can occur while writing data to the KCP control block.
 public enum SendError:Swift.Error {
+	/// The maximum segment size was invalid.
 	case mssValueError
+	/// The input length was invalid.
 	case inputLengthError
+	/// The data count exceeded the send window.
 	case invalidDataCountForSendWindow
 }
 
+/// Errors that can occur while reading data from the KCP control block.
 public enum ReceiveError:Swift.Error {
+	/// The receive queue was empty.
 	case receiveQueueEmpty
+	/// The provided buffer was too small.
 	case lengthTooSmall
+	/// The buffered segments were missing a first element.
 	case missingFirstElement
+	/// The first buffered segment had an unexpected fragment ID.
 	case firstSegmentFragmentError
 }
 
+/// Errors that can occur while parsing inbound KCP packets.
 public enum InputError:Swift.Error {
+	/// The input was too short to contain a header.
 	case invalidInputCount
+	/// The packet's conversation ID did not match this control block.
 	case convValueMismatch
+	/// The packet ended with partial trailing data.
 	case partialTrailingData
+	/// The packet carried an invalid command value.
 	case invalidCMD
 }
 
@@ -369,6 +383,16 @@ extension KCPControlBlock {
 
 // MARK: Sending
 extension KCPControlBlock {
+	/// Fragments the provided message into KCP segments and stores them for
+	/// transmission. Called for all segments; the first segment carries the
+	/// `genesis` command when `isGenesis` is `true`.
+	/// - Parameters:
+	///   - context: The channel handler context.
+	///   - handler: The KCP control block handler.
+	///   - message: The message to fragment and send.
+	///   - writePromise: Completed when the last fragment is written.
+	///   - ackPromise: Completed when the first fragment is acknowledged.
+	///   - isGenesis: Whether this write begins a new connection.
 	public mutating func handleWrite(context:borrowing ChannelHandlerContext, handler:borrowing KCPControlBlock.Handler, message:ByteBuffer, writePromise:EventLoopPromise<Void>?, ackPromise:EventLoopPromise<Void>?, isGenesis:Bool) {
 		let count = (message.readableBytes + Int(mss) - 1) / Int(mss)
 		for offset in stride(from: 0, to: message.readableBytes, by: Int(mss)) {
@@ -395,10 +419,16 @@ extension KCPControlBlock {
 		isInactive = false
 	}
 
-	// KCP Flush
-	// - Sends any pending ACKs
-	// - Sends any pending Probes
-	// - Sends any pending data packets that can be sent
+	/// The KCP flush routine. Sends any pending acknowledgements, window probes,
+	/// and data packets that the congestion window allows, and retransmits
+	/// segments whose retransmission deadline has passed.
+	/// - Parameters:
+	///   - context: The channel handler context.
+	///   - handler: The KCP control block handler.
+	///   - now: The current time.
+	///   - congestionWindow: The current congestion window, updated in place.
+	///   - minCongestionWindow: The minimum allowed congestion window.
+	///   - writerCount: The number of writes performed, updated in place.
 	@available(*, noasync)
 	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int, writerCount:inout Int) {
 		let now = iclock(now)

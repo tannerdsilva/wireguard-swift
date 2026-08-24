@@ -11,6 +11,9 @@ import bedrock_ip
 import wireguard_crypto_core
 
 extension Endpoint {
+	/// Creates an endpoint from a NIO `SocketAddress`.
+	/// - Parameter socketAddress: The socket address to convert.
+	/// - Throws: `POSIXError.EINVAL` if the address is neither IPv4 nor IPv6.
 	public init(_ socketAddress:SocketAddress) throws {
 		switch socketAddress {
 			case .v4(_):
@@ -24,6 +27,7 @@ extension Endpoint {
 }
 
 extension SocketAddress {
+	/// Creates a NIO `SocketAddress` from a WireGuard `Endpoint`.
 	public init(_ endpoint:Endpoint) {
 		switch endpoint {
 			case .v4(let v4ep):
@@ -34,9 +38,13 @@ extension SocketAddress {
 	}
 }
 
+/// Information about a completed handshake.
 public struct HandshakeInfo:Sendable {
+	/// The time at which the handshake was recorded.
 	public let recordedTime:NIODeadline
+	/// The round-trip time of the handshake.
 	public let rtt:NIODeadline
+	/// The public key of the peer that completed the handshake.
 	public let publicKey:PublicKey
 }
 
@@ -45,13 +53,20 @@ public struct HandshakeInfo:Sendable {
 /// It comes typed with custom Nio ChannelHandlers (See the CustomChannels protocol for more information).
 /// All interfaces come with a unique `PrivateKey` and initial configuration of `[PeerInfo]` (`PrivateKey` can be generated using `dhGenerate()` from wireguard-crypto-core).
 public final actor WGInterface<C:CustomChannels>:Sendable {
+	/// The current state of the interface.
 	public enum State {
+		/// The interface has been constructed but not started.
 		case initialized
+		/// The interface is starting up.
 		case engaging
+		/// The interface is running with an engaged channel.
 		case engaged(Channel)
+		/// The channel disconnected and the interface is awaiting reconnection.
 		case disconnected
+		/// The interface has been terminated.
 		case terminated
 	}
+	/// Indicates an operation was attempted while the interface was in an invalid state.
 	public struct InvalidInterfaceStateError:Swift.Error {}
 	private let receiveRatio:Double = 0.25
 
@@ -89,7 +104,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.recentSavedConfig = initialConfiguration
 	}
 	
-	/// Shortened initializer for a WGInterface<KCPChannels>.
+	/// Shortened initializer for a `WGInterface<KCPChannels>`.
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[any PeerInformation] = [], logLevel:Logger.Level, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws where C == KCPChannels{
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
 		makeLogger.logLevel = logLevel
@@ -106,7 +121,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		self.recentSavedConfig = initialConfiguration
 	}
 	
-	/// Shortened initializer for a WGInterface<KeepAlive>.
+	/// Shortened initializer for a `WGInterface<KeepAlive>`.
 	/// Initial configuration must be with PeerInfo rather than any PeerInformation.
 	public init(staticPrivateKey:MemoryGuarded<PrivateKey>, mtu:UInt16, initialConfiguration:[PeerInfo] = [], logLevel:Logger.Level, listeningPort:Int? = nil, encryptedPacketProcessor: any EncryptedPacketProcessor = DefaultEPP()) throws where C == KeepAlive {
 		var makeLogger = Logger(label: "\(String(describing:Self.self))")
@@ -126,13 +141,18 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 }
 
 extension WGInterface:Service {
+	/// Waits until the channel has finished initializing, throwing if initialization failed.
 	public func waitForChannelInit() async throws {
 		_ = try await bootstrappedFuture.result()!.get()
 	}
 
+	/// Errors that can occur while initializing the channel.
 	public enum ChannelInitializationError:Swift.Error, Sendable {
+		/// The socket receive buffer size could not be retrieved.
 		case soReceiveBufferRetrievalFailed
+		/// The socket send buffer size could not be set.
 		case soSendBufferSetFailed
+		/// The socket write buffer water mark could not be set.
 		case soWriteBufferWaterMarkSetFailed
 	}
 	
@@ -294,7 +314,11 @@ extension WGInterface:Service {
 		}
 	}
 	
-	/// Writes the provided [UInt8] to the chnanel pipeline as a ByteBuffer.
+	/// Writes the provided `[UInt8]` to the channel pipeline as a `ByteBuffer`.
+	/// - Parameters:
+	///   - publicKey: The public key of the peer to send the data to.
+	///   - data: The raw bytes to transmit.
+	/// - Throws: `InvalidInterfaceStateError` if the interface is not engaged, or the write fails.
 	public func write(publicKey: PublicKey, data:[UInt8]) async throws {
 		switch state {
 			case .engaged(let channel):

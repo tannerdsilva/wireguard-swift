@@ -16,13 +16,24 @@ public protocol PeerAssociatedTailHandler:Sendable, ChannelDuplexHandler where O
 /// It is the responsibility of the user to ensure that the Inbound and Outbound variables align within these custom channels.
 /// See `KCPChannels`, `KeepAlive`, and `DefaultChannels` for implementations of the protocol.
 public protocol CustomChannels:Sendable {
+	/// The head channel type.
 	associatedtype HeadChannel:PeerAssociatedHeadHandler
+	/// The tail channel type.
 	associatedtype TailChannel:PeerAssociatedTailHandler
+	/// The body channel type.
 	associatedtype BodyChannels:Sequence where BodyChannels.Element == any ChannelDuplexHandler & Sendable
+	/// The type of argument passed to `init(_:mtuLimits:)`.
 	associatedtype ArgumentType
 	
+	/// The head channel, through which inbound and outbound data travels first.
 	var head:HeadChannel { get }
+	/// The tail channel, through which inbound and outbound data travels last.
 	var tail:TailChannel { get }
+	/// The body channels, which process data between the head and tail channels.
 	var body:BodyChannels { get }
+	/// Creates a set of custom channels.
+	/// - Parameters:
+	///   - env: The argument the concrete channel set requires.
+	///   - mtuLimits: The MTU limits used to configure the channels.
 	init(_ env:ArgumentType, mtuLimits:inout MTULimits)
 }

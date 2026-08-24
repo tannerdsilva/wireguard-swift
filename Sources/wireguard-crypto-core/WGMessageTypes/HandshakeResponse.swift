@@ -4,21 +4,23 @@ import RAW_chachapoly
 import RAW_base64
 
 extension Message {
+	/// A handshake response message.
 	public struct Response {
+		/// The serialized contents of a handshake response message.
 		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, PeerIndex.self, PublicKey.self, Tag.self)
 		public struct Payload:Sendable {
-			/// message type (type and reserved)
+			/// The message type header (type and reserved bytes).
 			public let typeHeader:TypeHeading
-			/// responder's peer index (I_r)
+			/// The responder's peer index (I_r).
 			public let responderIndex:PeerIndex
-			/// sender's peer index
+			/// The initiator's peer index.
 			public let initiatorIndex:PeerIndex
-			/// ephemeral key
+			/// The responder's ephemeral key.
 			public let ephemeral:PublicKey
-			/// empty tag of message
+			/// The tag authenticating the empty AEAD plaintext.
 			public let emptyTag:Tag
 
-			/// initializes a new HandshakeResponseMessage
+			/// Creates a new handshake response payload.
 			fileprivate init(responderIndex:PeerIndex, initiatorIndex:PeerIndex, ephemeral:PublicKey, emptyTag:Tag) {
 				self.typeHeader = 0x2
 				self.initiatorIndex = initiatorIndex
@@ -27,6 +29,11 @@ extension Message {
 				self.emptyTag = emptyTag
 			}
 
+			/// Computes `msg.mac1` for the receiver of this payload and appends the
+			/// (all-zero) `msg.mac2` field, yielding an `Authenticated` response.
+			/// - Parameter initiatorStaticPublicKey: The initiator's static public key.
+			/// - Returns: The authenticated response message.
+			/// - Throws: If key derivation or MAC computation fails.
 			public borrowing func finalize(initiatorStaticPublicKey:UnsafePointer<PublicKey>) throws -> Authenticated {
 				try withUnsafePointer(to:self) { selfPtr in
 					// step 14: msg.mac1 := MAC(HASH(LABEL-MAC1 || Spub(m')), msga)
@@ -40,6 +47,19 @@ extension Message {
 				}
 			}
 
+			/// Builds a handshake response payload derived from the initiator's chain
+			/// state. Use the `c` and `h` from the validated initiation.
+			/// - Parameters:
+			///   - cIn: The working chaining key from the initiation.
+			///   - hIn: The working hash from the initiation.
+			///   - initiatorPeerIndex: The initiator's peer index.
+			///   - initiatorStaticPublicKey: The initiator's static public key.
+			///   - initiatorEphemeralPublicKey: The initiator's ephemeral public key.
+			///   - preSharedKey: The pre-shared key (may be all zeroes).
+			///   - responderPeerIndex: The responder's peer index; a random one is
+			///     generated when omitted.
+			/// - Returns: The updated chain state and the forged payload.
+			/// - Throws: If any cryptographic operation fails.
 			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:MemoryGuarded<SharedKey>, responderPeerIndex:PeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
 				return try cIn.RAW_access_staticbuff_mutating { cPtr in
 					return try hIn.RAW_access_staticbuff_mutating { hPtr in
@@ -95,21 +115,39 @@ extension Message {
 }
 
 extension Message.Response.Payload {
+	/// A handshake response message with MAC1 and MAC2 appended.
 	@RAW_staticbuff(concat:Message.Response.Payload.self, Result.Bytes16.self, Result.Bytes16.self)
 	public struct Authenticated:Sendable, Sequence {
+		/// Errors that can occur while validating a response message.
 		public enum Error:Swift.Error {
+			/// The message's MAC1 did not match.
 			case mac1Invalid
+			/// The message's MAC2 did not match.
 			case mac2Invalid
 		}
+		/// The underlying response payload.
 		public let payload:Message.Response.Payload
+		/// The message's MAC1.
 		public let msgMac1:Result.Bytes16
+		/// The message's MAC2.
 		public let msgMac2:Result.Bytes16
+		/// Creates an authenticated response message.
 		public init(payload:Message.Response.Payload, msgMac1:Result.Bytes16, msgMac2:Result.Bytes16) {
 			self.payload = payload
 			self.msgMac1 = msgMac1
 			self.msgMac2 = msgMac2
 		}
 
+		/// Validates the response given the initiator's chain state and keys.
+		/// - Parameters:
+		///   - cIn: The working chaining key from the initiation.
+		///   - hIn: The working hash from the initiation.
+		///   - initiatorStaticPrivateKey: The initiator's static private key.
+		///   - initiatorEphemeralPrivateKey: The initiator's ephemeral private key.
+		///   - preSharedKey: The pre-shared key (may be all zeroes).
+		/// - Returns: The updated working chaining key and working hash.
+		/// - Throws: `Error.mac1Invalid` if the MAC does not match, or any
+		///   cryptographic operation fails.
 		public borrowing func validate(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, preSharedKey:MemoryGuarded<SharedKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32) {
 			return try withUnsafePointer(to:self) { selfPtr in
 				try cIn.RAW_access_staticbuff_mutating { cPtr in

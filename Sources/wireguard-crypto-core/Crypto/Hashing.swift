@@ -9,6 +9,7 @@ internal func wgHash<A>(_ data:borrowing A) throws -> Result.Bytes32 where A:RAW
 	return try newHasher.finish()
 }
 
+/// A BLAKE2s hasher producing a `K`-byte digest, as used by the WireGuard protocol.
 public typealias WGHasher<K> = RAW_blake2.Hasher<S, K> where K:RAW_staticbuff
 
 internal func wgMAC<K, A>(key:consuming K, data:consuming A) throws -> Result.Bytes16 where A:RAW_accessible, K:RAW_accessible {

@@ -7,29 +7,42 @@ import bedrock_ip
 import wireguard_crypto_core
 
 /// Protocol that lays out the required variables of any peer information.
-/// Peer Information is passed into the WireGuard interface channels through initialization and whenever the peer configuration changes.
-/// Any additional peer information needed for any CustomChannels should be added onto any items conforming to this protocol.
+/// Peer information is passed into the WireGuard interface channels through
+/// initialization and whenever the peer configuration changes. Any additional
+/// peer information needed for any custom channels should be added onto any
+/// items conforming to this protocol.
 public protocol PeerInformation:Sendable {
+	/// The peer's public key.
 	var publicKey:PublicKey { get }
+	/// The pre-shared key, or `nil` if not in use.
 	var sharedKey:MemoryGuarded<SharedKey>? { get }
+	/// The peer's endpoint.
 	var endpoint:Endpoint? { get }
+	/// The data FIFO for incoming decrypted data from this peer.
 	var inboundData:FIFO<ByteBuffer, Swift.Error>? { get }
 }
 
-/// Simple implementation of PeerInformation.
+/// Minimal implementation of `PeerInformation`.
 public struct PeerInfo:PeerInformation, Sendable {
 	/// The public key of the peer.
 	public let publicKey:PublicKey
-	/// The shared key of the peer. Set to 0^32 when nil.
+	/// The shared key of the peer. Set to `nil` when not in use.
 	public let sharedKey:MemoryGuarded<SharedKey>?
-	/// The ip address and port of the peer.
+	/// The IP address and port of the peer.
 	public let endpoint:Endpoint?
-	/// The internal keep alive of the peer utilized by the keep alive custom channel.
+	/// The internal keep-alive of the peer, utilized by the keep-alive custom channel.
 	public let internalKeepAlive:TimeAmount?
-	/// The data fifo for incoming decrypted data from this peer.
+	/// The data FIFO for incoming decrypted data from this peer.
 	public let inboundData:FIFO<ByteBuffer, Swift.Error>?
 	
-	/// Initializer for an ip address and port
+	/// Initializes a peer from an IP address and port.
+	/// - Parameters:
+	///   - publicKey: The peer's public key.
+	///   - sharedKey: The pre-shared key, or `nil`.
+	///   - ipAddress: The peer's IP address.
+	///   - port: The peer's port.
+	///   - internalKeepAlive: The keep-alive interval for the peer, or `nil`.
+	///   - inboundData: The FIFO for inbound data from this peer.
 	public init(publicKey: PublicKey, sharedKey: MemoryGuarded<SharedKey>? = nil, ipAddress:String?, port:Int?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>?) {
 		self.publicKey = publicKey
 		self.sharedKey = sharedKey
@@ -47,7 +60,13 @@ public struct PeerInfo:PeerInformation, Sendable {
 		}
 	}
 	
-	/// Initializer for an `Endpoint`
+	/// Initializes a peer from an `Endpoint`.
+	/// - Parameters:
+	///   - publicKey: The peer's public key.
+	///   - sharedKey: The pre-shared key, or `nil`.
+	///   - endpoint: The peer's endpoint.
+	///   - internalKeepAlive: The keep-alive interval for the peer, or `nil`.
+	///   - inboundData: The FIFO for inbound data from this peer.
 	public init(publicKey: PublicKey, sharedKey: MemoryGuarded<SharedKey>? = nil, endpoint:Endpoint?, internalKeepAlive: TimeAmount?, inboundData:FIFO<ByteBuffer, Swift.Error>?) {
 		self.publicKey = publicKey
 		self.sharedKey = sharedKey
@@ -60,7 +79,8 @@ public struct PeerInfo:PeerInformation, Sendable {
 // MARK: Codable Extensions
 
 extension Endpoint: Codable {
-
+	/// Decodes an endpoint from a single string in `address:port` form.
+	/// - Throws: `DecodingError.dataCorruptedError` if the string is malformed.
 	public init(from decoder: Decoder) throws {
 		let container = try decoder.singleValueContainer()
 		let epString = try container.decode(String.self)
@@ -77,6 +97,7 @@ extension Endpoint: Codable {
 		}
 		self = Endpoint(address, port: Endpoint.Port(integerLiteral: portValue))
 	}
+	/// Encodes the endpoint as a single string in `address:port` form.
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.singleValueContainer()
 		try container.encode(String(describing: self))
@@ -87,10 +108,12 @@ extension Endpoint: Codable {
 extension TimeAmount: @retroactive Decodable {}
 extension TimeAmount: @retroactive Encodable {}
 extension TimeAmount {
+	/// Encodes the duration as a number of seconds with fractional precision.
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.singleValueContainer()
 		try container.encode(Double(self.nanoseconds) / 1_000_000_000)
 	}
+	/// Decodes a duration from a number of seconds with fractional precision.
 	public init(from decoder: Decoder) throws {
 		let seconds = try decoder.singleValueContainer().decode(Double.self)
 		self = .nanoseconds(Int64(seconds * 1_000_000_000))
@@ -105,6 +128,10 @@ extension PeerInfo:Codable {
 		case internalKeepAlive
 	}
 
+	/// Decodes a peer from the given keyed container. The public and shared keys
+	/// are stored as base64 strings.
+	/// - Throws: `DecodingError.dataCorruptedError` if a key does not decode to
+	/// exactly 32 bytes.
 	public init(from decoder: Decoder) throws {
 		let container = try decoder.container(keyedBy: CodingKeys.self)
 		
@@ -143,6 +170,8 @@ extension PeerInfo:Codable {
 				  inboundData: fifo)
 	}
 
+	/// Encodes the peer into the given keyed container, storing the public and
+	/// shared keys as base64 strings.
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.container(keyedBy: CodingKeys.self)
 		let publicKeyString = String(RAW_base64.encode(publicKey))

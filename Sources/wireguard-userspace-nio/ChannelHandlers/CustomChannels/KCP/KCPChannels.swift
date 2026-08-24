@@ -3,31 +3,40 @@ import Logging
 import RAW
 import RAW_dh25519
 
-/// Struct defining the set of KCP CustomChannels.
-/// KCP is a UDP wrapper that provides guaranteed, in-order packet delivery to the UDP protocol.
-/// See https://github.com/skywind3000/kcp for more information on KCP.
+/// A set of custom channels implementing a modified version of KCP, a UDP wrapper
+/// providing reliable, in-order packet delivery. Highly inspired by the original
+/// C implementation (see https://github.com/skywind3000/kcp for more information on KCP).
 ///
-/// This set of custom channels implements a modified version of KCP highly inspired by the original C code.
-///
-/// - Head Channel: KCP Segment Handler for combining/splicing KCP Segments into/from a single MTU data packet.
-/// - Body Channels: KCP Control Block handler used for taking raw data from the Tail Channel and wrapping it into a KCP Segment with it's associated Segment header.
-/// - Tail Channel: Splicer Handler which splices outbound data according to the MTU of the pipeline.
+/// - Head Channel: `KCPSegment.Handler`, which combines and splits KCP segments to and from a single MTU data packet.
+/// - Body Channels: `KCPControlBlock.Handler`, which takes raw data from the tail channel and wraps it into a KCP segment with its associated segment header.
+/// - Tail Channel: `SplicerHandler`, which splices outbound data according to the MTU of the pipeline.
 public struct KCPChannels: CustomChannels {
 	
-	public var head: HeadChannel
+	/// The head channel for these custom channels.
+	public let head: HeadChannel
 	
+	/// The tail channel for these custom channels.
 	public var tail: TailChannel
 	
+	/// The body channels for these custom channels.
 	public var body: BodyChannels
 	
+	/// The head channel type for these custom channels.
 	public typealias HeadChannel = KCPSegment.Handler
 	
+	/// The tail channel type for these custom channels.
 	public typealias TailChannel = SplicerHandler
 	
+	/// The body channel type for these custom channels.
 	public typealias BodyChannels = [any ChannelDuplexHandler & Sendable]
 	
+	/// The argument type passed to the custom channels initializer.
 	public typealias ArgumentType = (privateKey:MemoryGuarded<PrivateKey>, loglevel:Logger.Level)
 	
+	/// Creates a set of KCP custom channels.
+	/// - Parameters:
+	///   - env: The interface's private key and the shared log level.
+	///   - mtuLimits: The MTU limits used to configure the created channels.
 	public init(_ env: ArgumentType, mtuLimits:inout MTULimits) {
 		head = KCPSegment.Handler(privateKey:env.privateKey, mtu:&mtuLimits, logLevel:env.loglevel)
 		body = [KCPControlBlock.Handler(key:env.privateKey, mtu:&mtuLimits, logLevel:env.loglevel)]

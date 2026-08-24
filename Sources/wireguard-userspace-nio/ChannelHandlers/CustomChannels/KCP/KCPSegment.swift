@@ -1,32 +1,32 @@
 import struct NIO.ByteBuffer
 import struct NIO.ByteBufferView
 
-/// a kcp segment packet that will be encoded and decoded to/from the wire.
+/// A KCP segment packet that is encoded to and decoded from the wire.
 public struct KCPSegment:Sendable, Hashable {
-	/// the header of the kcp segment
+	/// The header of the KCP segment.
 	internal var header:Header
-	/// the data payload of the kcp segment (can be zero length)
+	/// The data payload of the KCP segment (can be zero-length).
 	internal let data:ByteBufferView
-	/// runtime metadata associated with a kcp segment that is not transmitted on the wire.
+	/// Runtime metadata associated with a KCP segment that is not transmitted on the wire.
 	internal var runtimeMetadata:RuntimeMetadata = RuntimeMetadata()
 
-	/// the header section of the kcp segment
+	/// The header section of the KCP segment.
 	internal struct Header:Sendable, Hashable {
-		/// the conversation ID that this segment belongs to
+		/// The conversation ID that this segment belongs to.
 		internal let conversationID:UInt16
-		/// the command signal that this segment is carrying
+		/// The command signal that this segment is carrying.
 		internal var command:Command
-		/// the fragment number of this segment
+		/// The fragment number of this segment.
 		internal let fragmentID:UInt8
-		/// the receive window size.
+		/// The receive window size.
 		internal var receiveWindowSize:UInt16
-		/// the current timestamp of this segment. used for rtt calculations.
+		/// The current timestamp of this segment, used for RTT calculations.
 		internal var timestamp:UInt64
-		/// the sequence number of this segment
+		/// The sequence number of this segment.
 		internal var sequenceNumber:UInt32
-		/// the earliest unacknowledged segment
+		/// The earliest unacknowledged segment.
 		internal var una:UInt32
-		/// the length of the data carried in this segment
+		/// The length of the data carried in this segment.
 		internal let dataLength:UInt16
 
 		internal init(conv:UInt16, cmd:Command, rcv_wnd_size:UInt16, frg:UInt8, sn:UInt32, ts:UInt64, una unacknowledged:UInt32, len:UInt16) {
@@ -40,7 +40,7 @@ public struct KCPSegment:Sendable, Hashable {
 			dataLength = len
 		}
 
-		/// decode a kcp segment header from a byte buffer. the bytes will be read from the buffer.
+		/// Decodes a KCP segment header from a byte buffer. The bytes will be read from the buffer.
 		internal init?(decode buffer:inout ByteBuffer) {
 			guard let cid = buffer.readInteger(endianness: .big, as:UInt16.self) else {
 				return nil
@@ -101,39 +101,39 @@ public struct KCPSegment:Sendable, Hashable {
 
 // MARK: Command
 extension KCPSegment {
-	/// kcp commands that can be sent within a segment
+	/// KCP commands that can be sent within a segment.
 	internal enum Command:UInt8, Hashable, Equatable {
-		/// kcp command to signify a new connection
+		/// KCP command signifying a new connection.
 		case genesis = 80
-		/// kcp command to signify the push of data
+		/// KCP command signifying the push of data.
 		case push = 81
-		/// kcp command to signify an acknowledgement of received data
+		/// KCP command signifying an acknowledgement of received data.
 		case ack = 82
-		/// kcp command to signify a window probe request
+		/// KCP command signifying a window probe request.
 		case probeRequest = 83
-		/// kcp command to signify a window size response
+		/// KCP command signifying a window size response.
 		case probeResponse = 84
-		/// kcp command to terminate itself
+		/// KCP command signifying that the connection should terminate.
 		case probeKill = 85
 	}
 }
 
 extension KCPSegment {
-	/// runtime metadata associated with a kcp segment that is not transmitted on the wire.
+	/// Runtime metadata associated with a KCP segment that is not transmitted on the wire.
 	internal struct RuntimeMetadata:Sendable, Hashable {
-		/// resend timestamp. the time to retransmit if no ACK is received
+		/// Resend timestamp. The time to retransmit if no ACK is received.
 		internal var resendts:UInt64 = 0
-		/// retransmission timeout. computed based on the round trip time.
+		/// Retransmission timeout, computed based on the round-trip time.
 		internal var rto:UInt64 = 0
-		/// fast ack counter.
+		/// Fast-ack counter.
 		internal var fastack:UInt32 = 0
-		/// transmit count. incremented when this segment is sent.
+		/// Transmit count. Incremented when this segment is sent.
 		internal var xmit:UInt32 = 0
 	}
 }
 
 extension KCPSegment {
-	/// decode a kcp segment from a byte buffer. the bytes will be read from the buffer.
+	/// Decodes a KCP segment from a byte buffer. The bytes will be read from the buffer.
 	internal init?(decode buffer:inout ByteBuffer) {
 		guard let h = Header(decode:&buffer) else {
 			return nil
@@ -148,7 +148,7 @@ extension KCPSegment {
 		data = buffer.viewBytes(at:buffer.readerIndex, length: Int(h.dataLength))!
 	}
 
-	/// encode the kcp segment to a byte buffer. the bytes will be appended to the buffer.
+	/// Encodes the KCP segment into the byte buffer, appending the bytes to the buffer.
 	public func encode(to buffer:inout ByteBuffer) {
 		header.encode(to:&buffer)
 		buffer.writeBytes(data)
@@ -156,6 +156,7 @@ extension KCPSegment {
 }
 
 extension KCPSegment.Command:CustomDebugStringConvertible {
+	/// A short mnemonic for the command, such as `GEN`, `PUSH`, or `ACK`.
 	public var debugDescription:String {
 		get {
 			switch self {

@@ -1,16 +1,23 @@
-/// used to clearly define the MTU limits for a pipeline member of a nio pipeline.
+/// Defines the MTU limits for a pipeline member of a NIO pipeline.
 public struct MTULimits:Sendable {
-	/// the maximum transmission unit for inbound packets coming from the kernel to the wireguard nio interface. this is typically 1420 bytes for a standard wireguard interface.
+	/// The maximum transmission unit for inbound packets coming from the kernel to
+	/// the WireGuard NIO interface. This is typically 1420 bytes for a standard
+	/// WireGuard interface.
 	public let mtuInboundIn:Int
-	/// the maximum transmission unit for outbound packets going from the wireguard nio interface to the kernel. this is typically 1420 bytes for a standard wireguard interface.
+	/// The maximum transmission unit for outbound packets going from the WireGuard
+	/// NIO interface to the kernel. This is typically 1420 bytes for a standard
+	/// WireGuard interface.
 	public let mtuOutboundOut:Int
-	/// the maximum transmission unit for outbound packets that are being written to the wireguard nio interface. this is typically the normal MTU sub the wireguard overhead.
+	/// The maximum transmission unit for outbound packets written to the WireGuard
+	/// NIO interface. This is typically the normal MTU minus the WireGuard overhead.
 	public let mtuOutboundIn:Int
-	/// the maximum transmission unit for inbound packets coming from the kernel to the wireguard nio interface after any processing has been done. this is typically the normal MTU sub the wireguard overhead.
+	/// The maximum transmission unit for inbound packets coming from the kernel to
+	/// the WireGuard NIO interface after processing. This is typically the normal
+	/// MTU minus the WireGuard overhead.
 	public let mtuInboundOut:Int
-	
-	/// creates a new MTULimits struct with the same MTU for all directions.
-	/// - parameter mtu: the MTU value to use for all directions.
+
+	/// Creates a new `MTULimits` with the same MTU for all directions.
+	/// - Parameter mtu: The MTU value to use for all directions.
 	public init(
 		bidirectional mtu:Int
 	) {
@@ -20,7 +27,12 @@ public struct MTULimits:Sendable {
 		self.mtuInboundOut = mtu
 	}
 
-	/// creates a new MTULimits struct with the specified MTU values.
+	/// Creates a new `MTULimits` with the specified MTU values.
+	/// - Parameters:
+	///   - mtuInboundIn: The maximum inbound MTU from the kernel.
+	///   - mtuOutboundOut: The maximum outbound MTU to the kernel.
+	///   - mtuOutboundIn: The maximum outbound MTU written to the interface.
+	///   - mtuInboundOut: The maximum inbound MTU after processing.
 	public init(
 		mtuInboundIn:Int,
 		mtuOutboundOut:Int,

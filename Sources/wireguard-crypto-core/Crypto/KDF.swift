@@ -1,6 +1,7 @@
 import RAW
 import RAW_dh25519
 
+/// A WireGuard Curve25519 public key.
 public typealias Key = RAW_dh25519.PublicKey
 
 public func wgKDFv2<T>(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> Result.Bytes32 where T:RAW_accessible {
@@ -9,6 +10,8 @@ public func wgKDFv2<T>(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer,
 	}
 }
 
+/// Derives a single 32-byte key from raw key and data buffers using the WireGuard
+/// key-derivation function (KDF¹ from the whitepaper).
 public func wgKDFv2(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> Result.Bytes32 {
 	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
 		return try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
@@ -21,6 +24,8 @@ public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:U
 	}
 }
 
+/// Derives two 32-byte keys from raw key and data buffers using the WireGuard
+/// key-derivation function (KDF² from the whitepaper).
 public func wgKDFv2(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> (Result.Bytes32, Result.Bytes32) {
 	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
 		let t1 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
@@ -39,6 +44,8 @@ public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Byte
 	}
 }
 
+/// Derives three 32-byte keys from raw key and data buffers using the WireGuard
+/// key-derivation function (KDF³ from the whitepaper).
 public func wgKDFv2(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> (Result.Bytes32, Result.Bytes32, Result.Bytes32) {
 	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
 		let t1 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)

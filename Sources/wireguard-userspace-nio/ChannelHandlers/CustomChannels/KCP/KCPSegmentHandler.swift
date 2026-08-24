@@ -4,7 +4,8 @@ import RAW_dh25519
 import Logging
 import wireguard_crypto_core
 
-/// this represents a decoded kcp segment that is associated with a public key.
+/// A decoded KCP segment associated with a peer public key. Deprecated; use
+/// `PeerAssociated<KCPSegment>` instead.
 @available(*, deprecated, message:"use PeerAssociated<KCPSegment> instead")
 internal typealias PeerSegment = PeerAssociated<KCPSegment>
 extension PeerAssociated where AssociatedType == KCPSegment {
@@ -23,10 +24,12 @@ extension PeerAssociated where AssociatedType == KCPSegment {
 	}
 }
 
+/// A decoded byte buffer associated with a peer public key. Deprecated; use
+/// `PeerAssociated<ByteBuffer>` instead.
 @available(*, deprecated, message:"use PeerAssociated<ByteBuffer> instead")
 internal typealias PeerPayload = PeerAssociated<ByteBuffer>
 extension PeerAssociated where AssociatedType == ByteBuffer {
-	@available(*, deprecated, renamed:"associated")
+	@available(*, deprecated, renamed:"associatedValue")
 	internal var buffer:ByteBuffer {
 		get {
 			return self.associatedValue
@@ -42,16 +45,16 @@ extension PeerAssociated where AssociatedType == ByteBuffer {
 }
 
 extension KCPSegment {
-	/// used to stack multiple kcp segments into a single payload less than MTU size
+	/// Stacks multiple KCP segments into a single payload below the MTU size.
 	fileprivate struct MTUStacking:Sendable {
-		/// the logger that is used for logging within this struct
+		/// The logger used for logging within this struct.
 		private let log:Logger
 
 		private let mtu:MTULimits
 
-		/// stores the pending promises that were encoded into the byte buffer for each public key
+		/// Stores the pending promises that were encoded into the byte buffer for each public key.
 		private var promiseStack:[PublicKey:[EventLoopPromise<Void>]] = [:]
-		/// stores the byte buffers that are being built for each public key
+		/// Stores the byte buffers that are being built for each public key.
 		private var segmentStack:[PublicKey:ByteBuffer] = [:]
 
 		internal init(privateKey:MemoryGuarded<PrivateKey>, mtu:MTULimits, logLevel:consuming Logger.Level) {
@@ -63,8 +66,9 @@ extension KCPSegment {
 			buildLogger.trace("instance initialized.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)"])
 		}
 
-		/// adds a segment to the stack for the given public key. if the segment would cause the mtu to be exceeded, the existing buffer is flushed first.
-		/// - returns: true if outbound data was written to the context, false otherwise.
+		/// Adds a segment to the stack for the given public key. If the segment
+		/// would cause the MTU to be exceeded, the existing buffer is flushed first.
+		/// - Returns: `true` if outbound data was written to the context, `false` otherwise.
 		@discardableResult fileprivate mutating func stack(context:borrowing ChannelHandlerContext, segment:KCPSegment, for publicKey:PublicKey, promise:EventLoopPromise<Void>?, handler:KCPSegment.Handler) -> Bool {
 			let expectedEncodedLength = segment.header.dataLength + UInt16(IKCP_OVERHEAD)
 			var didWrite = false
@@ -107,9 +111,8 @@ extension KCPSegment {
 			return didWrite
 		}
 
-		/// Writes the stacked KCPSegments from the ByteBuffer
-		/// Attaches the promises properly to the corresponding KCPSegment
-		/// Clear all from the segment and promise stack.
+		/// Writes the stacked KCP segments from the byte buffer, attaching the correct
+		/// promises to each segment, and clears the segment and promise stacks.
 		fileprivate mutating func completeAll(context:borrowing ChannelHandlerContext, handler:borrowing KCPSegment.Handler) {
 			#if DEBUG
 			context.eventLoop.assertInEventLoop()
@@ -144,27 +147,29 @@ extension KCPSegment {
 
 extension KCPSegment {
 
+	/// The head channel handler for KCP, which decodes inbound KCP segments from
+	/// byte buffers and stacks outbound segments into MTU-sized buffers.
 	public final class Handler:PeerAssociatedHeadHandler, @unchecked Sendable {
 
-		/// the type that comes into the channel from the previous handler
+		/// The type that comes into the channel from the previous handler.
 		public typealias InboundIn = PeerAssociated<ByteBuffer>
-		/// the type that goes out of the channel to the next handler
+		/// The type that goes out of the channel to the next handler.
 		public typealias InboundOut = PeerAssociated<KCPSegment>
 
-		/// the type that comes into the channel from the previous writer
+		/// The type that comes into the channel from the previous writer.
 		public typealias OutboundIn = PeerAssociated<KCPSegment>
-		/// the type that goes out of the channel to the next writer
+		/// The type that goes out of the channel to the next writer.
 		public typealias OutboundOut = PeerAssociated<ByteBuffer>
 
-		/// the logger that is used for logging within this handler
+		/// The logger used for logging within this handler.
 		private let log:Logger
-		/// the mtu for the data payload within a kcp segment
+		/// The MTU for the data payload within a KCP segment.
 		private let mtu:MTULimits
 
-		/// a buffer that is used for encoding segments to avoid reallocating on every write
+		/// A buffer used for encoding segments to avoid reallocating on every write.
 		private var encodeBuffer:ByteBuffer! = nil
 
-		/// the primary tool for stacking segments into (up to) mtu sized buffers
+		/// The primary tool for stacking segments into (up to) MTU-sized buffers.
 		private var stackedSegmentCount:Int = 0
 		private var writtenStack:MTUStacking
 		private var outboundOutCount:Int = 0
@@ -183,16 +188,19 @@ extension KCPSegment {
 
 // MARK: Basic Events
 extension KCPSegment.Handler {
+	/// Called when the handler is added to the pipeline; allocates the encode buffer.
 	public func handlerAdded(context:ChannelHandlerContext) {
 		encodeBuffer = context.channel.allocator.buffer(capacity:Int(mtu.mtuOutboundOut))
 		log.debug("handler added to pipeline.", metadata:["mtu_outboundOut":"\(mtu.mtuOutboundOut)", "mtu_outboundIn":"\(mtu.mtuOutboundIn)", "mtu_inboundIn":"\(mtu.mtuInboundIn)", "mtu_inboundOut":"\(mtu.mtuInboundOut)"])
 	}
 
+	/// Called when the handler is removed from the pipeline; releases the encode buffer.
 	public func handlerRemoved(context:ChannelHandlerContext) {
 		encodeBuffer = nil
 		log.debug("handler removed from pipeline.")
 	}
 
+	/// Passes any user inbound event to the next handler in the pipeline.
 	public func userInboundEventTriggered(context:ChannelHandlerContext, event:Any) {
 		log.trace("user inbound event triggered. this handler is not user configurable in this way, so the passed event instance will be passed downstream...", metadata:["event_instance_type":"\(String(describing:type(of:event)))"])
 		context.fireUserInboundEventTriggered(event)
@@ -202,9 +210,9 @@ extension KCPSegment.Handler {
 
 // MARK: Read
 extension KCPSegment.Handler {
-	/// the error that is thrown when a kcp segment fails to parse from an inbound byte buffer
+	/// The error thrown when a KCP segment fails to parse from an inbound byte buffer.
 	internal struct ParseFailure:Sendable, Swift.Error {}
-	/// the standard swiftnio channel read function that is called when data is read from the previous handler in the pipeline.
+	/// Decodes and forwards each complete KCP segment from the inbound byte buffer.
 	public func channelRead(context:ChannelHandlerContext, data:NIOAny) {
 		let logger = log
 		var encodedInbound = unwrapInboundIn(data)
@@ -216,6 +224,7 @@ extension KCPSegment.Handler {
 		}
 	}
 
+	/// Called when a channel read completes; forwards the event downstream.
 	public func channelReadComplete(context:ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -228,7 +237,7 @@ extension KCPSegment.Handler {
 
 // MARK: Write
 extension KCPSegment.Handler {
-	/// the standard swiftnio channel write function that is called when data is written to the next handler in the pipeline.
+	/// Stacks the outbound KCP segment into the MTU-sized write buffer.
 	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		let decodedOutbound = unwrapOutboundIn(data)
 		if writtenStack.stack(context:context, segment:decodedOutbound.associatedValue, for:decodedOutbound.publicKey, promise:promise, handler:self) == true {
@@ -238,6 +247,7 @@ extension KCPSegment.Handler {
 		log.trace("stacked kcp segment for outbound write.", metadata:["public_key":"\(decodedOutbound.publicKey)", "stacked_segments":"\(stackedSegmentCount)", "outbound_writes_since_flush":"\(outboundOutCount)"])
 	}
 
+	/// Flushes all stacked outbound segments to the next handler in the pipeline.
 	public func flush(context:ChannelHandlerContext) {
 		outboundOutCount = 0
 		stackedSegmentCount = 0

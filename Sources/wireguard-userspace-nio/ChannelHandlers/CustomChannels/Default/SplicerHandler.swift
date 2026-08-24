@@ -19,15 +19,22 @@ extension Array {
 }
 
 // SIVA Splicers (0_0)
-/// A ChannelDuplexHandler used to splice/combine large outbound/inbound segments to conform to the provided MTU.
-/// Use this channel in CustomChannels as a Tail Handler whenever data should be sent.
+/// A channel duplex handler that splices outbound data into MTU-sized segments
+/// and reassembles inbound spliced segments. Inbound data must arrive in order,
+/// so this handler is only suitable for channels that guarantee ordered delivery
+/// (such as KCP).
 ///
-/// The channel attaches a 4-byte length indicating the number of spliced segments to expect to complete the message.
+/// The channel attaches a 4-byte length to the first segment, indicating the
+/// number of spliced segments to expect.
 public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
+	/// The type that comes into the channel from the previous handler.
 	public typealias InboundIn = PeerAssociated<ByteBuffer>
+	/// The type that goes out of the channel to the next handler.
 	public typealias InboundOut = PeerAssociated<ByteBuffer>
 	
+	/// The type that comes into the channel from the previous writer.
 	public typealias OutboundIn = PeerAssociated<ByteBuffer>
+	/// The type that goes out of the channel to the next writer.
 	public typealias OutboundOut = PeerAssociated<ByteBuffer>
 	
 	private var logger:Logger
@@ -44,11 +51,16 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 		self.spliceByteLength = spliceByteLength
 	}
 
+	/// Called when the handler is added to the pipeline.
 	public func handlerAdded(context: ChannelHandlerContext) {
 		logger.trace("handler added to pipeline.")
 	}
 
-	// Received kcp segment. Need to stitch together and send to handoff handler
+	/// Reassembles the received segments and forwards the completed message,
+	/// or stores the segment if more are expected.
+	/// - Parameters:
+	///   - context: The channel handler context.
+	///   - data: The inbound spliced segment.
 	public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		let inboundIn = unwrapInboundIn(data)
 		let key = inboundIn.publicKey
@@ -90,6 +102,7 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 		}
 	}
 
+	/// Called when a channel read completes; forwards the event downstream.
 	public func channelReadComplete(context: ChannelHandlerContext) {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
@@ -98,6 +111,13 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 		context.fireChannelReadComplete()
 	}
 	
+	/// Splices outbound data into MTU-sized segments (or a single segment, when
+	/// the data fits within the MTU). A 4-byte count of segments is appended to
+	/// the first segment, or `0` when the data is sent as a single segment.
+	/// - Parameters:
+	///   - context: The channel handler context.
+	///   - data: The outbound data to splice.
+	///   - promise: Completed when the written segments succeed or fail.
 	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var associatedData = unwrapOutboundIn(data)
 		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
