@@ -24,8 +24,9 @@ extension Array {
 /// so this handler is only suitable for channels that guarantee ordered delivery
 /// (such as KCP).
 ///
-/// The channel attaches a 4-byte length to the first segment, indicating the
-/// number of spliced segments to expect.
+/// The channel prepends a 4-byte total payload length to the first segment so
+/// that the receiver can locate every segment boundary exactly, even when
+/// WireGuard zero-pads each encrypted plaintext to a multiple of 16 bytes.
 public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable {
 	/// The type that comes into the channel from the previous handler.
 	public typealias InboundIn = PeerAssociated<ByteBuffer>
@@ -39,7 +40,9 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 	
 	private var logger:Logger
 	
-	private var storedLengths:[PublicKey:Int] = [:]
+	/// The number of payload bytes still expected for the in-flight message per peer.
+	private var storedRemaining:[PublicKey:Int] = [:]
+	/// The reassembled payload collected so far for the in-flight message per peer.
 	private var storedPayload:[PublicKey:ByteBuffer] = [:]
 	
 	private let spliceByteLength:Int
@@ -57,7 +60,9 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 	}
 
 	/// Reassembles the received segments and forwards the completed message,
-	/// or stores the segment if more are expected.
+	/// or stores the segment if more are expected. Each segment may carry up to
+	/// 15 bytes of trailing WireGuard padding, which is discarded by consuming
+	/// exactly the expected number of payload bytes.
 	/// - Parameters:
 	///   - context: The channel handler context.
 	///   - data: The inbound spliced segment.
@@ -65,40 +70,63 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 		let inboundIn = unwrapInboundIn(data)
 		let key = inboundIn.publicKey
 		let byteBuffer = inboundIn.associatedValue
-		let data: [UInt8] = byteBuffer.getBytes(at: byteBuffer.readerIndex, length: byteBuffer.readableBytes)!
-		
-		guard storedLengths[key] != nil else {
-			// Extract the UInt32 from the first 4 bytes
-			let value = data.RAW_access {
-				return EncodedUInt32(RAW_staticbuff:$0.baseAddress!.advanced(by: data.count-4)).RAW_native()
-			}
-			
-			// Remove the first 4 bytes from the array
-			let payload = Array(data.dropLast(4))
-
-			let buf = context.channel.allocator.buffer(bytes:payload)
-			
-			if (value == 0) {
-				logger.debug("Sending single message to DHH")
-				context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: buf)))
-				return
-			}
-			
-			// add to stored segments cause there are more coming!
-			storedLengths[key] = Int(value) - 1
-			storedPayload[key] = buf
+		guard let data: [UInt8] = byteBuffer.getBytes(at: byteBuffer.readerIndex, length: byteBuffer.readableBytes) else {
+			logger.error("unable to read inbound segment bytes. dropping segment.")
 			return
 		}
 
-		storedPayload[key]!.writeBytes(data)
-		storedLengths[key]! -= 1
-		
-		// if it's the last segment, then send the whole thing to handoff handler
-		if (storedLengths[key]! == 0) {
-			storedLengths[key] = nil
+		guard let expectedRemaining = storedRemaining[key] else {
+			// This is the first segment of a message: it carries a 4-byte total payload length.
+			guard data.count >= MemoryLayout<EncodedUInt32>.size else {
+				logger.error("inbound first segment is shorter than the 4-byte length field. dropping segment.")
+				return
+			}
+			let totalLength = data.withUnsafeBytes { rawBuffer in
+				EncodedUInt32(RAW_staticbuff: rawBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)).RAW_native()
+			}
+			logger.debug("received first segment for a \(totalLength) byte message.")
+
+			// The first segment carries the length field plus up to (spliceByteLength-4) payload bytes.
+			let firstChunkCapacity = Swift.max(spliceByteLength - MemoryLayout<EncodedUInt32>.size, 0)
+			let take = Swift.min(firstChunkCapacity, Int(totalLength), data.count - MemoryLayout<EncodedUInt32>.size)
+			guard take > 0 || totalLength == 0 else {
+				logger.error("inbound first segment carried fewer payload bytes than framing allows. dropping message.")
+				return
+			}
+
+			let payloadBytes = Array(data[MemoryLayout<EncodedUInt32>.size..<(MemoryLayout<EncodedUInt32>.size + take)])
+			let remaining = Int(totalLength) - take
+			if remaining == 0 {
+				// Whole single-segment message is present in this segment.
+				logger.debug("Sending single message to DHH")
+				let buf = context.channel.allocator.buffer(bytes:payloadBytes)
+				context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: buf)))
+				return
+			}
+
+			// More segments are coming; stash the partial payload and the bytes still expected.
+			var acc = context.channel.allocator.buffer(capacity:Int(totalLength))
+			acc.writeBytes(payloadBytes)
+			storedRemaining[key] = remaining
+			storedPayload[key] = acc
+			return
+		}
+
+		// Continuation segment: consume exactly the expected bytes, discarding any trailing padding.
+		let take = Swift.min(expectedRemaining, spliceByteLength, data.count)
+		guard take > 0 else {
+			logger.error("inbound continuation segment carried no usable payload. dropping segment.")
+			return
+		}
+		storedPayload[key]!.writeBytes(Array(data[0..<take]))
+		let newRemaining = expectedRemaining - take
+		if newRemaining == 0 {
+			storedRemaining[key] = nil
 			logger.debug("Sending reforged message to DHH")
 			context.fireChannelRead(wrapInboundOut(PeerAssociated(publicKey: key, associatedValue: storedPayload[key]!)))
 			storedPayload[key] = nil
+		} else {
+			storedRemaining[key] = newRemaining
 		}
 	}
 
@@ -112,39 +140,58 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 	}
 	
 	/// Splices outbound data into MTU-sized segments (or a single segment, when
-	/// the data fits within the MTU). A 4-byte count of segments is appended to
-	/// the first segment, or `0` when the data is sent as a single segment.
+	/// the data fits within the MTU). A 4-byte total payload length is prepended
+	/// to the first segment so the receiver can reassemble the message exactly;
+	/// the first chunk is sized so that length field + chunk never exceed the MTU.
+	/// Subsequent chunks carry no header and are at most `spliceByteLength` bytes.
 	/// - Parameters:
 	///   - context: The channel handler context.
 	///   - data: The outbound data to splice.
 	///   - promise: Completed when the written segments succeed or fail.
 	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
 		var associatedData = unwrapOutboundIn(data)
-		logger.debug("splicing \(associatedData.associatedValue.readableBytes) bytes")
-		if (associatedData.associatedValue.readableBytes <= spliceByteLength) {
-			// there is no need to create multiple segments so we can add a zero at the end of the data.
-			_ = EncodedUInt32(RAW_native:0).RAW_access { footerBytesPtr in
-				associatedData.associatedValue.writeBytes(footerBytesPtr)
+		let payloadBytes = [UInt8](associatedData.associatedValue.readableBytesView)
+		let totalLength = payloadBytes.count
+		logger.debug("splicing \(totalLength) bytes")
+
+		// The 4-byte length field is UInt32; a single message larger than that is
+		// rejected rather than trapping on the conversion.
+		guard totalLength <= Int(UInt32.max) else {
+			logger.error("spliced message exceeds the UInt32 length field. failing write.")
+			promise?.fail(ChannelError.MessageTooLarge(attemptedOutboundSize:totalLength))
+			return
+		}
+
+		let footerSize = MemoryLayout<EncodedUInt32>.size
+		let firstChunkCapacity = Swift.max(spliceByteLength - footerSize, 0)
+
+		func writeSegment(_ segmentBytes:[UInt8], attachPromise:Bool) {
+			let buf = context.channel.allocator.buffer(bytes:segmentBytes)
+			let segment = PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)
+			if attachPromise {
+				context.write(wrapOutboundOut(segment), promise:promise)
+			} else {
+				context.write(wrapOutboundOut(segment)).cascadeFailure(to:promise)
 			}
-			context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:associatedData.associatedValue)), promise:promise)
-		} else {
-			let splices = [UInt8](associatedData.associatedValue.readableBytesView).split(intoChunksOf: spliceByteLength)
-			let footerBytes = EncodedUInt32(RAW_native:UInt32(splices.count))
-			for i in 0..<splices.count {
-				var segment = Array(splices[i])
-				if (i == 0) {
-					footerBytes.RAW_access {
-						segment.append(contentsOf: $0)
-					}
-				}
-				let buf = context.channel.allocator.buffer(bytes:segment)
-				if (i == splices.count-1) {
-					// Attach promise to the last segment to be written for this message
-					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf)), promise:promise)
-				} else {
-					context.write(wrapOutboundOut(PeerAssociated(publicKey:associatedData.publicKey, associatedValue:buf))).cascadeFailure(to:promise)
-				}
-			}
+		}
+
+		let footerBytes = EncodedUInt32(RAW_native:UInt32(totalLength)).RAW_access { $0.map { $0 } }
+
+		if totalLength <= firstChunkCapacity {
+			// Single segment: length field followed by the whole payload.
+			writeSegment(footerBytes + payloadBytes, attachPromise:true)
+			return
+		}
+
+		// First segment holds the length field plus the first chunk.
+		let firstChunk = Array(payloadBytes[0..<firstChunkCapacity])
+		writeSegment(footerBytes + firstChunk, attachPromise:false)
+
+		// Remaining chunks are header-free and at most spliceByteLength each.
+		let rest = Array(payloadBytes[firstChunkCapacity...])
+		let chunkedRest = rest.split(intoChunksOf: spliceByteLength)
+		for (index, chunk) in chunkedRest.enumerated() {
+			writeSegment(chunk, attachPromise: index == chunkedRest.count - 1)
 		}
 	}
 }

@@ -1045,3 +1045,239 @@ extension WireguardSwiftTests.LiveSocketTests {
 		}
 	}
 }
+
+// MARK: Channel Latency Comparison
+extension WireguardSwiftTests.LiveSocketTests {
+	/// Runs a batch of payloads through an already-running pair of interfaces and
+	/// returns the elapsed time from the first write until all payloads are received.
+	fileprivate func runTransferAndMeasure<C: CustomChannels>(
+		sender: WGInterface<C>,
+		receiverFifo: FIFO<ByteBuffer, Swift.Error>,
+		peerPublicKey: PublicKey,
+		payloads: [[UInt8]]
+	) async throws -> TimeAmount {
+		let start = NIODeadline.now()
+		for payload in payloads {
+			try await sender.write(publicKey: peerPublicKey, data: payload)
+		}
+		let iterator = receiverFifo.makeAsyncConsumer()
+		var receivedCount = 0
+		while receivedCount < payloads.count {
+			if let incomingDataBytes = try await iterator.next() {
+				let incomingData = Array(incomingDataBytes.readableBytesView)
+				#expect(incomingData == payloads[receivedCount])
+				receivedCount += 1
+			}
+		}
+		let end = NIODeadline.now()
+		return end - start
+	}
+
+	@Test func compareDefaultAndKCPTransferTime() async throws {
+		// Compare DefaultChannels vs KCPChannels at several message sizes, keeping
+		// the total volume fixed at 2 MB so each measurement shows how per-message
+		// vs per-byte overhead scales as messages grow.
+		// (Larger-than-1340-byte messages are now supported on DefaultChannels
+		// following the SplicerHandler framing fix.)
+		let sizes = [100, 1_000, 5_000, 50_000, 100_000]
+		let totalBytes = 2_000_000
+
+		// Scenario 1: DefaultChannels (no KCP).
+		var defaultTimes: [Int:TimeAmount] = [:]
+		try await confirmation("verify the default channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36202, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<DefaultChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36201)
+
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36201, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<DefaultChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36202)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+
+				try await aliceInterface.waitForChannelInit()
+				try await bobInterface.waitForChannelInit()
+
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+
+				for payloadSize in sizes {
+					let messageCount = totalBytes / payloadSize
+					let payloads = [[UInt8]](repeating: [UInt8](repeating: 0, count: payloadSize), count: messageCount)
+					cliLogger.info("Starting DefaultChannels transfer of \(messageCount) x \(payloadSize) bytes...")
+					let elapsed = try await runTransferAndMeasure(sender: aliceInterface, receiverFifo: aliceFifo, peerPublicKey: bobPublicKey, payloads: payloads)
+					defaultTimes[payloadSize] = elapsed
+					cliLogger.info("DefaultChannels transfer of \(messageCount) x \(payloadSize) bytes took \(Double(elapsed.nanoseconds) / 1_000_000) ms")
+				}
+
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
+
+		// Scenario 2: KCPChannels.
+		var kcpTimes: [Int:TimeAmount] = [:]
+		try await confirmation("verify the kcp channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36204, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36203)
+
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36203, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36204)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+
+				try await aliceInterface.waitForChannelInit()
+				try await bobInterface.waitForChannelInit()
+
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+
+				for payloadSize in sizes {
+					let messageCount = totalBytes / payloadSize
+					let payloads = [[UInt8]](repeating: [UInt8](repeating: 0, count: payloadSize), count: messageCount)
+					cliLogger.info("Starting KCPChannels transfer of \(messageCount) x \(payloadSize) bytes...")
+					let elapsed = try await runTransferAndMeasure(sender: aliceInterface, receiverFifo: aliceFifo, peerPublicKey: bobPublicKey, payloads: payloads)
+					kcpTimes[payloadSize] = elapsed
+					cliLogger.info("KCPChannels transfer of \(messageCount) x \(payloadSize) bytes took \(Double(elapsed.nanoseconds) / 1_000_000) ms")
+				}
+
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
+
+		cliLogger.error("Channel latency comparison (2 MB total per size):")
+		for payloadSize in sizes {
+			let defaultMs = Double(defaultTimes[payloadSize]!.nanoseconds) / 1_000_000
+			let kcpMs = Double(kcpTimes[payloadSize]!.nanoseconds) / 1_000_000
+			let ratio = (kcpMs / defaultMs)
+			cliLogger.error("size \(payloadSize) B | DefaultChannels \(String(format: "%.1f", defaultMs)) ms | KCPChannels \(String(format: "%.1f", kcpMs)) ms | KCP is \(String(format: "%.1f", ratio))x slower")
+		}
+		for payloadSize in sizes {
+			#expect(kcpTimes[payloadSize]!.nanoseconds > defaultTimes[payloadSize]!.nanoseconds)
+		}
+	}
+
+	@Test func compareDefaultAndKCPLargeTransfer() async throws {
+		// Same DefaultChannels vs KCPChannels comparison, but at a ~10 MB total
+		// volume with larger messages, to see whether the channel overhead holds
+		// steady when the amount of data per message is big.
+		let sizes = [100_000, 1_000_000, 5_000_000]
+		let totalBytes = 10_000_000
+
+		// Scenario 1: DefaultChannels (no KCP).
+		var defaultTimes: [Int:TimeAmount] = [:]
+		try await confirmation("verify the default channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36212, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<DefaultChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36211)
+
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36211, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<DefaultChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36212)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+
+				try await aliceInterface.waitForChannelInit()
+				try await bobInterface.waitForChannelInit()
+
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+
+				for payloadSize in sizes {
+					let messageCount = totalBytes / payloadSize
+					let payloads = [[UInt8]](repeating: [UInt8](repeating: 0, count: payloadSize), count: messageCount)
+					cliLogger.info("Starting DefaultChannels transfer of \(messageCount) x \(payloadSize) bytes...")
+					let elapsed = try await runTransferAndMeasure(sender: aliceInterface, receiverFifo: aliceFifo, peerPublicKey: bobPublicKey, payloads: payloads)
+					defaultTimes[payloadSize] = elapsed
+					cliLogger.info("DefaultChannels transfer of \(messageCount) x \(payloadSize) bytes took \(Double(elapsed.nanoseconds) / 1_000_000) ms")
+				}
+
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
+
+		// Scenario 2: KCPChannels.
+		var kcpTimes: [Int:TimeAmount] = [:]
+		try await confirmation("verify the kcp channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36214, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36213)
+
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36213, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36214)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+
+				try await aliceInterface.waitForChannelInit()
+				try await bobInterface.waitForChannelInit()
+
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+
+				for payloadSize in sizes {
+					let messageCount = totalBytes / payloadSize
+					let payloads = [[UInt8]](repeating: [UInt8](repeating: 0, count: payloadSize), count: messageCount)
+					cliLogger.info("Starting KCPChannels transfer of \(messageCount) x \(payloadSize) bytes...")
+					let elapsed = try await runTransferAndMeasure(sender: aliceInterface, receiverFifo: aliceFifo, peerPublicKey: bobPublicKey, payloads: payloads)
+					kcpTimes[payloadSize] = elapsed
+					cliLogger.info("KCPChannels transfer of \(messageCount) x \(payloadSize) bytes took \(Double(elapsed.nanoseconds) / 1_000_000) ms")
+				}
+
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
+
+		cliLogger.error("Channel latency comparison (10 MB total per size):")
+		for payloadSize in sizes {
+			let defaultMs = Double(defaultTimes[payloadSize]!.nanoseconds) / 1_000_000
+			let kcpMs = Double(kcpTimes[payloadSize]!.nanoseconds) / 1_000_000
+			let ratio = (kcpMs / defaultMs)
+			cliLogger.error("size \(payloadSize) B | DefaultChannels \(String(format: "%.1f", defaultMs)) ms | KCPChannels \(String(format: "%.1f", kcpMs)) ms | KCP is \(String(format: "%.1f", ratio))x slower")
+		}
+		for payloadSize in sizes {
+			#expect(kcpTimes[payloadSize]!.nanoseconds > defaultTimes[payloadSize]!.nanoseconds)
+		}
+	}
+}

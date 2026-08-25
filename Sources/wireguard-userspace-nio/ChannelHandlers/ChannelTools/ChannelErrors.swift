@@ -8,6 +8,19 @@ internal enum ChannelError:Sendable {
 	case outboundMessageMTUExceeded(OutboundMessageMTUExceeded)
 	/// thrown when receiving a message that exceeds the configured mtu for that step in the pipeline
 	case inboundMessageMTUExceeded(InboundMessageMTUExceeded)
+	/// thrown when a single outbound message is too large for the splice length field to represent
+	case messageTooLarge(MessageTooLarge)
+}
+
+// MARK: Message Too Large
+extension ChannelError {
+	/// expresses a scenario where an outbound message is too large for the framing to represent.
+	internal struct MessageTooLarge:Swift.Error, Sendable, Equatable, Hashable {
+		internal let attemptedOutboundSize:Int
+		internal init(attemptedOutboundSize:Int) {
+			self.attemptedOutboundSize = attemptedOutboundSize
+		}
+	}
 }
 
 
