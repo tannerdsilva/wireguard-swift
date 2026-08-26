@@ -1280,4 +1280,73 @@ extension WireguardSwiftTests.LiveSocketTests {
 			#expect(kcpTimes[payloadSize]!.nanoseconds > defaultTimes[payloadSize]!.nanoseconds)
 		}
 	}
+
+	@Test func kcpTransferTimeScalesLinearlyWithTotalSize() async throws {
+		// Sends a fixed-size message through KCPChannels repeatedly while the
+		// TOTAL volume is swept from 4 MB up to 256 MB, to see whether transfer
+		// time rises (at most) linearly with the size of the sent payload. If
+		// throughput is constant, time per byte stays flat across the sweep.
+		let messageSize = 100_000
+		let totalSizes = [4_000_000, 8_000_000, 16_000_000, 32_000_000, 64_000_000, 128_000_000, 256_000_000]
+
+		var kcpTimes: [Int:TimeAmount] = [:]
+		try await confirmation("verify the kcp channels close", expectedCount:2) { closeConf in
+			_ = try await withThrowingTaskGroup(body: { foo in
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36222, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36221)
+
+				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36221, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
+				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36222)
+
+				foo.addTask {
+					try await aliceInterface.run()
+				}
+				foo.addTask {
+					try await bobInterface.run()
+				}
+
+				try await aliceInterface.waitForChannelInit()
+				try await bobInterface.waitForChannelInit()
+
+				try await aliceInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+				try await bobInterface.getChannel().closeFuture.whenComplete { _ in
+					closeConf.confirm()
+				}
+
+				for totalBytes in totalSizes {
+					let messageCount = totalBytes / messageSize
+					let payloads = [[UInt8]](repeating: [UInt8](repeating: 0, count: messageSize), count: messageCount)
+					cliLogger.info("Starting KCPChannels transfer of \(messageCount) x \(messageSize) bytes (\(totalBytes) B total)...")
+					let elapsed = try await runTransferAndMeasure(sender: aliceInterface, receiverFifo: aliceFifo, peerPublicKey: bobPublicKey, payloads: payloads)
+					kcpTimes[totalBytes] = elapsed
+					cliLogger.info("KCPChannels transfer of \(messageCount) x \(messageSize) bytes took \(Double(elapsed.nanoseconds) / 1_000_000) ms")
+				}
+
+				foo.cancelAll()
+				try await foo.waitForAll()
+			})
+		}
+
+		cliLogger.error("KCP transfer-time scaling vs total payload size:")
+		for totalBytes in totalSizes {
+			let ms = Double(kcpTimes[totalBytes]!.nanoseconds) / 1_000_000
+			let bytesPerMs = Double(totalBytes) / ms
+			cliLogger.error("total \(totalBytes) B | KCPChannels \(String(format: "%.1f", ms)) ms | \(String(format: "%.2f", bytesPerMs / 1_000)) MB/s")
+		}
+
+		// Linearity check: with a fixed message size, elapsed time should grow no
+		// faster than the total size grows. Compare the largest transfer against
+		// the smallest, scaled by their size ratio, with slack for loopback
+		// jitter (50% headroom keeps this stable without masking 2x+ throughput
+		// loss).
+		let smallestTotal = totalSizes.min()!
+		let largestTotal = totalSizes.max()!
+		let sizeRatio = Double(largestTotal) / Double(smallestTotal)
+		let smallestTime = Double(kcpTimes[smallestTotal]!.nanoseconds)
+		let largestTime = Double(kcpTimes[largestTotal]!.nanoseconds)
+		#expect(largestTime <= smallestTime * sizeRatio * 1.5)
+	}
 }

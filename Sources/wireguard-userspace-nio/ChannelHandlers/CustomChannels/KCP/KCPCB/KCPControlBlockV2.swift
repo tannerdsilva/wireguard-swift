@@ -148,6 +148,12 @@ internal struct KCPControlBlock {
 	/// - NOTE: previously known as `rcv_queue`
 	internal var inboundInBuffer = LinkedList<KCPSegment>()
 
+	/// acknowledgements queued for the peer, recorded as (sequenceNumber, timestamp)
+	/// pairs and drained into MTU-stacked segments at flush time. Batching many
+	/// ACKs into a single outbound datagram cuts the per-segment write overhead
+	/// that immediate ACK writing incurs on one-way streams.
+	internal var pendingAcks:[(sequenceNumber:UInt32, timestamp:UInt64)] = []
+
 	/// counts the number of kcp segments that were written to the outboundInBuffer for each cycle of reading. used at `channelReadComplete` to determine if a flush is needed
 	internal var outboundOutSegmentsWrittenSinceChannelReadComplete:Int = 0
 	
@@ -188,7 +194,7 @@ internal struct KCPControlBlock {
 	}
 
 	@discardableResult
-	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, congestionWindow:inout Int, maxCongestionWindow:inout Int, writeCounter:inout Int) throws -> Bool {
+	internal mutating func handleChannelRead(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, associatedSegment:PeerAssociated<KCPSegment>, now:NIODeadline, congestionWindow:inout Int, maxCongestionWindow:inout Int, slowStartThreshold:inout Int, writeCounter:inout Int) throws -> Bool {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		guard conv == associatedSegment.associatedValue.header.conversationID else {
@@ -217,12 +223,18 @@ internal struct KCPControlBlock {
 				}
 				parseInbound(ack: associatedSegment.associatedValue.header.sequenceNumber)
 				
-				// Update congestion window. Logarithmic growth
-				congestionWindow += maxCongestionWindow / congestionWindow
+				// Update congestion window.
+				// Slow start (exponential) growth while below the threshold,
+				// then additive (logarithmic) growth once in congestion avoidance.
+				if (congestionWindow < slowStartThreshold) {
+					congestionWindow += Int(mss)
+				} else {
+					// Logarithmic growth
+					congestionWindow += maxCongestionWindow / congestionWindow
+				}
 			case KCPSegment.Command.genesis:
-				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:iclock(NIODeadline.now()), una:rcv_nxt, len:0), data:ByteBufferView())
-				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
-				writeCounter += 1
+				// queue the acknowledgement to be batched with any others
+				pendingAcks.append((sequenceNumber: associatedSegment.associatedValue.header.sequenceNumber, timestamp: iclock(NIODeadline.now())))
 				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
 					parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
 					lastGenesis = associatedSegment.associatedValue.header.timestamp
@@ -230,9 +242,8 @@ internal struct KCPControlBlock {
 					return true
 				}
 			case KCPSegment.Command.push:
-				// write the acknowledgement instead of pushing it to the acklist
-				let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:associatedSegment.associatedValue.header.sequenceNumber, ts:associatedSegment.associatedValue.header.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
-				context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:associatedSegment.publicKey, associatedValue:ackSeg)), promise: nil)
+				// queue the acknowledgement to be batched with any others
+				pendingAcks.append((sequenceNumber: associatedSegment.associatedValue.header.sequenceNumber, timestamp: associatedSegment.associatedValue.header.timestamp))
 				writeCounter += 1
 				if Int32(bitPattern:associatedSegment.associatedValue.header.sequenceNumber &- rcv_nxt) >= 0 {
 					parseInbound(data: associatedSegment.associatedValue, handler:handler, context: context)
@@ -428,11 +439,15 @@ extension KCPControlBlock {
 	///   - now: The current time.
 	///   - congestionWindow: The current congestion window, updated in place.
 	///   - minCongestionWindow: The minimum allowed congestion window.
+	///   - slowStartThreshold: The slow-start threshold, updated in place on loss.
 	///   - writerCount: The number of writes performed, updated in place.
 	@available(*, noasync)
-	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int, writerCount:inout Int) {
+	public mutating func resendAndProbe(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, now:NIODeadline, congestionWindow:inout Int, minCongestionWindow:Int, slowStartThreshold:inout Int, writerCount:inout Int) {
 		let now = iclock(now)
-		
+
+		// Drain any queued acknowledgements first so they share the flush
+		drainPendingAcks(context: context, handler: handler, writerCount: &writerCount)
+
 		var resend = false
 		var resendCount = 0
 		var count = 0
@@ -471,7 +486,10 @@ extension KCPControlBlock {
 		}
 		// If resent at all, need to shorten congestion window
 		if(resend) {
-			congestionWindow = max(minCongestionWindow, congestionWindow - 1 * Int(mtu))
+			// TCP-style fast recovery: drop the slow-start threshold to half the
+			// current window and halve the window itself, never below the minimum.
+			slowStartThreshold = max(minCongestionWindow, congestionWindow / 2)
+			congestionWindow = max(minCongestionWindow, congestionWindow / 2)
 			log.trace("Shrinking congestion window", metadata:["newWindowSize":"\(congestionWindow)"])
 		}
 		// The higher the number of resends, the faster cwnd decreases
@@ -484,5 +502,29 @@ extension KCPControlBlock {
 			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.probeRequest, rcv_wnd_size:UInt16(readWindow/mtu), frg:0, sn:snd_nxt, ts:UInt64(outboundInBuffer.count), una:rcv_nxt, len:0), data:ByteBufferView()))), promise:nil)
 			log.trace("writing probe request")
 		}
+	}
+
+	/// Converts every queued acknowledgement into an outbound ACK segment and
+	/// writes them all in a single burst, so MTU stacking can pack many ACKs
+	/// into one datagram. Clears the queue.
+	/// - Parameters:
+	///   - context: The channel handler context.
+	///   - handler: The KCP control block handler.
+	///   - writerCount: The number of writes performed, updated in place.
+	/// - Returns: The number of acknowledgement segments written.
+	@discardableResult
+	internal mutating func drainPendingAcks(context:ChannelHandlerContext, handler:KCPControlBlock.Handler, writerCount:inout Int) -> Int {
+		guard pendingAcks.isEmpty == false else {
+			return 0
+		}
+		let acks = pendingAcks
+		pendingAcks.removeAll(keepingCapacity:true)
+		let wnd = UInt16(readWindow/mtu)
+		for ack in acks {
+			let ackSeg = KCPSegment(header:KCPSegment.Header(conv:conv, cmd:.ack, rcv_wnd_size:wnd, frg:0, sn:ack.sequenceNumber, ts:ack.timestamp, una:rcv_nxt, len:0), data:ByteBufferView())
+			context.write(handler.wrapOutboundOut(PeerAssociated(publicKey:peerPublicKey, associatedValue:ackSeg)), promise:nil)
+			writerCount &+= 1
+		}
+		return acks.count
 	}
 }
