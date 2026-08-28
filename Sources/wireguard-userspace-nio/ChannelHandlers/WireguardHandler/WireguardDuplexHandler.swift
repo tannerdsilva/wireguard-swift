@@ -387,7 +387,7 @@ extension WireguardHandler {
 						logger.critical("received cookie packet for unknown peer index \(cookiePayload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}
-					guard let chainingData = livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:cookiePayload.initiatorIndex) else {
+					guard livePeerInfo.handshakeInitiationResponse(context:context, now:now, initiatorPeerIndex:cookiePayload.initiatorIndex) != nil else {
 						logger.error("received cookie packet for unknown peer index \(cookiePayload.initiatorIndex) with no existing ephemeral private key")
 						return
 					}

@@ -63,8 +63,8 @@ struct CLI:AsyncParsableCommand {
 		var publicKey:PublicKey
 
 		func run() throws {
-			var privKeyCopy = privateKey
-			var pubKeyCopy = publicKey
+			let privKeyCopy = privateKey
+			let pubKeyCopy = publicKey
 			let sharedKey = try MemoryGuarded<SharedKey>.compute(privateKey:privKeyCopy, publicKey:pubKeyCopy)
 			print("shared secret: \(String(RAW_base64.encode(sharedKey)))")
 		}
@@ -82,7 +82,7 @@ struct CLI:AsyncParsableCommand {
 			let (peerPublicKey, peerPrivateKey) = try dhGenerate()
 			let payloadSize: Int = 1_000_000_000
 			
-			var payload = [UInt8](repeating: 0, count: payloadSize)
+			let payload = [UInt8](repeating: 0, count: payloadSize)
 			// for i in 0..<payloadSize {
 			// 	payload[i] = UInt8(i%256)
 			// }
@@ -115,8 +115,10 @@ struct CLI:AsyncParsableCommand {
 				let iterator = fifo.makeAsyncConsumer()
 				while(true) {
 					if let incomingData = try await iterator.next() {
-						cliLogger.debug("Received data that is \(incomingData.readableBytes) bytes long")
+						cliLogger.info("Received data that is \(incomingData.readableBytes) bytes long")
 						foo.cancelAll()
+						try await foo.waitForAll()
+						return
 					}
 				}
 			})

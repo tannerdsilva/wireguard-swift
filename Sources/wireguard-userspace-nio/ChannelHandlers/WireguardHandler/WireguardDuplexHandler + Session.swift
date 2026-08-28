@@ -30,7 +30,7 @@ extension PeerInfo.Live {
 				}
 			} catch {
 				// the wipe could not be verified; fall back to a best-effort plain zeroing.
-				tVar.valueSend.RAW_access_staticbuff_mutating { ptr in
+				_ = tVar.valueSend.RAW_access_staticbuff_mutating { ptr in
 					ptr.initializeMemory(as:UInt8.self, repeating:0, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
 				}
 			}
@@ -39,7 +39,7 @@ extension PeerInfo.Live {
 					try secureZeroBytes(ptr, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
 				}
 			} catch {
-				tVar.valueRecv.RAW_access_staticbuff_mutating { ptr in
+				_ = tVar.valueRecv.RAW_access_staticbuff_mutating { ptr in
 					ptr.initializeMemory(as:UInt8.self, repeating:0, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
 				}
 			}

@@ -44,7 +44,7 @@ extension KCPTestingHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var unwrappedData = unwrapInboundIn(data)
+		let unwrappedData = unwrapInboundIn(data)
 //		eph.willReadInbound(&unwrappedData.1)
 		context.fireChannelRead(wrapInboundOut(unwrappedData))
 	}
@@ -56,7 +56,7 @@ extension KCPTestingHandler {
 		#if DEBUG
 		context.eventLoop.assertInEventLoop()
 		#endif
-		var unwrappedData = unwrapOutboundIn(data)
+		let unwrappedData = unwrapOutboundIn(data)
 //		eph.willWriteOutbound(&unwrappedData.data)
 		context.write(wrapOutboundOut(unwrappedData), promise:promise)
 	}

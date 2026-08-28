@@ -449,7 +449,6 @@ extension KCPControlBlock {
 		drainPendingAcks(context: context, handler: handler, writerCount: &writerCount)
 
 		var resend = false
-		var resendCount = 0
 		var count = 0
 		for (node, seg) in outboundInBuffer.makeIterator() {
 			defer {
@@ -474,7 +473,6 @@ extension KCPControlBlock {
 			else if itimeDiff(later:now, earlier:seg.data.runtimeMetadata.resendts) >= 0 {
 				resend = true
 				node.value!.data.runtimeMetadata.xmit &+= 1
-				resendCount = Int(seg.data.runtimeMetadata.xmit)
 				node.value!.data.runtimeMetadata.rto = node.value!.data.runtimeMetadata.rto &+ (node.value!.data.runtimeMetadata.rto / 2)
 				node.value!.data.runtimeMetadata.resendts = now &+ node.value!.data.runtimeMetadata.rto
 				node.value!.data.header.timestamp = node.value!.data.header.command == .genesis ? storedSendingGenesis : now

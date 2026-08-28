@@ -149,7 +149,7 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 	///   - data: The outbound data to splice.
 	///   - promise: Completed when the written segments succeed or fail.
 	public func write(context:ChannelHandlerContext, data:NIOAny, promise:EventLoopPromise<Void>?) {
-		var associatedData = unwrapOutboundIn(data)
+		let associatedData = unwrapOutboundIn(data)
 		let payloadBytes = [UInt8](associatedData.associatedValue.readableBytesView)
 		let totalLength = payloadBytes.count
 		logger.debug("splicing \(totalLength) bytes")
