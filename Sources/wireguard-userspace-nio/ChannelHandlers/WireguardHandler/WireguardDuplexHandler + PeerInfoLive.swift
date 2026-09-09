@@ -273,7 +273,7 @@ extension PeerInfo.Live {
 			throw RekeyAttemptTooSoon()
 		}
 		let useInitialDelay = selfInitiatedKeys.handshakeRekeyDelay(context:context, now:now) ?? .seconds(0)
-		let usePeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+		let usePeerIndex = try PeerIndex.random()
 		logger.info("launching handshake initiation task to write outbound handshake message.", metadata:["initial_delay":"\(useInitialDelay)", "index_initiator":"\(usePeerIndex)"])
 		handshakeInitiationTask = (now, context.eventLoop.scheduleRepeatedTask(initialDelay:useInitialDelay, delay:WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, pubKey = publicKey, cc = ContextContainer(context:context), toEP = targetEndpoint, l = logger, upi = usePeerIndex] _ in
 			guard let self = self else { return }

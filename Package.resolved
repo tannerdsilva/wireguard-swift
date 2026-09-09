@@ -1,13 +1,13 @@
 {
-  "originHash" : "3326f507936a3ad665940a9f08d33104e7bde374f8892c45c24511926260076b",
+  "originHash" : "ddf6cb2098ba216041f4d2c856fb6980a448f0a839adc95b40a800d6b1b917cf",
   "pins" : [
     {
       "identity" : "bedrock",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/bedrock.git",
       "state" : {
-        "revision" : "554e4b8392937d7fa0b07819af272f229b4b60c5",
-        "version" : "7.0.1"
+        "branch" : "v22-rewrite",
+        "revision" : "6c92dd55c6c39bb8d416d97d153c81a8a81149a9"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/rawdog.git",
       "state" : {
-        "revision" : "35d9692c8954b96dea288ecd35aa5d0451e0bd5e",
-        "version" : "20.1.0"
+        "revision" : "99afc54d3de7015b2dde3886727c9d82f9c32998",
+        "version" : "22.0.0"
       }
     },
     {
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-syntax.git",
       "state" : {
-        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
-        "version" : "602.0.0"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {

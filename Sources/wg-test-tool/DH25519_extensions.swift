@@ -19,7 +19,9 @@ struct Peer : ExpressibleByArgument {
 		guard let bytes = rawBytes, bytes.count == 32 else {
 			return nil
 		}
-		self.publicKey = RAW_dh25519.PublicKey(RAW_staticbuff:bytes)
+		self.publicKey = bytes.withUnsafeBytes { raw in
+			return RAW_dh25519.PublicKey(RAW_decode:raw)!
+		}
 	}
 }
 
@@ -29,7 +31,9 @@ extension RAW_dh25519.PublicKey:@retroactive ExpressibleByArgument {
 		guard let bytes = rawBytes, bytes.count == 32 else {
 			return nil
 		}
-		self = RAW_dh25519.PublicKey(RAW_staticbuff:bytes)
+		self = bytes.withUnsafeBytes { raw in
+			return RAW_dh25519.PublicKey(RAW_decode:raw)!
+		}
 	}
 }
 
@@ -39,9 +43,13 @@ extension MemoryGuarded<RAW_dh25519.PrivateKey>:@retroactive ExpressibleByArgume
 		guard let bytes = rawBytes, bytes.count == 32 else {
 			return nil
 		}
-		self.init(RAW_decode:bytes, count:32)
+		let storage = UnsafeMutableRawBufferPointer.allocate(byteCount:bytes.count, alignment:1)
+		defer { storage.deallocate() }
+		bytes.withUnsafeBytes { raw in
+			storage.baseAddress!.copyMemory(from:raw.baseAddress!, byteCount:bytes.count)
+		}
+		self.init(RAW_decode:UnsafeRawBufferPointer(start:storage.baseAddress, count:bytes.count))
 	}
 }
 
 extension Address:@retroactive ExpressibleByArgument {}
-

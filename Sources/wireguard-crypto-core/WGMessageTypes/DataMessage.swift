@@ -40,30 +40,32 @@ extension Message {
 			}
 
 			/// Attempts to decode a data message payload from the given raw bytes.
-			public init?(RAW_decode inputPtr:consuming UnsafeRawPointer, count:size_t) {
-				guard count >= MemoryLayout<Header>.size + MemoryLayout<Tag>.size else { return nil }
-				(header, data, tag) = withUnsafeMutablePointer(to:&inputPtr) { RAW_decode in
-					let typeHeading = TypeHeading(RAW_staticbuff_seeking:RAW_decode)
-					let recipientIndex = PeerIndex(RAW_staticbuff_seeking:RAW_decode)
-					let counter = Counter(RAW_staticbuff_seeking:RAW_decode)
-					let dataCount = count - (MemoryLayout<Header>.size + MemoryLayout<Tag>.size)
-					let packetTag = Tag(RAW_staticbuff:RAW_decode.pointee.advanced(by:dataCount))
-					return (Header(typeHeader:typeHeading, recipientIndex:recipientIndex, counter:counter), [UInt8](RAW_decode:RAW_decode.pointee, count:dataCount), packetTag)
-				}
+			public init?(RAW_decode input:UnsafeRawBufferPointer) {
+				guard input.count >= MemoryLayout<Header>.size + MemoryLayout<Tag>.size else { return nil }
+				var seekPtr = input.baseAddress!
+				let typeHeading = TypeHeading(RAW_staticbuff_seeking:&seekPtr)
+				let recipientIndex = PeerIndex(RAW_staticbuff_seeking:&seekPtr)
+				let counter = Counter(RAW_staticbuff_seeking:&seekPtr)
+				let dataCount = input.count - (MemoryLayout<Header>.size + MemoryLayout<Tag>.size)
+				var tagSeekPtr = seekPtr.advanced(by:dataCount)
+				let packetTag = Tag(RAW_staticbuff_seeking:&tagSeekPtr)
+				self.header = Header(typeHeader:typeHeading, recipientIndex:recipientIndex, counter:counter)
+				self.data = [UInt8](RAW_decode:UnsafeRawBufferPointer(start:seekPtr, count:dataCount))
+				self.tag = packetTag
 			}
 			
 			/// Reports the number of bytes required to encode the payload, including padding and tag.
-			public func RAW_encode(count: inout RAW.size_t) {
+			public func RAW_encode(count: inout Int) {
 				count = MemoryLayout<Header>.size + Self.paddedLength(count:data.count) + MemoryLayout<Tag>.size
 			}
 			
-			/// Encodes the payload into `dest` and returns a pointer advanced past the written bytes.
-			public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
-				var dest = header.typeHeader.RAW_encode(dest:dest)
-				dest = header.recipientIndex.RAW_encode(dest:dest)
-				dest = header.counter.RAW_encode(dest:dest)
-				dest = data.RAW_encode(dest:dest)
-				dest = tag.RAW_encode(dest:dest)
+			/// Encodes the payload into `destination` and returns a pointer advanced past the written bytes.
+			public func RAW_encode(_: UnsafeMutableRawPointer.Type, destination: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
+				var dest = header.typeHeader.RAW_encode(UnsafeMutableRawPointer.self, destination:destination)
+				dest = header.recipientIndex.RAW_encode(UnsafeMutableRawPointer.self, destination:dest)
+				dest = header.counter.RAW_encode(UnsafeMutableRawPointer.self, destination:dest)
+				dest = data.RAW_encode(UnsafeMutableRawPointer.self, destination:dest)
+				dest = tag.RAW_encode(UnsafeMutableRawPointer.self, destination:dest)
 				return dest
 			}
 
@@ -92,8 +94,8 @@ extension Message {
 			///     bytes are written here.
 			/// - Throws: If decryption fails.
 			public static func decrypt(transportKey:borrowing Result.Bytes32, counter:Counter, cipherText input:UnsafeRawBufferPointer, tag:UnsafeRawPointer, aad:UnsafeRawBufferPointer, plainText output:UnsafeMutableRawPointer) throws {
-				try transportKey.RAW_access_staticbuff { transportKeyPtr in
-					try aeadDecryptV3(plainText:output, key:UnsafeRawBufferPointer(start:transportKeyPtr, count:MemoryLayout<Result.Bytes32>.size), counter:counter.RAW_native(), cipherText:input, aad:UnsafeRawBufferPointer(start:tag, count:0), tag:tag)
+				try transportKey.RAW_access_immutable(UnsafeRawBufferPointer.self) { transportKeyPtr in
+					try aeadDecryptV3(plainText:output, key:transportKeyPtr, counter:counter.RAW_native(), cipherText:input, aad:UnsafeRawBufferPointer(start:tag, count:0), tag:tag)
 				}
 			}
 
@@ -142,8 +144,8 @@ extension Message {
 				let outputDelta = buildHeader.RAW_encode(dest:output.assumingMemoryBound(to:UInt8.self))
 				let tagStart = outputDelta + paddedPlainText.count
 				_ = UnsafeMutableRawPointer(tagStart).assumingMemoryBound(to:Tag.self)
-				try transportKey.RAW_access_staticbuff { tsKeyPtr in
-					try aeadEncryptV3(plaintext:paddedPlainText, key:UnsafeRawBufferPointer(start:tsKeyPtr, count:MemoryLayout<Result.Bytes32>.size), counter:nonce.RAW_native(), cipherText:outputDelta, aad:UnsafeRawBufferPointer(start:outputDelta, count:0), tag:tagStart)
+				try transportKey.RAW_access_immutable(UnsafeRawBufferPointer.self) { tsKeyPtr in
+					try aeadEncryptV3(plaintext:paddedPlainText, key:tsKeyPtr, counter:nonce.RAW_native(), cipherText:outputDelta, aad:UnsafeRawBufferPointer(start:outputDelta, count:0), tag:tagStart)
 				}
 				
 				// step 4: nonce := nonce + 1

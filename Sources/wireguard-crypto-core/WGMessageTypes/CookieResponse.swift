@@ -15,7 +15,7 @@ extension Message {
 	public struct Cookie {
 		/// The serialized contents of a cookie reply message.
 		@RAW_staticbuff(concat:TypeHeading.self, PeerIndex.self, Nonce.self, Result.Bytes16.self, Tag.self)
-		public struct Payload:Sendable, Sequence {
+		public struct Payload:Sendable {
 			/// The message type header (type and reserved bytes).
 			public let typeHeader:TypeHeading
 			/// The responder's peer index (I_r).
@@ -53,9 +53,15 @@ extension Message {
 					case .v6(let v6ep):
 						T = try wgMAC(key:r, data:v6ep)
 				}
-				let nonce = try generateSecureRandomBytes(as:Nonce.self)
+				let nonceBytes = try generateSecureRandomBytes(count:MemoryLayout<Nonce.RAW_fixed_type>.size)
+			let nonce = nonceBytes.withUnsafeBytes { raw in
+				return Nonce(RAW_decode:raw)!
+			}
 				let (cookieMsg, cookieTag) = try xaead(key: k, nonce: nonce, text: T, aad:m)
-				return Self(initiatorIndex: initiatorsPeerIndex, nonce: nonce, cookieMsg:Result.Bytes16(RAW_staticbuff:cookieMsg), cookieTag: cookieTag)
+				let cookieBytes = cookieMsg.withUnsafeBytes { raw in
+				return Result.Bytes16(RAW_decode:raw)!
+			}
+			return Self(initiatorIndex: initiatorsPeerIndex, nonce: nonce, cookieMsg: cookieBytes, cookieTag: cookieTag)
 			}
 		}
 	}

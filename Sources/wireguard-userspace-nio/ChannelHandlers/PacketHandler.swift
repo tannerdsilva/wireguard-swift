@@ -137,7 +137,7 @@ extension PacketHandler {
 					#if DEBUG
 					logger.trace("received handshake initiation packet.")
 					#endif
-					let packet = Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Initiation.Payload.Authenticated>.size)!
+					let packet = Message.Initiation.Payload.Authenticated(RAW_decode:byteBuffer)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.initiation(packet))))
 				}
 				break
@@ -153,7 +153,7 @@ extension PacketHandler {
 					#if DEBUG
 					logger.trace("received handshake response packet.")
 					#endif
-					let packet = Message.Response.Payload.Authenticated(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Response.Payload.Authenticated>.size)!
+					let packet = Message.Response.Payload.Authenticated(RAW_decode:byteBuffer)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.response(packet))))
 				}
 				break
@@ -163,7 +163,7 @@ extension PacketHandler {
 					#if DEBUG
 					logger.trace("received cookie response packet.")
 					#endif
-					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer.baseAddress!, count:MemoryLayout<Message.Cookie.Payload>.size)!
+					let packet = Message.Cookie.Payload(RAW_decode:byteBuffer)!
 					context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.cookie(packet))))
 				}
 				break
@@ -181,8 +181,14 @@ extension PacketHandler {
 					#endif
 					return
 				}
-				let peerIndex = PeerIndex(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<PeerIndex>.size)!)
-				let counterValue = Counter(RAW_staticbuff:envelope.data.readBytes(length:MemoryLayout<Counter>.size)!)
+				let peerIndexBytes = envelope.data.readBytes(length:MemoryLayout<PeerIndex>.size)!
+				let peerIndex = peerIndexBytes.withUnsafeBytes { raw in
+					return PeerIndex(RAW_decode:raw)!
+				}
+				let counterBytes = envelope.data.readBytes(length:MemoryLayout<Counter>.size)!
+				let counterValue = counterBytes.withUnsafeBytes { raw in
+					return Counter(RAW_decode:raw)!
+				}
 				wireBytes = envelope.data.readableBytes
 				context.fireChannelRead(wrapInboundOut((endpoint, Message.NIO.data(recipientIndex:peerIndex, counter:counterValue, payload:envelope.data.readableBytesView))))
 				break

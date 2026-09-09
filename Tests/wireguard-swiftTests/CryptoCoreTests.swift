@@ -7,6 +7,12 @@ import NIO
 import RAW_xchachapoly
 
 extension WireguardSwiftTests {
+	/// Generates a random `Result.Bytes8` value (v22 `generateSecureRandomBytes` returns `[UInt8]`).
+	fileprivate static func randomBytes8() -> Result.Bytes8 {
+		return try! generateSecureRandomBytes(count:MemoryLayout<Result.Bytes8.RAW_fixed_type>.size).withUnsafeBytes { raw in
+			return Result.Bytes8(RAW_decode:raw)!
+		}
+	}
 	@Suite("WG Crypto Tests",
 		.serialized
 	)
@@ -50,20 +56,21 @@ extension WireguardSwiftTests {
 			var initiatorPublicKey = PublicKey(privateKey:initiatorPrivateKey)
 			let initiatorEphemeralPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
 			let initiatorEphemeralPublicKey = PublicKey(privateKey:initiatorEphemeralPrivateKey)
-			let zeros = Result.Bytes32(RAW_staticbuff:Result.Bytes32.RAW_staticbuff_zeroed())
+			let zeros = Result.Bytes32.RAW_comparable_fixed_theoretical_min()
 			let sharedKey = try MemoryGuarded<SharedKey>.blank() // 0^32 shared key default
-			let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+			let senderIndex = try PeerIndex.random()
 			let constructedPacket = try Message.Response.Payload.forge(c: zeros, h: zeros, initiatorPeerIndex: senderIndex, initiatorStaticPublicKey: &initiatorPublicKey, initiatorEphemeralPublicKey: initiatorEphemeralPublicKey, preSharedKey: sharedKey)
 			let authenticatedPacket = try constructedPacket.payload.finalize(initiatorStaticPublicKey: &initiatorPublicKey)
 			_ = try authenticatedPacket.validate(c:zeros, h:zeros, initiatorStaticPrivateKey:initiatorPrivateKey, initiatorEphemeralPrivateKey:initiatorEphemeralPrivateKey, preSharedKey: sharedKey)
 		}
 
 		@Test func selfValidateDataPacket() throws {
-			try Result.Bytes32(RAW_staticbuff: try generateRandomBytes(count: 32)).RAW_access_staticbuff { cPtr in
-				let (TIsend, _) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key: cPtr, count:MemoryLayout<Result.Bytes32>.size, data: [] as [UInt8], count:0)
-				let (TRrecv, _) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key: cPtr, count:MemoryLayout<Result.Bytes32>.size, data: [] as [UInt8], count:0)
+			try generateSecureRandomBytes(count:MemoryLayout<Result.Bytes32.RAW_fixed_type>.size).withUnsafeBytes { rawBytes in
+				return try Result.Bytes32(RAW_decode:rawBytes)!.RAW_access_immutable(UnsafeRawBufferPointer.self) { cPtr in
+					let (TIsend, _) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key: cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data: [] as [UInt8], count:0)
+					let (TRrecv, _) = try wgKDFv2((Result.Bytes32, Result.Bytes32).self, key: cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data: [] as [UInt8], count:0)
 
-				let senderIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+					let senderIndex = try PeerIndex.random()
 				
 				let message:String = "This is a message to be encrypted"
 				let messageBytes: [UInt8] = Array(message.utf8)
@@ -83,9 +90,10 @@ extension WireguardSwiftTests {
 					throw InvalidUTF8Error()
 				}
 			}
-		}
+			}
+			}
 
-		@Test func selfValidateCookiePacket() throws {
+			@Test func selfValidateCookiePacket() throws {
 			let initiatorPrivateKey = try MemoryGuarded<RAW_dh25519.PrivateKey>.new()
 			
 			_ = PublicKey(privateKey:initiatorPrivateKey)
@@ -98,12 +106,12 @@ extension WireguardSwiftTests {
 			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
 			try! hasher.update(responderStaticPublicKey)
-			let precomputedCookieKey = try! hasher.finish()
+			let precomputedCookieKey = try! hasher.finishDecoded()
 			
 			let constructedPacket = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderStaticPublicKey)
 			var authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey)
 			let endpoint = try SocketAddress(ipAddress: "192.0.2.1", port: 51820)
-			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let secretCookieR = WireguardSwiftTests.randomBytes8()
 			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex: authenticatedPacketToSend.payload.initiatorPeerIndex, k: precomputedCookieKey, r: secretCookieR, endpoint:Endpoint(endpoint), m: authenticatedPacketToSend.msgMac1)
 
 			authenticatedPacketToSend = try constructedPacket.payload.finalize(responderStaticPublicKey: &responderStaticPublicKey, cookie: cookie, savedMac1:authenticatedPacketToSend.msgMac1)
@@ -119,7 +127,7 @@ extension WireguardSwiftTests {
 			var responderPublicKey = PublicKey(privateKey:responderPrivateKey)
 			let forged = try Message.Initiation.Payload.forge(initiatorStaticPrivateKey:initiatorPrivateKey, responderStaticPublicKey:&responderPublicKey)
 			let authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey)
-			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let secretCookieR = WireguardSwiftTests.randomBytes8()
 			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
 			#expect(try authenticated.isMac2Valid(R:secretCookieR, oldR:nil, endpoint:endpoint))
 		}
@@ -136,16 +144,16 @@ extension WireguardSwiftTests {
 			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
 			try! hasher.update(responderPublicKey)
-			let precomputedCookieKey = try! hasher.finish()
+			let precomputedCookieKey = try! hasher.finishDecoded()
 
-			let issuerSecret = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let issuerSecret = WireguardSwiftTests.randomBytes8()
 			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
 			// produce a valid non-zero mac2 bound to `issuerSecret`.
 			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:authenticated.payload.initiatorPeerIndex, k:precomputedCookieKey, r:issuerSecret, endpoint:endpoint, m:authenticated.msgMac1)
 			authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey, cookie:cookie, savedMac1:authenticated.msgMac1)
 			#expect(try authenticated.isMac2Valid(R:issuerSecret, oldR:nil, endpoint:endpoint))
 			// ...but a *different* responder secret must not accept it (no old-secret grace).
-			let differentSecret = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let differentSecret = WireguardSwiftTests.randomBytes8()
 			#expect(!(try authenticated.isMac2Valid(R:differentSecret, oldR:nil, endpoint:endpoint)))
 		}
 
@@ -160,9 +168,9 @@ extension WireguardSwiftTests {
 			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
 			try! hasher.update(responderPublicKey)
-			let precomputedCookieKey = try! hasher.finish()
+			let precomputedCookieKey = try! hasher.finishDecoded()
 
-			let secretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let secretCookieR = WireguardSwiftTests.randomBytes8()
 			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
 			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:authenticated.payload.initiatorPeerIndex, k:precomputedCookieKey, r:secretCookieR, endpoint:endpoint, m:authenticated.msgMac1)
 			authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey, cookie:cookie, savedMac1:authenticated.msgMac1)
@@ -181,10 +189,10 @@ extension WireguardSwiftTests {
 			var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 			try! hasher.update([UInt8]("cookie--".utf8))
 			try! hasher.update(responderPublicKey)
-			let precomputedCookieKey = try! hasher.finish()
+			let precomputedCookieKey = try! hasher.finishDecoded()
 
-			let oldSecretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
-			let newSecretCookieR = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+			let oldSecretCookieR = WireguardSwiftTests.randomBytes8()
+			let newSecretCookieR = WireguardSwiftTests.randomBytes8()
 			let endpoint = try Endpoint(SocketAddress(ipAddress:"192.0.2.1", port:51820))
 			let cookie = try Message.Cookie.Payload.forge(initiatorsPeerIndex:authenticated.payload.initiatorPeerIndex, k:precomputedCookieKey, r:oldSecretCookieR, endpoint:endpoint, m:authenticated.msgMac1)
 			authenticated = try forged.payload.finalize(responderStaticPublicKey:&responderPublicKey, cookie:cookie, savedMac1:authenticated.msgMac1)

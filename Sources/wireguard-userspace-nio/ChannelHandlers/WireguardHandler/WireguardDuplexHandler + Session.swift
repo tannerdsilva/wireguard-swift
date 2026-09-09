@@ -25,22 +25,22 @@ extension PeerInfo.Live {
 		/// memory is zeroed"). `secureZeroBytes` is used so the write is not optimized away as a dead store.
 		internal mutating func zeroOut() {
 			do {
-				try tVar.valueSend.RAW_access_staticbuff_mutating { ptr in
-					try secureZeroBytes(ptr, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
+				try tVar.valueSend.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { ptr in
+					try secureZeroBytes(ptr.baseAddress!, count:MemoryLayout<Result.Bytes32.RAW_fixed_type>.size)
 				}
 			} catch {
 				// the wipe could not be verified; fall back to a best-effort plain zeroing.
-				_ = tVar.valueSend.RAW_access_staticbuff_mutating { ptr in
-					ptr.initializeMemory(as:UInt8.self, repeating:0, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
+				_ = tVar.valueSend.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { ptr in
+					ptr.initializeMemory(as:UInt8.self, repeating:0)
 				}
 			}
 			do {
-				try tVar.valueRecv.RAW_access_staticbuff_mutating { ptr in
-					try secureZeroBytes(ptr, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
+				try tVar.valueRecv.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { ptr in
+					try secureZeroBytes(ptr.baseAddress!, count:MemoryLayout<Result.Bytes32.RAW_fixed_type>.size)
 				}
 			} catch {
-				_ = tVar.valueRecv.RAW_access_staticbuff_mutating { ptr in
-					ptr.initializeMemory(as:UInt8.self, repeating:0, count:MemoryLayout<Result.Bytes32.RAW_staticbuff_storetype>.size)
+				_ = tVar.valueRecv.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { ptr in
+					ptr.initializeMemory(as:UInt8.self, repeating:0)
 				}
 			}
 		}

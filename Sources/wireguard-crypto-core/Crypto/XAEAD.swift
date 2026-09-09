@@ -5,8 +5,8 @@ internal func xaead(key:RAW_xchachapoly.Key, nonce:Nonce, text: Result.Bytes16, 
 	var ourTag:Tag = Tag()
 	return (try [UInt8](unsafeUninitializedCapacity: 16) { cipherText, initializedCount in
 		var context = RAW_xchachapoly.Context(key:key)
-		try text.RAW_access { textBuff in
-			try aad.RAW_access { aadBuff in
+		try text.RAW_access_immutable { textBuff in
+			try aad.RAW_access_immutable { aadBuff in
 				ourTag = try context.encrypt(nonce:nonce, associatedData:aadBuff, inputData:textBuff, output:cipherText.baseAddress!)
 			}
 		}
@@ -17,8 +17,8 @@ internal func xaead(key:RAW_xchachapoly.Key, nonce:Nonce, text: Result.Bytes16, 
 internal func xaeadDecrypt(key:RAW_xchachapoly.Key, nonce:Nonce, cipherText: Result.Bytes16, aad:Result.Bytes16, tag:consuming Tag) throws -> [UInt8] {
 	return try [UInt8](unsafeUninitializedCapacity: 16) { plainText, initializedCount in
 		var context = RAW_xchachapoly.Context(key:key)
-		try cipherText.RAW_access { cipherTextBuff in
-			try aad.RAW_access { aadBuff in
+		try cipherText.RAW_access_immutable { cipherTextBuff in
+			try aad.RAW_access_immutable { aadBuff in
 				try context.decrypt(tag:tag, nonce:nonce, associatedData:aadBuff, inputData:cipherTextBuff, output:plainText.baseAddress!)
 			}
 		}

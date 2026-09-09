@@ -82,7 +82,7 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 				return
 			}
 			let totalLength = data.withUnsafeBytes { rawBuffer in
-				EncodedUInt32(RAW_staticbuff: rawBuffer.baseAddress!.assumingMemoryBound(to:UInt8.self)).RAW_native()
+				EncodedUInt32(RAW_decode:UnsafeRawBufferPointer(rebasing:rawBuffer[0..<MemoryLayout<EncodedUInt32>.size]))!.RAW_native()
 			}
 			logger.debug("received first segment for a \(totalLength) byte message.")
 
@@ -175,7 +175,7 @@ public final class SplicerHandler:PeerAssociatedTailHandler, @unchecked Sendable
 			}
 		}
 
-		let footerBytes = EncodedUInt32(RAW_native:UInt32(totalLength)).RAW_access { $0.map { $0 } }
+		let footerBytes = EncodedUInt32(RAW_native:UInt32(totalLength)).RAW_access_immutable { $0.map { $0 } }
 
 		if totalLength <= firstChunkCapacity {
 			// Single segment: length field followed by the whole payload.

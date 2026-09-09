@@ -8,6 +8,17 @@ import Synchronization
 import bedrock
 import bedrock_fifo
 
+/// Returns a fresh random `Result.Bytes8` value (cookie secret) from the platform RNG,
+/// or `nil` when entropy generation fails.
+private func randomCookieSecret() -> Result.Bytes8? {
+	guard let bytes = try? generateSecureRandomBytes(count:MemoryLayout<Result.Bytes8.RAW_fixed_type>.size) else {
+		return nil
+	}
+	return bytes.withUnsafeBytes { raw in
+		return Result.Bytes8(RAW_decode:raw)!
+	}
+}
+
 internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable {
 	/// the type of value that is emitted by this handler to notify downstream inbound handlers that handshakes have occurred on the interface.
 	internal struct WireguardHandshakeNotification {
@@ -50,7 +61,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		case terminated
 	}
 	
-	internal var secretCookieR:Result.Bytes8 = try! generateSecureRandomBytes(as:Result.Bytes8.self)
+	internal var secretCookieR:Result.Bytes8 = randomCookieSecret()!
 	/// the previous cookie secret, retained for a grace period so that in-flight cookies issued
 	/// just before a rotation remain valid. the whitepaper (section 5.3) requires the secret to
 	/// change every two minutes; keeping the prior secret for validation avoids breaking a
@@ -68,7 +79,7 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 			return
 		}
 		oldSecretCookieR = secretCookieR
-		guard let newSecret = try? generateSecureRandomBytes(as:Result.Bytes8.self) else {
+		guard let newSecret = randomCookieSecret() else {
 			// unable to obtain fresh entropy; keep the current secret and retry next rotation.
 			cookieSecretSetTime = now
 			return
@@ -128,12 +139,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		var hasher = try! WGHasher<RAW_xchachapoly.Key>()
 		try! hasher.update([UInt8]("cookie--".utf8))
 		try! hasher.update(publicKey)
-		precomputedCookieKey = try! hasher.finish()
+		precomputedCookieKey = try! hasher.finishDecoded()
 		// pre-computing HASH(LABEL-MAC1 || Spub) for cheap, pre-curve25519 mac1 rejection.
 		var mac1Hasher = try! WGHasher<Result.Bytes32>()
 		try! mac1Hasher.update([UInt8]("mac1----".utf8))
 		try! mac1Hasher.update(publicKey)
-		precomputedMAC1Key = try! mac1Hasher.finish()
+		precomputedMAC1Key = try! mac1Hasher.finishDecoded()
 		operatingState = .initialized(initialPeers)
 		mtu = MTULimits(mtuInboundIn:mtu.mtuInboundIn, mtuOutboundOut:mtu.mtuOutboundOut, mtuOutboundIn:(Self.maxPayloadPrePadded(forMTU:mtu.mtuOutboundOut) - Self.wireguardDataOverhead), mtuInboundOut:(Self.maxPayloadPrePadded(forMTU:mtu.mtuInboundIn) - Self.wireguardDataOverhead))
 		self.mtu = mtu
@@ -295,7 +306,7 @@ extension WireguardHandler {
 						}
 					}
 				
-					let responderPeerIndex = try generateSecureRandomBytes(as:PeerIndex.self)
+					let responderPeerIndex = try PeerIndex.random()
 					var (c, h, initiatorStaticPublicKey, _) = try payload.validate(responderStaticPrivateKey: privateKey)
 					// H2: the message's msg.mac2 must be valid (or the all-zero `0¹⁶` sent by a peer
 					// that has no cookie). an invalid non-zero mac2 indicates a forged/attributable

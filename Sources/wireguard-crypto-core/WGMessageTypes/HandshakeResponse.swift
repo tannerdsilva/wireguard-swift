@@ -40,10 +40,10 @@ extension Message {
 					var hasher = try WGHasher<Result.Bytes32>()
 					try hasher.update([UInt8]("mac1----".utf8))
 					try hasher.update(initiatorStaticPublicKey)
-					let mac1 = try wgMAC(key:try hasher.finish(), data:selfPtr.pointee)
+					let mac1 = try wgMAC(key:try hasher.finishDecoded(), data:selfPtr.pointee)
 					
 					// step 15: msg.mac2 := 0^16
-					return Authenticated(payload:selfPtr.pointee, msgMac1: mac1, msgMac2:Result.Bytes16(RAW_staticbuff:Result.Bytes16.RAW_staticbuff_zeroed()))
+					return Authenticated(payload:selfPtr.pointee, msgMac1: mac1, msgMac2:Result.Bytes16.RAW_comparable_fixed_theoretical_min())
 				}
 			}
 
@@ -60,52 +60,52 @@ extension Message {
 			///     generated when omitted.
 			/// - Returns: The updated chain state and the forged payload.
 			/// - Throws: If any cryptographic operation fails.
-			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:MemoryGuarded<SharedKey>, responderPeerIndex:PeerIndex = try! generateSecureRandomBytes(as:PeerIndex.self)) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
-				return try cIn.RAW_access_staticbuff_mutating { cPtr in
-					return try hIn.RAW_access_staticbuff_mutating { hPtr in
+			public static func forge(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorPeerIndex:PeerIndex, initiatorStaticPublicKey:UnsafePointer<PublicKey>, initiatorEphemeralPublicKey: PublicKey, preSharedKey:MemoryGuarded<SharedKey>, responderPeerIndex:PeerIndex = try! PeerIndex.random()) throws -> (c:Result.Bytes32, h:Result.Bytes32, payload:Payload) {
+				return try cIn.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { cPtr in
+					return try hIn.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { hPtr in
 						// step 1: (Epriv, Epub) := DH-GENERATE()
 						let ephiPrivate = try MemoryGuarded<PrivateKey>.new()
-						return try PublicKey(privateKey:ephiPrivate).RAW_access_staticbuff { ephiPublic in
+						return try PublicKey(privateKey:ephiPrivate).RAW_access_immutable(UnsafeRawBufferPointer.self) { ephiPublic in
 
 							// step 2: c := KDF(c, Epub)
-							cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:ephiPublic, count:MemoryLayout<Result.Bytes32>.size)
+							cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:ephiPublic.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
 							
 							// step 4: h := HASH(h || msg.ephemeral)
 							var hasher = try WGHasher<Result.Bytes32>()
-							try hasher.update(hPtr, count:MemoryLayout<Result.Bytes32>.size)
-							try hasher.update(ephiPublic, count:MemoryLayout<PublicKey>.size)
-							hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
+							try hasher.update(hPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
+							try hasher.update(ephiPublic.baseAddress!, count:MemoryLayout<PublicKey>.size)
+							hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finishDecoded()
 
 							// step 5: c := KDF(c, DH(Epriv, initiatorEpub))
 							try withUnsafePointer(to:initiatorEphemeralPublicKey) { ephiKeyPublic in
-								cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey: ephiKeyPublic.pointee))
+								cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey: ephiKeyPublic.pointee))
 							}
 							
 							// step 6: c := KDF(c, DH(Epriv, initiatorStaticPub))
-							cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey: initiatorStaticPublicKey.pointee))
+							cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2(Result.Bytes32.self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey:ephiPrivate, publicKey: initiatorStaticPublicKey.pointee))
 
 							// step 7: (c, T, k) := KDF^3(c, Q)
 							var k:Result.Bytes32
 							let T:Result.Bytes32
-							(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, T, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:preSharedKey)
+							(cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee, T, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32, Result.Bytes32).self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:preSharedKey)
 							
 							// step 8: h := HASH(H || T)
 							hasher = try WGHasher<Result.Bytes32>()
-							try hasher.update(hPtr, count:MemoryLayout<Result.Bytes32>.size)
+							try hasher.update(hPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
 							try hasher.update(T)
-							hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
+							hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finishDecoded()
 
 							// step 9: msg.empty := AEAD(k, 0, e, h)
 							var e:[UInt8] = []
-							let (_, emptyTag) = try aeadEncrypt(key:&k, counter:0, text:&e, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self))
+							let (_, emptyTag) = try aeadEncrypt(key:&k, counter:0, text:&e, aad:hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self))
 							
 							// step 10: h := HASH(h || msg.empty)
 							hasher = try WGHasher<Result.Bytes32>()
-							try hasher.update(hPtr, count:MemoryLayout<Result.Bytes32>.size)
+							try hasher.update(hPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
 							try hasher.update(emptyTag)
-							hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
+							hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finishDecoded()
 
-							return (cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, Payload(responderIndex:responderPeerIndex, initiatorIndex:initiatorPeerIndex, ephemeral:ephiPublic.assumingMemoryBound(to:PublicKey.self).pointee, emptyTag:emptyTag))
+							return (cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee, hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee, Payload(responderIndex:responderPeerIndex, initiatorIndex:initiatorPeerIndex, ephemeral:ephiPublic.baseAddress!.assumingMemoryBound(to:PublicKey.self).pointee, emptyTag:emptyTag))
 						}
 					}
 				}
@@ -117,7 +117,7 @@ extension Message {
 extension Message.Response.Payload {
 	/// A handshake response message with MAC1 and MAC2 appended.
 	@RAW_staticbuff(concat:Message.Response.Payload.self, Result.Bytes16.self, Result.Bytes16.self)
-	public struct Authenticated:Sendable, Sequence {
+	public struct Authenticated:Sendable {
 		/// Errors that can occur while validating a response message.
 		public enum Error:Swift.Error {
 			/// The message's MAC1 did not match.
@@ -150,8 +150,8 @@ extension Message.Response.Payload {
 		///   cryptographic operation fails.
 		public borrowing func validate(c cIn:consuming Result.Bytes32, h hIn:consuming Result.Bytes32, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>, initiatorEphemeralPrivateKey:MemoryGuarded<PrivateKey>, preSharedKey:MemoryGuarded<SharedKey>) throws -> (c:Result.Bytes32, h:Result.Bytes32) {
 			return try withUnsafePointer(to:self) { selfPtr in
-				try cIn.RAW_access_staticbuff_mutating { cPtr in
-					try hIn.RAW_access_staticbuff_mutating { hPtr in
+				try cIn.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { cPtr in
+					try hIn.RAW_access_mutable(UnsafeMutableRawBufferPointer.self) { hPtr in
 						// setup: get responder public key
 						let initiatorStaticPublicKey = PublicKey(privateKey:initiatorStaticPrivateKey)
 
@@ -159,51 +159,51 @@ extension Message.Response.Payload {
 						let responderEphemeralPublicKey = selfPtr.pointer(to:\.payload.ephemeral)!.pointee
 
 						// step 1: c := KDF(c, responderEpub)
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:responderEphemeralPublicKey)
+						cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:responderEphemeralPublicKey)
 						
 						// step 4: h := HASH(h || msg.ephemeral)
 						var hasher = try WGHasher<Result.Bytes32>()
-						try hasher.update(hPtr, count:MemoryLayout<Result.Bytes32>.size)
+						try hasher.update(hPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
 						try hasher.update(responderEphemeralPublicKey)
-						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
+						hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finishDecoded()
 						
 						// step 5: c := KDF(c, DH(initiatorEpriv, responderEpub))
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey:responderEphemeralPublicKey))
+						cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorEphemeralPrivateKey, publicKey:responderEphemeralPublicKey))
 						
 						// step 6: c := KDF(c, DH(initiatorStaticPrivateKey, responderEpub))
-						cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey:responderEphemeralPublicKey))
+						cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try wgKDFv2((Result.Bytes32).self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:try dhKeyExchange(privateKey: initiatorStaticPrivateKey, publicKey:responderEphemeralPublicKey))
 						
 						// step 7: (c, T, k) := KDF^3(c, Q)
 						var k:Result.Bytes32
 						var T:Result.Bytes32
-						(cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, T, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32, Result.Bytes32).self, key:cPtr, count:MemoryLayout<Result.Bytes32>.size, data: preSharedKey)
+						(cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee, T, k) = try wgKDFv2((Result.Bytes32, Result.Bytes32, Result.Bytes32).self, key:cPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data: preSharedKey)
 						
 						// step 8: h := HASH(H || T)
 						hasher = try WGHasher<Result.Bytes32>()
-						try hasher.update(hPtr, count:MemoryLayout<Result.Bytes32>.size)
+						try hasher.update(hPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
 						try hasher.update(T)
-						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
+						hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finishDecoded()
 						
 						// step 9: msg.empty := AEAD(k, 0, e, h)
 						var e:[UInt8] = []
-						_ = try aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:hPtr.assumingMemoryBound(to:Result.Bytes32.self), tag:selfPtr.pointer(to:\.payload.emptyTag)!.pointee)
+						_ = try aeadDecrypt(key:&k, counter:0, cipherText:&e, aad:hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self), tag:selfPtr.pointer(to:\.payload.emptyTag)!.pointee)
 
 						// step 10: h := HASH(h || msg.empty)
 						hasher = try WGHasher<Result.Bytes32>()
-						try hasher.update(hPtr, count:MemoryLayout<Result.Bytes32>.size)
+						try hasher.update(hPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size)
 						try hasher.update(selfPtr.pointer(to:\.payload.emptyTag)!.pointee)
-						hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finish()
+						hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee = try hasher.finishDecoded()
 						
 						// step 13: create MAC1
 						hasher = try WGHasher<Result.Bytes32>()
 						try hasher.update([UInt8]("mac1----".utf8))
 						try hasher.update(initiatorStaticPublicKey)
-						let mac1 = try wgMAC(key:try hasher.finish(), data: selfPtr.pointer(to: \.payload)!.pointee)
+						let mac1 = try wgMAC(key:try hasher.finishDecoded(), data: selfPtr.pointer(to: \.payload)!.pointee)
 						guard mac1 == selfPtr.pointer(to:\.msgMac1)!.pointee else {
 							throw Error.mac1Invalid
 						}
 
-						return (cPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee, hPtr.assumingMemoryBound(to:Result.Bytes32.self).pointee)
+						return (cPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee, hPtr.baseAddress!.assumingMemoryBound(to:Result.Bytes32.self).pointee)
 					}
 				}
 			}

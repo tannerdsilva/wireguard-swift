@@ -8,7 +8,9 @@ public struct PeerIndex:Sendable, Hashable, CustomDebugStringConvertible {
 	/// - Returns: A peer index derived from secure random bytes.
 	/// - Throws: If generating the secure random bytes fails.
 	public static func random() throws -> Self {
-		return try generateSecureRandomBytes(as:Self.self)
+		return try generateSecureRandomBytes(count:MemoryLayout<PeerIndex.RAW_fixed_type>.size).withUnsafeBytes { raw in
+			return Self(RAW_decode:raw)!
+		}
 	}
 	/// A decimal representation of the index.
 	public var debugDescription:String {
@@ -22,7 +24,7 @@ public struct PeerIndex:Sendable, Hashable, CustomDebugStringConvertible {
 public struct Reserved:Sendable, CustomDebugStringConvertible {
 	/// Creates a new `Reserved` value initialized to `[0, 0, 0]`.
 	public init() {
-		self = Self(RAW_staticbuff:[0, 0, 0])
+		self = Self.RAW_comparable_fixed_theoretical_min()
 	}
 	/// A textual representation of the reserved field.
 	public var debugDescription:String {

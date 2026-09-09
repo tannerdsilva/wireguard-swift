@@ -145,7 +145,9 @@ extension PeerInfo:Codable {
 			// L3: fail the decode rather than crashing the process on a malformed config.
 			throw DecodingError.dataCorruptedError(forKey:.publicKey, in: container, debugDescription: "Public key must be 32 bytes.")
 		}
-		let publicKey = RAW_dh25519.PublicKey(RAW_staticbuff: publicKeyBytes)
+		let publicKey = publicKeyBytes.withUnsafeBytes { raw in
+			return RAW_dh25519.PublicKey(RAW_decode:raw)!
+		}
 		
 		let sharedKeyString = try container.decodeIfPresent(String.self, forKey: .sharedKey)
 		guard let sharedKeyString = sharedKeyString else {
@@ -160,8 +162,8 @@ extension PeerInfo:Codable {
 		guard bytes.count == 32 else {
 			throw DecodingError.dataCorruptedError(forKey:.sharedKey, in: container, debugDescription: "Shared key must be 32 bytes.")
 		}
-		let sharedKey = bytes.withUnsafeBufferPointer { ptr in
-			return MemoryGuarded<SharedKey>.init(RAW_accessed: ptr)
+		let sharedKey = bytes.withUnsafeBytes { raw in
+			return MemoryGuarded<SharedKey>(RAW_decode:raw)
 		}
 		self.init(publicKey: publicKey,
 				  sharedKey: sharedKey,

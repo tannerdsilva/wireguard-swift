@@ -50,7 +50,7 @@ public enum Endpoint:RAW_encodable, RAW_decodable, CustomDebugStringConvertible,
 	}
 	
     /// Reports the number of bytes required to encode the endpoint.
-    public func RAW_encode(count: inout RAW.size_t) {
+    public func RAW_encode(count: inout Int) {
         switch self {
 			case .v4(_):
 				count = MemoryLayout<AddressV4>.size + MemoryLayout<Port>.size
@@ -59,24 +59,26 @@ public enum Endpoint:RAW_encodable, RAW_decodable, CustomDebugStringConvertible,
 		}
 	}
 
-	/// Encodes the endpoint into `dest` and returns a pointer advanced past the written bytes.
-    public func RAW_encode(dest: UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
+	/// Encodes the endpoint into `destination` and returns a pointer advanced past the written bytes.
+    public func RAW_encode(_: UnsafeMutableRawPointer.Type, destination: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
         switch self {
 			case .v4(let v4ep):
-				return v4ep.RAW_encode(dest:dest)
+				return v4ep.RAW_encode(UnsafeMutableRawPointer.self, destination:destination)
 			case .v6(let v6ep):
-				return v6ep.RAW_encode(dest:dest)
+				return v6ep.RAW_encode(UnsafeMutableRawPointer.self, destination:destination)
 		}
 	}
 
 	/// Attempts to decode an endpoint from the given raw bytes.
 	/// - Returns: The decoded endpoint, or `nil` if the byte count matches neither V4 nor V6.
-    public init?(RAW_decode: UnsafeRawPointer, count: RAW.size_t) {
-        switch count {
+    public init?(RAW_decode input:UnsafeRawBufferPointer) {
+        switch input.count {
 			case MemoryLayout<V4>.size:
-				self = .v4(Endpoint.V4(RAW_staticbuff:RAW_decode))
+				var seekPtr = input.baseAddress!
+				self = .v4(Endpoint.V4(RAW_staticbuff_seeking:&seekPtr))
 			case MemoryLayout<V6>.size:
-				self = .v6(Endpoint.V6(RAW_staticbuff:RAW_decode))
+				var seekPtr = input.baseAddress!
+				self = .v6(Endpoint.V6(RAW_staticbuff_seeking:&seekPtr))
 			default:
 				return nil
 		}

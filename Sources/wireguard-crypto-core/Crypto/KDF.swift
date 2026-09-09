@@ -5,7 +5,7 @@ import RAW_dh25519
 public typealias Key = RAW_dh25519.PublicKey
 
 public func wgKDFv2<T>(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> Result.Bytes32 where T:RAW_accessible {
-	return try data.RAW_access { dataBuff in
+	return try data.RAW_access_immutable { dataBuff in
 		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff.baseAddress!, count:dataBuff.count)
 	}
 }
@@ -13,13 +13,13 @@ public func wgKDFv2<T>(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer,
 /// Derives a single 32-byte key from raw key and data buffers using the WireGuard
 /// key-derivation function (KDF¹ from the whitepaper).
 public func wgKDFv2(_ outputType:(Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> Result.Bytes32 {
-	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
-		return try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
+	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_immutable(UnsafeRawBufferPointer.self) { genKeyPtr in
+		return try wgHMACv2(key:genKeyPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
 	}
 }
 
 public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> (Result.Bytes32, Result.Bytes32) where T:RAW_accessible {
-	return try data.RAW_access { dataBuff in
+	return try data.RAW_access_immutable { dataBuff in
 		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff.baseAddress!, count:dataBuff.count)
 	}
 }
@@ -27,10 +27,10 @@ public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:U
 /// Derives two 32-byte keys from raw key and data buffers using the WireGuard
 /// key-derivation function (KDF² from the whitepaper).
 public func wgKDFv2(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> (Result.Bytes32, Result.Bytes32) {
-	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
-		let t1 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
+	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_immutable(UnsafeRawBufferPointer.self) { genKeyPtr in
+		let t1 = try wgHMACv2(key:genKeyPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
 		let length = MemoryLayout<Result.Bytes32>.size + 1
-		let t2 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[UInt8](unsafeUninitializedCapacity: length, initializingWith: { buffer, count in
+		let t2 = try wgHMACv2(key:genKeyPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:[UInt8](unsafeUninitializedCapacity: length, initializingWith: { buffer, count in
 			t1.RAW_encode(dest:buffer.baseAddress!).pointee = 2
 			count = length
 		}), count: length)
@@ -39,7 +39,7 @@ public func wgKDFv2(_ outputType:(Result.Bytes32, Result.Bytes32).Type, key:Unsa
 }
 
 public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:consuming T) throws -> (Result.Bytes32, Result.Bytes32, Result.Bytes32) where T:RAW_accessible {
-	return try data.RAW_access { dataBuff in
+	return try data.RAW_access_immutable { dataBuff in
 		return try wgKDFv2(outputType, key:key, count:keyCount, data:dataBuff.baseAddress!, count:dataBuff.count)
 	}
 }
@@ -47,14 +47,14 @@ public func wgKDFv2<T>(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Byte
 /// Derives three 32-byte keys from raw key and data buffers using the WireGuard
 /// key-derivation function (KDF³ from the whitepaper).
 public func wgKDFv2(_ outputType:(Result.Bytes32, Result.Bytes32, Result.Bytes32).Type, key:UnsafeRawPointer, count keyCount:size_t, data:UnsafeRawPointer, count dataCount:size_t) throws -> (Result.Bytes32, Result.Bytes32, Result.Bytes32) {
-	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_staticbuff { genKeyPtr in
-		let t1 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
+	try wgHMACv2(key:key, count:keyCount, data:data, count:dataCount).RAW_access_immutable(UnsafeRawBufferPointer.self) { genKeyPtr in
+		let t1 = try wgHMACv2(key:genKeyPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:[1], count:1)
 		let length = MemoryLayout<Result.Bytes32>.size + 1
-		let t2 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[UInt8](unsafeUninitializedCapacity: length, initializingWith: { buffer, count in
+		let t2 = try wgHMACv2(key:genKeyPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:[UInt8](unsafeUninitializedCapacity: length, initializingWith: { buffer, count in
 			t1.RAW_encode(dest:buffer.baseAddress!).pointee = 2
 			count = length
 		}), count: length)
-		let t3 = try wgHMACv2(key:genKeyPtr, count:MemoryLayout<Result.Bytes32>.size, data:[UInt8](unsafeUninitializedCapacity: length, initializingWith: { buffer, count in
+		let t3 = try wgHMACv2(key:genKeyPtr.baseAddress!, count:MemoryLayout<Result.Bytes32>.size, data:[UInt8](unsafeUninitializedCapacity: length, initializingWith: { buffer, count in
 			t2.RAW_encode(dest:buffer.baseAddress!).pointee = 3
 			count = length
 		}), count: length)

@@ -40,29 +40,29 @@ struct DropInbound:EncryptedPacketProcessor {
 			case .initiation(_):
 				if(type == .initiation) {
 					if(NIODeadline.now() < endTime) {
-						let packet = Message.Initiation.Payload.Authenticated(RAW_staticbuff: Message.Initiation.Payload.Authenticated.RAW_staticbuff_zeroed())
+						let packet = Message.Initiation.Payload.Authenticated.RAW_comparable_fixed_theoretical_min()
 						encryptedWireguardContent = .initiation(packet)
 					}
 				}
 			case .response(_):
 				if(type == .response) {
 					if(NIODeadline.now() < endTime) {
-						let packet = Message.Response.Payload.Authenticated(RAW_staticbuff: Message.Response.Payload.Authenticated.RAW_staticbuff_zeroed())
+						let packet = Message.Response.Payload.Authenticated.RAW_comparable_fixed_theoretical_min()
 						encryptedWireguardContent = .response(packet)
 					}
 				}
 			case .cookie(_):
 				if(type == .cookie) {
 					if(NIODeadline.now() < endTime) {
-						let packet = Message.Cookie.Payload(RAW_staticbuff: Message.Cookie.Payload.RAW_staticbuff_zeroed())
+						let packet = Message.Cookie.Payload.RAW_comparable_fixed_theoretical_min()
 						encryptedWireguardContent = .cookie(packet)
 					}
 				}
 			case .data(_, _, _):
 				if(type == .data) {
 					if(NIODeadline.now() < endTime) {
-						let recipeintIndex = PeerIndex(RAW_staticbuff: PeerIndex.RAW_staticbuff_zeroed())
-						let counter = Counter(RAW_staticbuff: Counter.RAW_staticbuff_zeroed())
+						let recipeintIndex = PeerIndex.RAW_comparable_fixed_theoretical_min()
+						let counter = Counter.RAW_comparable_fixed_theoretical_min()
 						let buffer = ByteBuffer().readableBytesView
 						encryptedWireguardContent = .data(recipientIndex: recipeintIndex, counter: counter, payload: buffer)
 					}
@@ -120,9 +120,24 @@ extension WireguardSwiftTests {
 	)
 	struct LiveSocketTests {
 
-		static let aliceStaticPrivateKey = MemoryGuarded<PrivateKey>(RAW_decode:try! RAW_base64.decode("8DFnI7tPWLl4WmuEp4T5KVuKMW6iyjRdTb3IVaDe+kI="), count:32)!
-		static let bobStaticPrivateKey = MemoryGuarded<PrivateKey>(RAW_decode:try! RAW_base64.decode("SD/y8yQa/DgiYRnDI9vJEiGezNn4yLd/4yL9OLnej0A="), count:32)!
-		static let carolStaticPrivateKey = MemoryGuarded<PrivateKey>(RAW_decode:try! RAW_base64.decode("EEug1Qbe4WjR1TDq4iN4Ce4Rh5iN4aDR407/e5bQgW4="), count:32)!
+		static let aliceStaticPrivateKey: MemoryGuarded<PrivateKey> = {
+			let bytes = try! RAW_base64.decode("8DFnI7tPWLl4WmuEp4T5KVuKMW6iyjRdTb3IVaDe+kI=")
+			return bytes.withUnsafeBytes { raw in
+				return MemoryGuarded<PrivateKey>(RAW_decode:raw)!
+			}
+		}()
+		static let bobStaticPrivateKey: MemoryGuarded<PrivateKey> = {
+			let bytes = try! RAW_base64.decode("SD/y8yQa/DgiYRnDI9vJEiGezNn4yLd/4yL9OLnej0A=")
+			return bytes.withUnsafeBytes { raw in
+				return MemoryGuarded<PrivateKey>(RAW_decode:raw)!
+			}
+		}()
+		static let carolStaticPrivateKey: MemoryGuarded<PrivateKey> = {
+			let bytes = try! RAW_base64.decode("EEug1Qbe4WjR1TDq4iN4Ce4Rh5iN4aDR407/e5bQgW4=")
+			return bytes.withUnsafeBytes { raw in
+				return MemoryGuarded<PrivateKey>(RAW_decode:raw)!
+			}
+		}()
 
 		let alicePublicKey:PublicKey
 		let alicePrivateKey:MemoryGuarded<PrivateKey>

@@ -10,7 +10,12 @@ import wireguard_crypto_core
 extension WireguardSwiftTests {
     @Suite struct PeerTests {
     
-        static let privateKey = MemoryGuarded<PrivateKey>(RAW_decode:try! RAW_base64.decode("8DFnI7tPWLl4WmuEp4T5KVuKMW6iyjRdTb3IVaDe+kI="), count:32)!
+        static let privateKey: MemoryGuarded<PrivateKey> = {
+            let bytes = try! RAW_base64.decode("8DFnI7tPWLl4WmuEp4T5KVuKMW6iyjRdTb3IVaDe+kI=")
+            return bytes.withUnsafeBytes { raw in
+                return MemoryGuarded<PrivateKey>(RAW_decode:raw)!
+            }
+        }()
         static let publicKey = PublicKey(privateKey: privateKey)
 		let sharedKey:MemoryGuarded<SharedKey>
 		

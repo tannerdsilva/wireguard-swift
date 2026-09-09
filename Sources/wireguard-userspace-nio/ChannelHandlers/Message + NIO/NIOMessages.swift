@@ -9,7 +9,7 @@ import bedrock
 
 extension Message:RAW_encodable {
 	/// Reports the number of bytes required to encode the message.
-    public func RAW_encode(count: inout RAW.size_t) {
+    public func RAW_encode(count: inout Int) {
         switch self {
             case .initiation(let payload):
                 payload.RAW_encode(count: &count)
@@ -22,16 +22,16 @@ extension Message:RAW_encodable {
         }
     }
 
-	/// Encodes the message into `dest` and returns a pointer advanced past the
+	/// Encodes the message into `destination` and returns a pointer advanced past the
 	/// written bytes.
-	public func RAW_encode(dest:UnsafeMutablePointer<UInt8>) -> UnsafeMutablePointer<UInt8> {
+	public func RAW_encode(_: UnsafeMutableRawPointer.Type, destination: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
 		switch self {
 			case .initiation(let payload):
-				return payload.RAW_encode(dest:dest)
+				return payload.RAW_encode(UnsafeMutableRawPointer.self, destination:destination)
 			case .response(let payload):
-				return payload.RAW_encode(dest:dest)
+				return payload.RAW_encode(UnsafeMutableRawPointer.self, destination:destination)
 			case .cookie(let payload):
-				return payload.RAW_encode(dest:dest)
+				return payload.RAW_encode(UnsafeMutableRawPointer.self, destination:destination)
 			case .data(_):
 				fatalError("do not use RAW_encodable protocol on Message.Data")
 		}
