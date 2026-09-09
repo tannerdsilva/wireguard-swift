@@ -160,6 +160,12 @@ extension PacketHandler {
 			case 0x3:
 				wireBytes = MemoryLayout<Message.Cookie.Payload>.size
 				envelope.data.withUnsafeReadableBytes { byteBuffer in
+					guard byteBuffer.count == MemoryLayout<Message.Cookie.Payload>.size else {
+						#if DEBUG
+						logger.error("invalid cookie response packet.", metadata:["expected_length":"\(MemoryLayout<Message.Cookie.Payload>.size)", "actual_length":"\(byteBuffer.count)"])
+						#endif
+						return
+					}
 					#if DEBUG
 					logger.trace("received cookie response packet.")
 					#endif

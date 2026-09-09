@@ -93,8 +93,11 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
-		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		self.listeningPort = listeningPort ?? 36361
+		guard WireguardHandler.maximumOutboundPayload(forMTU:Int(mtu)) > 0 else {
+			throw ChannelInitializationError.invalidMTU(Int(mtu))
+		}
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
@@ -110,8 +113,11 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
-		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		self.listeningPort = listeningPort ?? 36361
+		guard WireguardHandler.maximumOutboundPayload(forMTU:Int(mtu)) > 0 else {
+			throw ChannelInitializationError.invalidMTU(Int(mtu))
+		}
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
@@ -128,8 +134,11 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 		makeLogger.logLevel = logLevel
 		self.logger = makeLogger
 		self.staticPrivateKey = staticPrivateKey
-		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		self.listeningPort = listeningPort ?? 36361
+		guard WireguardHandler.maximumOutboundPayload(forMTU:Int(mtu)) > 0 else {
+			throw ChannelInitializationError.invalidMTU(Int(mtu))
+		}
+		self.group = MultiThreadedEventLoopGroup(numberOfThreads:System.coreCount)
 		var mtuLims = MTULimits(bidirectional:Int(mtu))
 		self.ph = PacketHandler(privateKey:staticPrivateKey, mtu:&mtuLims, logLevel:logger.logLevel)
 		self.eph = EncryptedPacketHandler(epp: encryptedPacketProcessor, logLevel: logLevel)
@@ -147,7 +156,9 @@ extension WGInterface:Service {
 	}
 
 	/// Errors that can occur while initializing the channel.
-	public enum ChannelInitializationError:Swift.Error, Sendable {
+	public enum ChannelInitializationError:Swift.Error, Sendable, Equatable {
+		/// The configured MTU is too small to carry a WireGuard data message.
+		case invalidMTU(Int)
 		/// The socket receive buffer size could not be retrieved.
 		case soReceiveBufferRetrievalFailed
 		/// The socket send buffer size could not be set.

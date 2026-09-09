@@ -55,6 +55,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 		return (((mtu - Self.wireguardMaximumPaddingBytesAdded) / 16) * 16)
 	}
 
+	/// The maximum outbound data payload size, in bytes, that fits in the given MTU
+	/// after WireGuard header/tag overhead and 16-byte padding.
+	internal static func maximumOutboundPayload(forMTU mtu:Int) -> Int {
+		Self.maxPayloadPrePadded(forMTU: mtu) - Self.wireguardDataOverhead
+	}
+
 	private enum State {
 		case initialized([any PeerInformation])
 		case channelEngaged

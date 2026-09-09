@@ -1365,3 +1365,63 @@ extension WireguardSwiftTests.LiveSocketTests {
 		#expect(largestTime <= smallestTime * sizeRatio * 1.5)
 	}
 }
+
+// MARK: C1 Regression Tests
+extension WireguardSwiftTests.LiveSocketTests {
+	@Test func testMalformedCookieReplyDroppedWithoutCrash() async throws {
+		// C1 regression: PacketHandler must DROP cookie-reply datagrams (first byte 0x03)
+		// whose length is not exactly MemoryLayout<Message.Cookie.Payload>.size. rawdog v22's
+		// RAW_decode is exact-length, so the old force-unwrap let one unauthenticated
+		// malformed UDP datagram crash the whole process.
+		try await withThrowingTaskGroup(body: { foo in
+			let aliceInterface = try WGInterface<DefaultChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:[], logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36019)
+
+			foo.addTask {
+				try await aliceInterface.run()
+			}
+
+			cliLogger.info("waiting for alice's interface to initialize...")
+			try await aliceInterface.waitForChannelInit()
+
+			let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+			let client = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Channel, any Swift.Error>) in
+				DatagramBootstrap(group: group).bind(host: "127.0.0.1", port: 0).whenComplete { result in
+					cont.resume(with: result)
+				}
+			}
+			let target = try SocketAddress(ipAddress: "127.0.0.1", port: 36019)
+
+			let cookieSize = MemoryLayout<Message.Cookie.Payload>.size
+			let malformed:[[UInt8]] = [
+				[0x03],
+				[0x03, 0x00],
+				[0x03] + Array(repeating: 0x00, count: cookieSize - 2),
+				[0x03] + Array(repeating: 0x00, count: cookieSize),
+				[0x03] + Array(repeating: 0xFF, count: cookieSize * 2),
+			]
+			for bytes in malformed {
+				var buf = client.allocator.buffer(capacity: bytes.count)
+				buf.writeBytes(bytes)
+				client.writeAndFlush(AddressedEnvelope(remoteAddress: target, data: buf), promise: nil)
+			}
+			// give the datagrams time to be processed, then prove the interface survived.
+			try await Task.sleep(for: .seconds(1))
+			var channel = try await aliceInterface.getChannel()
+			#expect(channel.isActive)
+
+			// second wave: the pipeline must still be accepting datagrams.
+			for bytes in malformed {
+				var buf = client.allocator.buffer(capacity: bytes.count)
+				buf.writeBytes(bytes)
+				client.writeAndFlush(AddressedEnvelope(remoteAddress: target, data: buf), promise: nil)
+			}
+			try await Task.sleep(for: .seconds(1))
+			channel = try await aliceInterface.getChannel()
+			#expect(channel.isActive)
+
+			_ = try? await group.shutdownGracefully()
+			foo.cancelAll()
+			try await foo.waitForAll()
+		})
+	}
+}
