@@ -1,13 +1,13 @@
 {
-  "originHash" : "ddf6cb2098ba216041f4d2c856fb6980a448f0a839adc95b40a800d6b1b917cf",
+  "originHash" : "7ce0ab2ad67dbdf01f612d7c0856200ddc53c010c0372787dbb8512fca66b7dd",
   "pins" : [
     {
       "identity" : "bedrock",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tannerdsilva/bedrock.git",
       "state" : {
-        "branch" : "v22-rewrite",
-        "revision" : "6c92dd55c6c39bb8d416d97d153c81a8a81149a9"
+        "revision" : "e6225cb114c6daf0f39ea2af765a60106566160a",
+        "version" : "8.0.0"
       }
     },
     {
