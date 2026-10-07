@@ -330,6 +330,7 @@ extension WireguardHandler {
 						#endif
 						return
 					}
+					livePeerInfo.authenticatedPacketReceived(context:context, now:now, isData:false)
 					guard livePeerInfo.canSendResponse(myPublicKey: PublicKey(privateKey: privateKey)) == true else {
 						#if DEBUG
 						logger.info("conflicting initiation with peer. withdrawing response packet.", metadata:["public-key_remote":"\(initiatorStaticPublicKey)"])
@@ -384,6 +385,7 @@ extension WireguardHandler {
 					livePeerInfo.updateEndpoint(endpoint)
 					try livePeerInfo.applySelfInitiated(context:context, now:now, geometry, cPtr:&chainingData.c, count:MemoryLayout<Result.Bytes32>.size)
 					logger.debug("successfully validated handshake response", metadata:["index_initiator":"\(payload.payload.initiatorIndex)", "index_responder":"\(payload.payload.responderIndex)", "public-key_remote":"\(peerPub)"])
+					livePeerInfo.authenticatedPacketReceived(context:context, now:now, isData:false)
 					handshakeSignals.yield(HandshakeInfo(recordedTime: now, rtt: now - .nanoseconds(Int64(livePeerInfo.recentHandshakeTime.uptimeNanoseconds)), publicKey: peerPub))
 
 					break;
@@ -463,6 +465,8 @@ extension WireguardHandler {
 							break
 					}
 					livePeerInfo.nRecvUpdate(context:context, now:now, varsRecv.nRecv, geometry:existingGeometryPositioned, mStaticPrivateKey:privateKey)
+					let isTransportData = encodeBuffer.readableBytes > 0
+					livePeerInfo.authenticatedPacketReceived(context:context, now:now, isData: isTransportData)
 					context.fireChannelRead(wrapInboundOut(PeerAssociated<ByteBuffer>(publicKey:identifiedPublicKey, buffer:encodeBuffer)))
 			}
 		} catch let error {
@@ -513,6 +517,13 @@ extension WireguardHandler {
 					return false
 				}
 				peerInfoLive.updateSendValues(context:context, now:now, sendValues, initiationValues:(mStaticPrivateKey:privateKey, endpointOverride:ep))
+				if payload.readableBytes > 0 {
+					peerInfoLive.transportDataSent(context:context, now:now, initiatorStaticPrivateKey:privateKey)
+				} else {
+					// zero-length payload = keepalive: any authenticated send
+					// cancels the pending passive keepalive.
+					peerInfoLive.cancelPassiveKeepalive()
+				}
 				let asAddressedEnvelope = AddressedEnvelope<ByteBuffer>(remoteAddress: SocketAddress(ep), data:encodeBuffer)
 				logger.trace("writing data to peer.", metadata:["size":"\(payload.readableBytes)", "public-key_remote":"\(publicKey)"])
 				context.write(wrapOutboundOut(asAddressedEnvelope), promise:promise)

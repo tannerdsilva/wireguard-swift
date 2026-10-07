@@ -52,6 +52,18 @@ extension PeerInfo {
 		private var savedMac1:Result.Bytes16? = nil
 		private var savedCookiePayload:(cookie:Message.Cookie.Payload, deadline:NIODeadline)? = nil
 
+		// whitepaper section 6.5 — passive keepalive + broken-session detection.
+		private var deadDirectionTask:(NIODeadline, RepeatedTask)? = nil {
+			didSet {
+				oldValue?.1.cancel()
+			}
+		}
+		private var keepaliveTask:(NIODeadline, RepeatedTask)? = nil {
+			didSet {
+				oldValue?.1.cancel()
+			}
+		}
+
 		internal init(_ peerInfo:any PeerInformation, handler:WireguardHandler, logLevel:Logger.Level) {
 			var buildLogger = Logger(label:"\(String(describing:PeerInfo.self)).\(String(describing:Self.self))")
 			buildLogger.logLevel = logLevel
@@ -70,6 +82,8 @@ extension PeerInfo {
 				
 		deinit {
 			handshakeInitiationTask = nil
+			deadDirectionTask?.1.cancel()
+			keepaliveTask?.1.cancel()
 			log.trace("instance deinitialized.")
 		}
 	}
@@ -158,6 +172,105 @@ extension PeerInfo.Live {
 		context.eventLoop.assertInEventLoop()
 		#endif
 		postHandshakePackets.queue(data:data, promise:promise)
+	}
+}
+
+// MARK: Keepalive & Liveness (whitepaper section 6.5)
+extension PeerInfo.Live {
+	/// Called after an authenticated transport data message has been sent.
+	/// Arms the broken-session detection timer (`Keepalive-Timeout +
+	/// Rekey-Timeout` + jitter, per whitepaper §6.1/§6.5) unless one is already
+	/// pending — mirroring wireguard-go's `timersDataSent` (`!IsPending()`):
+	/// KCP retransmits must not slide the deadline. Any authenticated packet
+	/// received cancels it (`authenticatedPacketReceived`); when it fires, a
+	/// handshake initiation is sent (once; the initiation task itself retries
+	/// every `Rekey-Timeout`, as §6.5 requires). Any authenticated send also
+	/// cancels the pending passive keepalive (wireguard-go `sendKeepalive.Del`).
+	internal func transportDataSent(context:ChannelHandlerContext, now:NIODeadline, initiatorStaticPrivateKey:MemoryGuarded<PrivateKey>) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		// any authenticated send cancels a pending passive keepalive
+		keepaliveTask = nil
+		guard handshakeInitiationTask == nil, deadDirectionTask == nil else {
+			return
+		}
+		guard let current = rotation.current else {
+			return
+		}
+		guard current.establishedDate + WireguardHandler.rejectAfterTime > now else {
+			return
+		}
+		// wireguard-go: fastrandn(RekeyTimeoutJitterMaxMs) with RekeyTimeoutJitterMaxMs = 334.
+		let jitterNanos = Int64.random(in: 0..<334_000_000)
+		let delay = WireguardHandler.keepaliveTimeout + WireguardHandler.rekeyTimeout + .nanoseconds(jitterNanos)
+		let css = ContextContainer(context: context)
+		let l = log
+		let deadline = now + delay
+		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: delay, delay: WireguardHandler.rekeyTimeout, { [weak self, ipk = initiatorStaticPrivateKey, cc = css, l = l] repeatedTask in
+			repeatedTask.cancel()
+			guard let self = self else {
+				return
+			}
+			self.deadDirectionTask = nil
+			l.info("Retrying handshake because we stopped hearing back after \(Int((WireguardHandler.keepaliveTimeout + WireguardHandler.rekeyTimeout).nanoseconds) / 1_000_000_000) seconds")
+			cc.accessContext { contextPtr in
+				try? self.launchHandshakeInitiationTask(context: contextPtr.pointee, now: NIODeadline.now(), initiatorStaticPrivateKey: ipk)
+			}
+		})
+		deadDirectionTask = (deadline, task)
+	}
+
+	/// Called after any authenticated packet is received (data, initiation, or
+	/// response). Cancels the broken-session detection (wireguard-go
+	/// `timersAnyAuthenticatedPacketReceived`). For authenticated *data*
+	/// receives, also arms the §6.5 passive keepalive unless one is pending
+	/// (wireguard-go `timersDataReceived`).
+	internal func authenticatedPacketReceived(context:ChannelHandlerContext, now:NIODeadline, isData:Bool) {
+		#if DEBUG
+		context.eventLoop.assertInEventLoop()
+		#endif
+		deadDirectionTask = nil
+		guard isData else {
+			return
+		}
+		guard keepaliveTask == nil else {
+			return
+		}
+		armPassiveKeepalive(context: context, now: now)
+	}
+
+	/// Cancels a pending passive keepalive (wireguard-go `sendKeepalive.Del`).
+	internal func cancelPassiveKeepalive() {
+		keepaliveTask = nil
+	}
+
+	/// Arms the §6.5 passive keepalive: if we have received authenticated data
+	/// but have nothing to send for `Keepalive-Timeout`, send a zero-length
+	/// transport data message so the peer always hears from us.
+	private func armPassiveKeepalive(context:ChannelHandlerContext, now:NIODeadline) {
+		let css = ContextContainer(context: context)
+		let l = log
+		let deadline = now + WireguardHandler.keepaliveTimeout
+		let task = context.eventLoop.scheduleRepeatedTask(initialDelay: WireguardHandler.keepaliveTimeout, delay: WireguardHandler.keepaliveTimeout, { [weak self, cc = css, l = l] repeatedTask in
+			repeatedTask.cancel()
+			guard let self = self else {
+				return
+			}
+			self.keepaliveTask = nil
+			guard let current = self.rotation.current else {
+				return
+			}
+			guard current.establishedDate + WireguardHandler.rejectAfterTime > NIODeadline.now() else {
+				return
+			}
+			l.debug("sending keepalive packet to remote peer")
+			cc.accessContext { contextPtr in
+				var empty = contextPtr.pointee.channel.allocator.buffer(capacity: 0)
+				_ = self.wireguardHandler.writeBytes(context: contextPtr.pointee, publicKey: self.publicKey, payload: &empty, promise: nil)
+			}
+		})
+		keepaliveTask = (deadline, task)
 	}
 }
 
