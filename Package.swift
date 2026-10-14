@@ -16,7 +16,7 @@ let package = Package(
 	dependencies:[
 		.package(url:"https://github.com/tannerdsilva/rawdog.git", "22.0.0"..<"23.0.0"),
 		.package(url:"https://github.com/apple/swift-nio.git", "2.84.0"..<"3.0.0"),
-		.package(url:"https://github.com/tannerdsilva/bedrock.git", "8.0.0"..<"9.0.0"),
+		.package(url:"https://github.com/tannerdsilva/bedrock.git", "9.0.0"..<"10.0.0"),
 		.package(url:"https://github.com/apple/swift-argument-parser.git", "1.6.1"..<"2.0.0"),
 		.package(url:"https://github.com/swift-server/swift-service-lifecycle", "2.4.0"..<"3.0.0"),
 	],

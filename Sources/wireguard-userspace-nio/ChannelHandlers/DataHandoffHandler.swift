@@ -53,7 +53,7 @@ internal final class DataHandoffHandler:@unchecked Sendable, ChannelInboundHandl
 						log.info("Configuration updated, updating data handoff fifos")
 						for (key, _) in handoffs {
 							if(!newConfig.contains { $0.publicKey == key }) {
-								handoffs[key]?.finish()
+								try? handoffs[key]?.finish()
 								handoffs[key] = nil
 							}
 						}
@@ -62,7 +62,7 @@ internal final class DataHandoffHandler:@unchecked Sendable, ChannelInboundHandl
 								handoffs[peer.publicKey] = peer.inboundData
 							} else {
 								if !(handoffs[peer.publicKey]! === peer.inboundData) {
-									handoffs[peer.publicKey]!.finish()
+									try? handoffs[peer.publicKey]!.finish()
 									handoffs[peer.publicKey] = peer.inboundData
 								}
 							}

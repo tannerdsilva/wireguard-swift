@@ -165,11 +165,11 @@ extension WireguardSwiftTests {
 		}
 		
 		fileprivate func runKCPTestInterfaces(foo: inout ThrowingTaskGroup<(), any Swift.Error>, alicePort:Int, bobPort:Int, ipAddress:String = "127.0.0.1") async throws -> (aliceInterface:WGInterface<KCPChannels>, bobInterface:WGInterface<KCPChannels>, aliceFifo:FIFO<ByteBuffer, Swift.Error>, bobFifo:FIFO<ByteBuffer, Swift.Error>) {
-			let bobFifo = FIFO<ByteBuffer, Swift.Error>()
+			let bobFifo = try FIFO<ByteBuffer, Swift.Error>()
 			let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: ipAddress, port: bobPort, internalKeepAlive: .seconds(20), inboundData: bobFifo)]
 			let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: alicePort)
 			
-			let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+			let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 			let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: ipAddress, port: alicePort, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 			let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: bobPort)
 			
@@ -194,10 +194,10 @@ extension WireguardSwiftTests {
 			
 			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
 				_ = try await withThrowingTaskGroup(body: { foo in
-					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36016, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36016, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 					let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36017, encryptedPacketProcessor: encryptedPacketProcessor)
 					
-					let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36017, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 					let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36016, encryptedPacketProcessor: encryptedPacketProcessor)
 					
@@ -291,10 +291,10 @@ extension WireguardSwiftTests {
 			let payload = [UInt8](repeating: 0, count: payloadSize)
 			try await confirmation("verify the channels close", expectedCount:2) { closeConf in
 				_ = try await withThrowingTaskGroup(body: { foo in
-					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 					let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
 					
-					let oldAliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let oldAliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "48.48.48.48", port: 20202, internalKeepAlive: .seconds(1), inboundData: oldAliceFifo)]
 					let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36004)
 					
@@ -324,9 +324,9 @@ extension WireguardSwiftTests {
 						cliLogger.info("data successfully sent")
 					}
 					
-					let newAliceFifo = FIFO<ByteBuffer, Swift.Error>()
+					let newAliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 					let newBobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36005, internalKeepAlive: .seconds(1), inboundData: newAliceFifo)]
-					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+					let newAlicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 					foo.addTask {
 						try await Task.sleep(for: .seconds(2))
 						try await bobInterface.setConfiguration(peerConfig: newBobPeers)
@@ -351,10 +351,10 @@ extension WireguardSwiftTests {
  			let payload = [UInt8](repeating: 0, count: payloadSize)
  			try await confirmation("verify the channels close", expectedCount:3) { closeConf in
  				_ = try await withThrowingTaskGroup(body: { foo in
- 					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+ 					let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
  					let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
 					
- 					let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+ 					let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
  					let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36005, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
  					let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36004)
 					
@@ -600,10 +600,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		
 		try await confirmation("verify the channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, sharedKey: bobAliceSharedKey, ipAddress: "127.0.0.1", port: 36016, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, sharedKey: bobAliceSharedKey, ipAddress: "127.0.0.1", port: 36016, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36017)
 				
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, sharedKey: aliceBobSharedKey, ipAddress: "127.0.0.1", port: 36017, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36016)
 				
@@ -741,15 +741,15 @@ extension WireguardSwiftTests.LiveSocketTests {
 		
 		try await confirmation("verify the channels close", expectedCount:3) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36013)
 				
-				let alicePeerFifo = FIFO<ByteBuffer, Swift.Error>()
-				let carolPeerFifo = FIFO<ByteBuffer, Swift.Error>()
+				let alicePeerFifo = try FIFO<ByteBuffer, Swift.Error>()
+				let carolPeerFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36013, internalKeepAlive: .seconds(30), inboundData: alicePeerFifo), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36014, internalKeepAlive: .seconds(30), inboundData: carolPeerFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36012)
 				
-				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(30), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let carolInterface = try WGInterface<KCPChannels>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, listeningPort: 36014)
 				
 				foo.addTask {
@@ -823,18 +823,18 @@ extension WireguardSwiftTests.LiveSocketTests {
 		
 		try await confirmation("verify the channels close", expectedCount:3) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let aliceFifoB = FIFO<ByteBuffer, Swift.Error>()
-				let aliceFifoC = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifoB = try FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifoC = try FIFO<ByteBuffer, Swift.Error>()
 				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(20), inboundData: aliceFifoB), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36014, internalKeepAlive: .seconds(20), inboundData: aliceFifoC)]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36013)
 				
-				let bobFifoA = FIFO<ByteBuffer, Swift.Error>()
-				let bobFifoC = FIFO<ByteBuffer, Swift.Error>()
+				let bobFifoA = try FIFO<ByteBuffer, Swift.Error>()
+				let bobFifoC = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36013, internalKeepAlive: .seconds(30), inboundData: bobFifoA), PeerInfo(publicKey: carolPublicKey, ipAddress: "127.0.0.1", port: 36014, internalKeepAlive: .seconds(30), inboundData: bobFifoC)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36012)
 				
-				let carolFifoA = FIFO<ByteBuffer, Swift.Error>()
-				let carolFifoB = FIFO<ByteBuffer, Swift.Error>()
+				let carolFifoA = try FIFO<ByteBuffer, Swift.Error>()
+				let carolFifoB = try FIFO<ByteBuffer, Swift.Error>()
 				let carolPeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36012, internalKeepAlive: .seconds(30), inboundData: carolFifoB), PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36013, internalKeepAlive: .seconds(30), inboundData: carolFifoA)]
 				let carolInterface = try WGInterface<KCPChannels>(staticPrivateKey:carolPrivateKey, mtu:1400, initialConfiguration:carolPeers, logLevel:cliLogger.logLevel, listeningPort: 36014)
 				
@@ -970,10 +970,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		let payload = [UInt8](repeating: 0, count: payloadSize)
 		try await confirmation("verify the channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<DefaultChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36005)
 				
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36005, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<DefaultChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36004)
 				
@@ -1015,10 +1015,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		let payload = [UInt8](repeating: 0, count: payloadSize)
 		try await confirmation("verify the channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36004, internalKeepAlive: .seconds(1), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KeepAlive>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36005)
 				
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36005, internalKeepAlive: .seconds(1), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36004)
 				
@@ -1101,10 +1101,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		var defaultTimes: [Int:TimeAmount] = [:]
 		try await confirmation("verify the default channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36202, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36202, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<DefaultChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36201)
 
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36201, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<DefaultChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36202)
 
@@ -1143,10 +1143,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		var kcpTimes: [Int:TimeAmount] = [:]
 		try await confirmation("verify the kcp channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36204, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36204, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36203)
 
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36203, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36204)
 
@@ -1204,10 +1204,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		var defaultTimes: [Int:TimeAmount] = [:]
 		try await confirmation("verify the default channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36212, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36212, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<DefaultChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36211)
 
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36211, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<DefaultChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, customChannelArgs: cliLogger.logLevel, listeningPort: 36212)
 
@@ -1246,10 +1246,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		var kcpTimes: [Int:TimeAmount] = [:]
 		try await confirmation("verify the kcp channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36214, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36214, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36213)
 
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36213, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36214)
 
@@ -1307,10 +1307,10 @@ extension WireguardSwiftTests.LiveSocketTests {
 		var kcpTimes: [Int:TimeAmount] = [:]
 		try await confirmation("verify the kcp channels close", expectedCount:2) { closeConf in
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36222, internalKeepAlive: .seconds(20), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let alicePeers = [PeerInfo(publicKey: bobPublicKey, ipAddress: "127.0.0.1", port: 36222, internalKeepAlive: .seconds(20), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let aliceInterface = try WGInterface<KCPChannels>(staticPrivateKey:alicePrivateKey, mtu:1400, initialConfiguration:alicePeers, logLevel:cliLogger.logLevel, listeningPort: 36221)
 
-				let aliceFifo = FIFO<ByteBuffer, Swift.Error>()
+				let aliceFifo = try FIFO<ByteBuffer, Swift.Error>()
 				let bobPeers = [PeerInfo(publicKey: alicePublicKey, ipAddress: "127.0.0.1", port: 36221, internalKeepAlive: .seconds(20), inboundData: aliceFifo)]
 				let bobInterface = try WGInterface<KCPChannels>(staticPrivateKey:bobPrivateKey, mtu:1400, initialConfiguration:bobPeers, logLevel:cliLogger.logLevel, listeningPort: 36222)
 

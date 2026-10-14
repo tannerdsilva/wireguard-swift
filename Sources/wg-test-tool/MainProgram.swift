@@ -88,10 +88,10 @@ struct CLI:AsyncParsableCommand {
 			// }
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: FIFO<ByteBuffer, Swift.Error>())]
+				let myPeers = [PeerInfo(publicKey: peerPublicKey, ipAddress: "127.0.0.1", port: 36000, internalKeepAlive: .seconds(30), inboundData: try FIFO<ByteBuffer, Swift.Error>())]
 				let myInterface = try WGInterface<KCPChannels>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.critical, listeningPort: 36001)
 				
-				let fifo = FIFO<ByteBuffer, Swift.Error>()
+				let fifo = try FIFO<ByteBuffer, Swift.Error>()
 				let peerPeers = [PeerInfo(publicKey: myPublicKey, ipAddress: "127.0.0.1", port: 36001, internalKeepAlive: .seconds(30), inboundData: fifo)]
 				let peerInterface = try WGInterface<KCPChannels>(staticPrivateKey:peerPrivateKey, mtu:1400, initialConfiguration:peerPeers, logLevel:.critical, listeningPort: 36000)
 
@@ -145,7 +145,7 @@ struct CLI:AsyncParsableCommand {
 			let cliLogger = Logger(label: "wg-test-tool.initiator")
 			
 			_ = try await withThrowingTaskGroup(body: { foo in
-				let fifo = FIFO<ByteBuffer, Swift.Error>()
+				let fifo = try FIFO<ByteBuffer, Swift.Error>()
 				let myPeers = [PeerInfo(publicKey: respondersPublicKey, ipAddress: ipAddress, port: port, internalKeepAlive: .seconds(30), inboundData: fifo)]
 				let myInterface = try WGInterface<KCPChannels>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.trace, listeningPort: myPort)
 				
@@ -202,7 +202,7 @@ struct CLI:AsyncParsableCommand {
 			_ = try await withThrowingTaskGroup(body: { foo in
 				var myPeers:[PeerInfo] = []
 				for i in 0..<peers.count {
-					let fifo = FIFO<ByteBuffer, Swift.Error>()
+					let fifo = try FIFO<ByteBuffer, Swift.Error>()
 					myPeers.append(PeerInfo(publicKey: peers[i].publicKey, ipAddress: ipAddress, port: peers[i].port, internalKeepAlive: .seconds(30), inboundData: fifo))
 				}
 				let myInterface = try WGInterface<KCPChannels>(staticPrivateKey:myPrivateKey, mtu:1400, initialConfiguration:myPeers, logLevel:.debug, listeningPort: myPort)

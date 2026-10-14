@@ -127,7 +127,12 @@ internal final class WireguardHandler:ChannelDuplexHandler, @unchecked Sendable 
 	/// the current operational state of the handler.
 	private var operatingState:State
 	
-	internal var handshakeSignals = FIFO<HandshakeInfo, Swift.Error>()
+	internal var handshakeSignals = WireguardHandler.makeSafeFIFO()
+
+	/// Creates an unbounded error-bearing FIFO. `FIFO.init` is `throws(InvalidMaximumElementCount)` in bedrock 9.x, but with a nil limit it never throws, so this is safe.
+	private static func makeSafeFIFO() -> FIFO<HandshakeInfo, Swift.Error> {
+		try! FIFO<HandshakeInfo, Swift.Error>()
+	}
 
 	/// used to indicate that a flush should be performed after channelReadComplete is called. returns back to false after channelReadComplete is called.
 	internal var flushAfterChannelReadComplete:Bool = false

@@ -10,6 +10,13 @@ import ServiceLifecycle
 import bedrock_ip
 import wireguard_crypto_core
 
+
+private func makeWGInboundFIFO() -> FIFO<(PublicKey, ByteBuffer), Swift.Error> {
+	// `FIFO.init` is `throws(InvalidMaximumElementCount)` in bedrock 9.x, but with a nil limit
+	// it never throws, so this is safe.
+	try! FIFO<(PublicKey, ByteBuffer), Swift.Error>()
+}
+
 extension Endpoint {
 	/// Creates an endpoint from a NIO `SocketAddress`.
 	/// - Parameter socketAddress: The socket address to convert.
@@ -75,7 +82,7 @@ public final actor WGInterface<C:CustomChannels>:Sendable {
 	private let staticPrivateKey:MemoryGuarded<PrivateKey>
 	private var state:State = .initialized
 	private let group:MultiThreadedEventLoopGroup
-	private let inboundData = FIFO<(PublicKey, ByteBuffer), Swift.Error>()
+	private let inboundData = makeWGInboundFIFO()
 	private let listeningPort:Int
 	private var recentSavedConfig:[any PeerInformation]
 	private let terminationFlag = TerminationFlag()
@@ -249,11 +256,11 @@ extension WGInterface:Service {
 						l.debug("invoking cancellation of wireguard nio interface")
 					}
 				} catch let error {
-					inboundData.finish(throwing: error)
+					try? inboundData.finish(withError: error)
 					for (_, fifo) in dhh.getHandoffFifos() {
-						fifo.finish(throwing: error)
+						try? fifo.finish(withError: error)
 					}
-					wgh.getHandshakeFifo().finish(throwing: error)
+					try? wgh.getHandshakeFifo().finish(withError: error)
 					throw error
 				}
 				switch state {
@@ -266,11 +273,11 @@ extension WGInterface:Service {
 							do { try await _run() } catch { }
 						}
 					default:
-						inboundData.finish()
+						try? inboundData.finish()
 						for (_, fifo) in dhh.getHandoffFifos() {
-							fifo.finish()
+							try? fifo.finish()
 						}
-						wgh.getHandshakeFifo().finish()
+						try? wgh.getHandshakeFifo().finish()
 						state = .terminated
 				}
 			case .engaged(_), .engaging, .terminated:
